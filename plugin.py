@@ -318,7 +318,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件")
-    config_version: str = Field(default="1.0.0", description="配置文件版本号")
+    config_version: str = Field(default="1.1.0", description="配置文件版本号")
 
 
 class ReportSectionConfig(PluginConfigBase):
@@ -355,12 +355,25 @@ class ReportSectionConfig(PluginConfigBase):
         description="定时日报发送的群列表，每行一个群号；留空则发给所有白名单内的活跃群",
         json_schema_extra={"rows": 4, "placeholder": "每行一个群号"},
     )
-    # ---- 群相册上传（移植原版 qq_group_upload，走 NapCat 扩展 API）----
+    # ---- 群相册上传的设置已独立到 AlbumSectionConfig（见下方 album 配置节）----
+
+
+class AlbumSectionConfig(PluginConfigBase):
+    """群相册上传设置。
+
+    注意：这里必须是**真实的配置节**——WebUI 的分区名要和根配置模型里的字段名一致，
+    否则宿主在保存时用插件配置模型归一化，输入会被静默丢弃（表现为「设置保存不了」）。
+    """
+
+    __ui_label__ = "群相册上传"
+    __ui_icon__ = "photo_library"
+    __ui_order__ = 5
+
     album_upload_enabled: bool = Field(default=False, description="日报生成后自动上传到 QQ 群相册（仅 NapCat）")
     album_name: str = Field(default="", description="目标群相册名称；留空表示使用第一个/默认相册")
     album_name_by_group: str = Field(
         default="",
-        description="按群指定相册名，每行「群号=相册名」；优先于上面的默认相册名",
+        description="按群指定相册名，每行「群号=相册名」；优先于默认相册名",
         json_schema_extra={"rows": 4, "placeholder": "123456789=相册名"},
     )
     album_strict_mode: bool = Field(default=True, description="严格模式：指定了相册名但找不到时不上传（防止误传到默认相册）")
@@ -438,6 +451,7 @@ class DailyAnalysisConfig(PluginConfigBase):
     report: ReportSectionConfig = Field(default_factory=ReportSectionConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
+    album: AlbumSectionConfig = Field(default_factory=AlbumSectionConfig)
 
 
 class GroupDailyAnalysisPlugin(MaiBotPlugin):
@@ -718,6 +732,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     def _report_cfg(self) -> ReportSectionConfig:
         return cast(DailyAnalysisConfig, self.config).report
+
+    def _album_cfg(self) -> AlbumSectionConfig:
+        """群相册设置（独立配置节，见 AlbumSectionConfig）。"""
+        return cast(DailyAnalysisConfig, self.config).album
 
     def _cfg(self) -> DailyAnalysisConfig:
         return cast(DailyAnalysisConfig, self.config)
@@ -1875,7 +1893,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     def _album_name_for_group(self, group_id: str) -> str:
         """取某群的目标相册名：优先「按群指定」，否则用全局默认相册名。"""
-        cfg = self._report_cfg()
+        cfg = self._album_cfg()
         per_group = self._parse_group_map(getattr(cfg, "album_name_by_group", ""))
         name = per_group.get(str(group_id), "")
         if name:
@@ -1914,9 +1932,18 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             return [x for x in payload if isinstance(x, dict)]
         return []
 
+    @staticmethod
+    def _napcat_auth_hint(err: Any) -> str:
+        """403/401 时给出令牌配置提示（NapCat HTTP 服务开启鉴权时最常见）。"""
+        low = str(err or "").lower()
+        if "403" in low or "401" in low or "forbidden" in low or "unauthorized" in low:
+            return ("；NapCat HTTP 服务开启了鉴权：请在「群相册上传 → NapCat 访问令牌」填入令牌"
+                    "（NapCat 的 onebot11 配置 network.httpServers[].token）")
+        return ""
+
     def _napcat_api(self, action: str, payload: dict) -> Any:
         """调用 NapCat OneBot HTTP API（同步实现，供 asyncio.to_thread 使用）。"""
-        cfg = self._report_cfg()
+        cfg = self._album_cfg()
         base = str(getattr(cfg, "napcat_api_url", "") or "").strip()
         if not base:
             return None
@@ -1936,7 +1963,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
         失败只记日志，不影响已经发出的日报图片；严格模式语义与原版一致。
         """
-        cfg = self._report_cfg()
+        cfg = self._album_cfg()
         if not getattr(cfg, "album_upload_enabled", False):
             return
         if not group_id or not image_b64:
@@ -1991,9 +2018,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     last_err = str(resp)[:120]
                 except Exception as exc:
                     last_err = str(exc)[:120]
-            self.ctx.logger.warning("[weekly] 群相册上传失败（群 %s）: %s", group_id, last_err)
+            self.ctx.logger.warning("[weekly] 群相册上传失败（群 %s）: %s%s", group_id, last_err, self._napcat_auth_hint(last_err))
         except Exception as exc:
-            self.ctx.logger.warning("[weekly] 群相册上传异常（群 %s）: %s", group_id, str(exc)[:120])
+            self.ctx.logger.warning("[weekly] 群相册上传异常（群 %s）: %s%s", group_id, str(exc)[:120], self._napcat_auth_hint(exc))
 
     async def _send_daily_html(self, stream_id: str, context: dict, html_text: str, day: str) -> bool:
         """HTML 直发：不渲染，直接把 HTML 上传到群文件（对齐原版 output_format=html 的零渲染路径）。"""
@@ -2001,7 +2028,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         group_id = str(chat.get("group_id") or "")
         if not group_id:
             return False
-        if not str(getattr(self._report_cfg(), "napcat_api_url", "") or "").strip():
+        if not str(getattr(self._album_cfg(), "napcat_api_url", "") or "").strip():
             self.ctx.logger.warning("[weekly] HTML 直发需要配置 NapCat HTTP API 地址")
             return False
         name = f"{(context.get('chat_name') or '群聊')}-日报-{day}.html"
@@ -2019,7 +2046,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 return True
             self.ctx.logger.warning("[weekly] HTML 群文件上传失败: %s", str(resp)[:120])
         except Exception as exc:
-            self.ctx.logger.warning("[weekly] HTML 群文件上传异常: %s", str(exc)[:120])
+            self.ctx.logger.warning("[weekly] HTML 群文件上传异常: %s%s", str(exc)[:120], self._napcat_auth_hint(exc))
         return False
 
     @staticmethod

@@ -403,8 +403,14 @@ class AnalysisConfig(PluginConfigBase):
     render_viewport_width: int = Field(default=1080, description="日报渲染视口宽度 (px)", ge=600, le=2000)
     render_scale: float = Field(default=1.5, description="日报渲染缩放（R1 全量档；失败自动降 1.0→精简档）", ge=1.0, le=3.0)
     render_remote_enabled: bool = Field(default=True, description="优先用云端 t2i 服务渲染（零本地开销；失败自动回落本地渲染）")
-    render_remote_url: str = Field(default="https://t2i.rcfortress.site/text2img", description="云端 t2i 渲染服务地址")
+    render_remote_url: str = Field(
+        default="https://t2i.rcfortress.site/text2img",
+        description="云端 t2i 渲染服务地址，可多行（按顺序尝试）",
+        json_schema_extra={"rows": 3, "placeholder": "https://t2i.soulter.top/text2img"},
+    )
     render_remote_quality: int = Field(default=85, description="云端渲染 JPEG 质量 (30~100)", ge=30, le=100)
+    render_remote_timeout_ms: int = Field(default=60000, description="云端渲染服务端超时（毫秒，传给 t2i 的 options.timeout）", ge=5000, le=300000)
+    render_remote_png_first: bool = Field(default=True, description="云端优先请求 PNG（失败再请求 JPEG，对齐原版两轮策略）")
     render_timeout_ms: int = Field(default=100000, description="日报渲染超时（毫秒）", ge=30000)
 
 
@@ -775,8 +781,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "render_viewport_width": {"label": "日报渲染视口宽度", "ui_type": "number", "min": 600, "max": 2000},
             "render_scale": {"label": "日报渲染缩放（全量档）", "ui_type": "number", "min": 1.0, "max": 3.0, "hint": "弱机建议 1.5；失败会自动降 1.0 重试"},
             "render_remote_enabled": {"label": "云端渲染优先", "ui_type": "switch", "hint": "失败自动回落本地渲染；数据会发往 t2i 服务"},
-            "render_remote_url": {"label": "云端 t2i 服务地址", "ui_type": "text"},
+            "render_remote_url": {"label": "云端 t2i 服务地址", "ui_type": "textarea", "rows": 3, "hint": "可填多个地址（每行一个），按顺序尝试"},
             "render_remote_quality": {"label": "云端 JPEG 质量", "ui_type": "number", "min": 30, "max": 100},
+            "render_remote_timeout_ms": {"label": "云端渲染服务端超时（毫秒）", "ui_type": "number", "min": 5000, "max": 300000, "hint": "传给 t2i 的 options.timeout，多素材页建议 60000"},
+            "render_remote_png_first": {"label": "云端优先 PNG", "ui_type": "switch", "hint": "对齐原版：先请求 PNG，失败再 JPEG"},
             "render_timeout_ms": {"label": "日报渲染超时（毫秒）", "ui_type": "number", "min": 30000},
             },
         },
@@ -1383,6 +1391,16 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             '<img class="profile-wm"',
             html,
         )
+        # 统一渲染宽度：不同 t2i 端点默认视口不同（800/1280），强制 meta viewport 拉齐
+        try:
+            vw = int(getattr(self._cfg().analysis, "render_viewport_width", 1080) or 1080)
+        except Exception:
+            vw = 1080
+        html = re.sub(
+            r'<meta\s+name=["\']viewport["\'][^>]*>',
+            f'<meta name="viewport" content="width={max(600, min(2000, vw))}, initial-scale=1.0">',
+            html, count=1, flags=re.IGNORECASE,
+        )
         blend = self._WATERMARK_BLEND.get(str(theme or "").lower(), "multiply")
         style = (
             "<style>\n"
@@ -1768,21 +1786,42 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 html = html.replace(target, uri)
         return html
 
-    async def _render_remote(self, html_text: str, acfg: "AnalysisConfig") -> str | None:
-        """走云端 t2i 服务渲染（POST /generate），返回图片 base64；失败返回 None。"""
-        base = str(getattr(acfg, "render_remote_url", "") or "").strip()
-        if not getattr(acfg, "render_remote_enabled", True) or not base:
+    async def _render_remote(self, html_text: str, acfg: "AnalysisConfig", image_type: str = "jpeg") -> str | None:
+        """走云端 t2i 服务渲染（POST /generate），返回图片 base64；失败返回 None。
+
+        - 支持在 `render_remote_url` 里填多个端点（每行一个），按顺序尝试；
+        - `options.timeout` 传给服务端（新版本 t2i 会用它放宽页面加载超时）；
+        - `image_type` 支持 png / jpeg（对齐原版 R1 PNG → R2 JPEG 的两轮策略）。
+        """
+        raw_urls = str(getattr(acfg, "render_remote_url", "") or "")
+        bases = [u.strip() for u in raw_urls.replace(",", "\n").splitlines() if u.strip()]
+        if not getattr(acfg, "render_remote_enabled", True) or not bases:
             return None
-        url = base.rstrip("/") + ("/generate" if not base.rstrip("/").endswith("generate") else "")
         quality = int(getattr(acfg, "render_remote_quality", 85) or 85)
+        try:
+            remote_timeout = int(getattr(acfg, "render_remote_timeout_ms", 60000) or 60000)
+        except (TypeError, ValueError):
+            remote_timeout = 60000
+        img_type = str(image_type or "jpeg").lower()
+        if img_type not in ("png", "jpeg", "jpg"):
+            img_type = "jpeg"
+        if img_type == "jpg":
+            img_type = "jpeg"
+        options: dict[str, Any] = {
+            "full_page": True,
+            "type": img_type,
+            "timeout": max(5000, min(300000, remote_timeout)),
+        }
+        if img_type == "jpeg":  # PNG 时服务端会忽略 quality，干脆不传（对齐原版）
+            options["quality"] = max(30, min(100, quality))
         payload = json.dumps({
             "tmpl": html_text,
             "json": False,
             "tmpldata": {},
-            "options": {"full_page": True, "type": "jpeg", "quality": max(30, min(100, quality))},
+            "options": options,
         }).encode("utf-8")
 
-        def _post() -> bytes:
+        def _post(url: str) -> bytes:
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
@@ -1791,18 +1830,20 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=150, context=ctx) as r:
+            with urllib.request.urlopen(req, timeout=max(150, remote_timeout / 1000 + 60), context=ctx) as r:
                 return r.read()
 
-        try:
-            blob = await asyncio.to_thread(_post)
-        except Exception as exc:
-            self.ctx.logger.warning("[weekly] 云端渲染失败: %s", str(exc)[:120])
-            return None
-        if blob[:2] == b"\xff\xd8" or blob[:4] == b"\x89PNG":
-            self.ctx.logger.info("[weekly] 云端渲染成功: %d bytes", len(blob))
-            return base64.b64encode(blob).decode()
-        self.ctx.logger.warning("[weekly] 云端渲染返回异常数据: %s", blob[:80])
+        for base in bases:
+            url = base.rstrip("/") + ("/generate" if not base.rstrip("/").endswith("generate") else "")
+            try:
+                blob = await asyncio.to_thread(_post, url)
+            except Exception as exc:
+                self.ctx.logger.warning("[weekly] 云端渲染失败(%s %s): %s", base.split("//")[-1][:32], img_type, str(exc)[:100])
+                continue
+            if blob[:2] == b"\xff\xd8" or blob[:4] == b"\x89PNG":
+                self.ctx.logger.info("[weekly] 云端渲染成功(%s %s): %d bytes", base.split("//")[-1][:32], img_type, len(blob))
+                return base64.b64encode(blob).decode()
+            self.ctx.logger.warning("[weekly] 云端渲染返回异常数据(%s): %s", base.split("//")[-1][:32], blob[:80])
         return None
 
     # ------------------------------------------------------------------ 群相册上传
@@ -2113,11 +2154,13 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             await self._prefetch_profile_images(analysis.get("titles") or [])
         except Exception as exc:
             self.ctx.logger.warning("[weekly] 人格水印图预取失败: %s", exc)
-        html_text = self._render_daily(context, analysis, theme)
-        # 零外链化：装饰图静态帧/内嵌 + 子集字体 + 头像内联（云端与本地渲染共用）
-        html_text = self._inline_static_assets(html_text)
-        html_text = await self._inline_avatars(html_text, context)
-        # HTML 直发模式：零渲染开销（对齐原版 output_format=html）
+        html_raw = self._render_daily(context, analysis, theme)
+        # 两套 HTML：
+        #  html_ext —— 保留镜像外链素材（POST 体积小、渲染快），只内联头像
+        #  html_inl —— 素材/字体全部内联（零外链，抗网络波动，作为兜底与本地渲染用）
+        html_ext = await self._inline_avatars(html_raw, context)
+        html_text = self._inline_static_assets(html_ext)
+        # HTML 直发模式：零渲染开销（对齐原版 output_format=html），用自包含的内联版
         if str(getattr(acfg, "output_format", "image") or "image").strip().lower() == "html":
             if await self._send_daily_html(stream_id, context, html_text, day):
                 _chat0 = self._stats.get("chats", {}).get(stream_id)
@@ -2128,10 +2171,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             self.ctx.logger.warning("[weekly] HTML 直发失败，回落到图片渲染")
         # 在线渲染耗时（字体下载+素材）会超过 RPC 默认 30s 超时，
         # 因此绕过便捷代理，用 call_capability 显式给足 RPC 预算。
-        # 渲染链：云端 t2i（零本地开销）→ 本地全量 → 本地稳定 → 本地精简
+        # 渲染链：云端外链PNG → 云端外链JPEG → 云端内联JPEG → 本地全量 → 本地稳定 → 本地精简
         lite_raw = self._render_daily(context, analysis, theme, max_items=(4, 4, 3))
-        html_lite = self._inline_static_assets(lite_raw)
-        html_lite = await self._inline_avatars(html_lite, context)
+        html_lite = self._inline_static_assets(await self._inline_avatars(lite_raw, context))
         try:
             scale_r1 = float(getattr(acfg, "render_scale", 1.5) or 1.5)
         except (TypeError, ValueError):
@@ -2140,7 +2182,16 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         image = ""
         last_err = ""
         if acfg.render_remote_enabled:
-            image = await self._render_remote(html_text, acfg)
+            remote_attempts = []
+            if bool(getattr(acfg, "render_remote_png_first", True)):
+                remote_attempts.append(("云端PNG(外链)", html_ext, "png"))
+            remote_attempts.append(("云端JPEG(外链)", html_ext, "jpeg"))
+            remote_attempts.append(("云端JPEG(内联)", html_text, "jpeg"))
+            for label, html, itype in remote_attempts:
+                image = await self._render_remote(html, acfg, image_type=itype)
+                if image:
+                    self.ctx.logger.info("[weekly] 日报%s渲染成功", label)
+                    break
             if not image:
                 last_err = "云端渲染失败"
                 self.ctx.logger.warning("[weekly] 云端渲染未出图，回落本地渲染链")

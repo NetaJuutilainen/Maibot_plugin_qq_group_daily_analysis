@@ -411,6 +411,7 @@ class AnalysisConfig(PluginConfigBase):
     render_remote_quality: int = Field(default=85, description="云端渲染 JPEG 质量 (30~100)", ge=30, le=100)
     render_remote_timeout_ms: int = Field(default=60000, description="云端渲染服务端超时（毫秒，传给 t2i 的 options.timeout）", ge=5000, le=300000)
     render_remote_png_first: bool = Field(default=True, description="云端优先请求 PNG（失败再请求 JPEG，对齐原版两轮策略）")
+    render_remote_scale_level: str = Field(default="normal", description="云端渲染分辨率档位 (normal=1.0x / high=1.3x / ultra=1.8x)")
     render_timeout_ms: int = Field(default=100000, description="日报渲染超时（毫秒）", ge=30000)
 
 
@@ -785,6 +786,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "render_remote_quality": {"label": "云端 JPEG 质量", "ui_type": "number", "min": 30, "max": 100},
             "render_remote_timeout_ms": {"label": "云端渲染服务端超时（毫秒）", "ui_type": "number", "min": 5000, "max": 300000, "hint": "传给 t2i 的 options.timeout，多素材页建议 60000"},
             "render_remote_png_first": {"label": "云端优先 PNG", "ui_type": "switch", "hint": "对齐原版：先请求 PNG，失败再 JPEG"},
+            "render_remote_scale_level": {"label": "云端渲染分辨率档位", "ui_type": "select", "choices": ["normal", "high", "ultra"], "hint": "normal=1.0x（1080 宽，推荐）/ high=1.3x / ultra=1.8x；档位越高越清晰也越大越慢"},
             "render_timeout_ms": {"label": "日报渲染超时（毫秒）", "ui_type": "number", "min": 30000},
             },
         },
@@ -1791,7 +1793,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
         - 支持在 `render_remote_url` 里填多个端点（每行一个），按顺序尝试；
         - `options.timeout` 传给服务端（新版本 t2i 会用它放宽页面加载超时）；
-        - `image_type` 支持 png / jpeg（对齐原版 R1 PNG → R2 JPEG 的两轮策略）。
+        - `image_type` 支持 png / jpeg（对齐原版 R1 PNG → R2 JPEG 的两轮策略）；
+        - `device_scale_factor_level` 由 `render_remote_scale_level` 控制（实测 normal=1.0x / high=1.3x / ultra=1.8x）。
         """
         raw_urls = str(getattr(acfg, "render_remote_url", "") or "")
         bases = [u.strip() for u in raw_urls.replace(",", "\n").splitlines() if u.strip()]
@@ -1802,6 +1805,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             remote_timeout = int(getattr(acfg, "render_remote_timeout_ms", 60000) or 60000)
         except (TypeError, ValueError):
             remote_timeout = 60000
+        scale_level = str(getattr(acfg, "render_remote_scale_level", "normal") or "normal").strip().lower()
+        if scale_level not in ("normal", "high", "ultra"):
+            scale_level = "normal"
         img_type = str(image_type or "jpeg").lower()
         if img_type not in ("png", "jpeg", "jpg"):
             img_type = "jpeg"
@@ -1812,6 +1818,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "type": img_type,
             "timeout": max(5000, min(300000, remote_timeout)),
         }
+        if scale_level != "normal":  # 不传即 1.0x，保持默认请求体最简
+            options["device_scale_factor_level"] = scale_level
         if img_type == "jpeg":  # PNG 时服务端会忽略 quality，干脆不传（对齐原版）
             options["quality"] = max(30, min(100, quality))
         payload = json.dumps({
@@ -1841,7 +1849,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 self.ctx.logger.warning("[weekly] 云端渲染失败(%s %s): %s", base.split("//")[-1][:32], img_type, str(exc)[:100])
                 continue
             if blob[:2] == b"\xff\xd8" or blob[:4] == b"\x89PNG":
-                self.ctx.logger.info("[weekly] 云端渲染成功(%s %s): %d bytes", base.split("//")[-1][:32], img_type, len(blob))
+                self.ctx.logger.info("[weekly] 云端渲染成功(%s %s %s): %d bytes", base.split("//")[-1][:32], img_type, scale_level, len(blob))
                 return base64.b64encode(blob).decode()
             self.ctx.logger.warning("[weekly] 云端渲染返回异常数据(%s): %s", base.split("//")[-1][:32], blob[:80])
         return None

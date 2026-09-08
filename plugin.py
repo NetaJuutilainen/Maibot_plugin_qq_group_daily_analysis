@@ -877,7 +877,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 if _k in _sd.get("fields", {}):
                     _sd["fields"][_k]["choices"] = _mc
         return {
-            "plugin_id": plugin_id or "local.weekly-report",
+            "plugin_id": plugin_id or "maibot-plugin-qq-group-daily-analysis",
             "plugin_info": {
                 "name": plugin_name or "群聊每日分析",
                 "version": plugin_version,

@@ -1,16 +1,17 @@
 {
   "manifest_version": 2,
-  "id": "local.weekly-report",
+  "id": "maibot-plugin-qq-group-daily-analysis",
   "version": "1.0.0",
   "name": "群聊每日分析",
-  "description": "每天自动生成群聊日报：高光话题、神人称号、金句宝藏瓶、聊天质量锐评，9 套主题可选，支持上传群相册。",
+  "description": "每天自动生成群聊日报：高光话题、神人称号、金句宝藏瓶、聊天质量锐评，9 套主题可选，支持上传 QQ 群相册。",
   "author": {
-    "name": "maibot-user",
-    "url": "https://github.com/maibot-inc/MaiBot"
+    "name": "NetaJuutilainen",
+    "url": "https://github.com/NetaJuutilainen"
   },
   "license": "MIT",
   "urls": {
-    "repository": "https://github.com/maibot-inc/MaiBot"
+    "repository": "https://github.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis",
+    "issues": "https://github.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/issues"
   },
   "host_application": {
     "min_version": "1.0.0",
@@ -20,7 +21,7 @@
     "min_version": "2.5.1",
     "max_version": "2.99.99"
   },
-  "plugin_type": "extension",
+  "plugin_type": "data",
   "dependencies": [],
   "capabilities": [
     "send.image",

@@ -1,0 +1,40 @@
+MIT License
+
+Copyright (c) 2026 NetaJuutilainenP (MaiBot 移植重构版)
+Portions Copyright (c) 2025 Helian Nuits (原版 AstrBot 插件 astrbot_plugin_qq_group_daily_analysis)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## 第三方资源与许可
+
+本项目的分析维度、9 套主题模板、人格标签映射与群相册上传功能思路均来自以下 MIT 项目，
+其版权声明已按 MIT 许可要求保留于上方：
+
+- [SXP-Simon/astrbot_plugin_qq_group_daily_analysis](https://github.com/SXP-Simon/astrbot_plugin_qq_group_daily_analysis)
+  — MIT License, Copyright (c) 2025 Helian Nuits
+- [AstrBotDevs/astrbot-t2i-service](https://github.com/AstrBotDevs/astrbot-t2i-service)
+  — 云端文转图渲染服务
+
+字体与素材：
+
+- `fonts/LXGW-Regular-sub.woff2`：霞鹜文楷 LXGW WenKai（SIL Open Font License 1.1）的常用字子集
+- `emoji_fonts.json`：内嵌 Noto Color Emoji（SIL Open Font License 1.1）分段 woff2
+- `profile_assets.json`：人格水印图资源索引（指向 SXP-Simon/profile_assets 公开图床）

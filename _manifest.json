@@ -1,0 +1,42 @@
+{
+  "manifest_version": 2,
+  "id": "local.weekly-report",
+  "version": "1.0.0",
+  "name": "群聊每日分析",
+  "description": "每天自动生成群聊日报：高光话题、神人称号、金句宝藏瓶、聊天质量锐评，9 套主题可选，支持上传群相册。",
+  "author": {
+    "name": "maibot-user",
+    "url": "https://github.com/maibot-inc/MaiBot"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/maibot-inc/MaiBot"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "3.99.99"
+  },
+  "sdk": {
+    "min_version": "2.5.1",
+    "max_version": "2.99.99"
+  },
+  "plugin_type": "extension",
+  "dependencies": [],
+  "capabilities": [
+    "send.image",
+    "send.text",
+    "llm.generate",
+    "llm.get_available_models",
+    "render.html2png",
+    "message.get_by_time_in_chat"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN"
+  },
+  "display": {
+    "icon": {
+      "type": "lucide",
+      "value": "newspaper"
+    }
+  }
+}

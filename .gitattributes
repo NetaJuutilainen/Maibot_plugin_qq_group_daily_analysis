@@ -1,0 +1,8 @@
+# 统一使用 LF，避免跨平台换行符噪音
+* text=auto eol=lf
+
+# 二进制资源
+*.png binary
+*.woff2 binary
+*.jpg binary
+*.jpeg binary

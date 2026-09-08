@@ -2336,3 +2336,6 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         await self.ctx.send.text(f"收到！正在生成今日日报（主题：{THEME_REGISTRY[theme]['label']}，预计 2~6 分钟，完成后自动发送）……", stream_id)
         self._spawn(self._generate_daily_and_send(stream_id, day, theme, mark_sent=mark_sent))
         return True, "日报生成中", True
+
+def create_plugin() -> GroupDailyAnalysisPlugin:
+    return GroupDailyAnalysisPlugin()

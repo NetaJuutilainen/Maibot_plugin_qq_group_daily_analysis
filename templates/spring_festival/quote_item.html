@@ -1,4 +1,4 @@
-﻿{% if quotes %}
+{% if quotes %}
 <div class="sf-quote-timeline">
     {% for quote in quotes %}
     <div class="sf-quote-item {% if loop.index is even %}sf-right{% endif %} avoid-break">
@@ -16,7 +16,7 @@
         <div class="sf-quote-bubble">
             <div class="sf-quote-content">“{{ quote.content }}”</div>
             <div class="sf-quote-author">—— {{ quote.sender }}</div>
-            <div class="sf-quote-reason">【评语】{{ quote.reason }}</div>
+            <div class="sf-quote-reason">【评语】{{ quote.reason | safe }}</div>
         </div>
     </div>
     {% endfor %}

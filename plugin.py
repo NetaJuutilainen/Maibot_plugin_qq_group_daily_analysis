@@ -415,7 +415,7 @@ class AnalysisConfig(PluginConfigBase):
     llm_timeout_ms: int = Field(default=180000, description="LLM 分析的 RPC 超时（毫秒）", ge=30000)
     render_viewport_width: int = Field(default=1080, description="日报渲染视口宽度 (px)", ge=600, le=2000)
     render_scale: float = Field(default=1.5, description="日报渲染缩放（R1 全量档；失败自动降 1.0→精简档）", ge=1.0, le=3.0)
-    render_remote_enabled: bool = Field(default=True, description="优先用云端 t2i 服务渲染（零本地开销；失败自动回落本地渲染）")
+    render_remote_enabled: bool = Field(default=False, description="开启后用云端 t2i 服务渲染（零本地开销；失败自动回落本地渲染）。注意：开启即意味着整份日报（含昵称、用户 ID、头像、群聊样本）会发送到下方配置的第三方服务，默认关闭")
     render_remote_url: str = Field(
         default="https://t2i.rcfortress.site/text2img",
         description="云端 t2i 渲染服务地址，可多行（按顺序尝试）",
@@ -799,8 +799,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "llm_timeout_ms": {"label": "LLM 分析超时（毫秒）", "ui_type": "number", "min": 30000},
             "render_viewport_width": {"label": "日报渲染视口宽度", "ui_type": "number", "min": 600, "max": 2000},
             "render_scale": {"label": "日报渲染缩放（全量档）", "ui_type": "number", "min": 1.0, "max": 3.0, "hint": "弱机建议 1.5；失败会自动降 1.0 重试"},
-            "render_remote_enabled": {"label": "云端渲染优先", "ui_type": "switch", "hint": "失败自动回落本地渲染；数据会发往 t2i 服务"},
-            "render_remote_url": {"label": "云端 t2i 服务地址", "ui_type": "textarea", "rows": 3, "hint": "可填多个地址（每行一个），按顺序尝试"},
+            "render_remote_enabled": {"label": "启用云端渲染（第三方数据出口）", "ui_type": "switch", "hint": "默认关闭。开启后整份日报（含群聊样本、昵称、用户 ID、内联头像）会 POST 到下方 t2i 地址，属于把群聊数据交给第三方；只在自己信任该服务时开启，追求零外发请保持关闭（用本地渲染）"},
+            "render_remote_url": {"label": "云端 t2i 服务地址", "ui_type": "textarea", "rows": 3, "hint": "可填多个地址（每行一个），按顺序尝试；日报内容会发送到这里的服务"},
             "render_remote_quality": {"label": "云端 JPEG 质量", "ui_type": "number", "min": 30, "max": 100},
             "render_remote_timeout_ms": {"label": "云端渲染服务端超时（毫秒）", "ui_type": "number", "min": 5000, "max": 300000, "hint": "传给 t2i 的 options.timeout，多素材页建议 60000"},
             "render_remote_png_first": {"label": "云端优先 PNG", "ui_type": "switch", "hint": "对齐原版：先请求 PNG，失败再 JPEG"},
@@ -1334,9 +1334,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 blob = fp.read_bytes()
             else:
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
+                ctx = ssl.create_default_context()  # 保持默认证书校验
                 with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
                     blob = r.read()
                 if not blob or len(blob) < 64:
@@ -1816,7 +1814,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         """
         raw_urls = str(getattr(acfg, "render_remote_url", "") or "")
         bases = [u.strip() for u in raw_urls.replace(",", "\n").splitlines() if u.strip()]
-        if not getattr(acfg, "render_remote_enabled", True) or not bases:
+        if not getattr(acfg, "render_remote_enabled", False) or not bases:
             return None
         quality = int(getattr(acfg, "render_remote_quality", 85) or 85)
         try:
@@ -1848,9 +1846,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         }).encode("utf-8")
 
         def _post(url: str) -> bytes:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            ctx = ssl.create_default_context()  # 保持默认证书校验，不关闭 TLS 验证
             req = urllib.request.Request(
                 url, data=payload,
                 headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"},
@@ -2206,7 +2202,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             self.ctx.logger.warning("[weekly] HTML 直发失败，回落到图片渲染")
         # 在线渲染耗时（字体下载+素材）会超过 RPC 默认 30s 超时，
         # 因此绕过便捷代理，用 call_capability 显式给足 RPC 预算。
-        # 渲染链：云端外链PNG → 云端外链JPEG → 云端内联JPEG → 本地全量 → 本地稳定 → 本地精简
+        # 渲染链（前三条属云端渲染，需在配置里显式开启，默认关闭）：云端外链PNG → 云端外链JPEG → 云端内联JPEG → 本地全量 → 本地稳定 → 本地精简
         lite_raw = self._render_daily(context, analysis, theme, max_items=(4, 4, 3))
         html_lite = self._inline_static_assets(await self._inline_avatars(lite_raw, context))
         try:

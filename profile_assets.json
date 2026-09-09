@@ -1,4 +1,4 @@
-﻿{
+{
     "sbti":  [
                  {
                      "code":  "ATM-er",
@@ -110,6 +110,42 @@
                  }
              ],
     "acgti":  [
+                  {
+                      "code":  "KNAN",
+                      "name":  "江户川柯南",
+                      "mbti":  "INTP",
+                      "file":  "https://fastly.jsdelivr.net/gh/SXP-Simon/profile_assets@main/acgti/characters/KNAN.png"
+                  },
+                  {
+                      "code":  "CHKA",
+                      "name":  "藤原千花",
+                      "mbti":  "ENTP",
+                      "file":  "https://fastly.jsdelivr.net/gh/SXP-Simon/profile_assets@main/acgti/characters/CHKA.png"
+                  },
+                  {
+                      "code":  "BCHI",
+                      "name":  "后藤一里",
+                      "mbti":  "INFP",
+                      "file":  "https://fastly.jsdelivr.net/gh/SXP-Simon/profile_assets@main/acgti/characters/BCHI.png"
+                  },
+                  {
+                      "code":  "HTMK",
+                      "name":  "初音未来",
+                      "mbti":  "ENFP",
+                      "file":  "https://fastly.jsdelivr.net/gh/SXP-Simon/profile_assets@main/acgti/characters/HTMK.png"
+                  },
+                  {
+                      "code":  "AYRE",
+                      "name":  "绫波丽",
+                      "mbti":  "ISTP",
+                      "file":  "https://fastly.jsdelivr.net/gh/SXP-Simon/profile_assets@main/acgti/characters/AYRE.png"
+                  },
+                  {
+                      "code":  "ASKA",
+                      "name":  "明日香",
+                      "mbti":  "ESTP",
+                      "file":  "https://fastly.jsdelivr.net/gh/SXP-Simon/profile_assets@main/acgti/characters/ASKA.png"
+                  },
                   {
                       "code":  "CIRN",
                       "name":  "琪露诺",

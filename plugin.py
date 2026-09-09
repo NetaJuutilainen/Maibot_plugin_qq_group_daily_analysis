@@ -466,6 +466,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     _FONT_SUB_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "fonts" / "LXGW-Regular-sub.woff2"
     _FONT_REGULAR_URL: ClassVar[str] = "https://tc.ciallo.ccwu.cc/file/1775130743963_1774880718993_LXGWWenKai-Regular.woff2"
     _PROFILE_MANIFEST_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "profile_assets.json"
+    # 人格图 CDN 镜像：jsdelivr 主节点在国内不稳定，按顺序重试其它节点 + GitHub raw + 国内代理
+    _PROFILE_CDN_MIRRORS: ClassVar[tuple] = ("cdn.jsdelivr.net", "gcore.jsdelivr.net", "testingcf.jsdelivr.net")
+    _PROFILE_GH_PROXIES: ClassVar[tuple] = ("https://ghproxy.net/", "https://gh-proxy.com/")
+    # 某张图所有镜像都失败时，30 分钟内不再重试，避免每份日报都重复扫描（过期后自动重试）
+    _PROFILE_IMAGE_FAILURE_TTL: ClassVar[int] = 1800
     _EMOJI_FONTS_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "emoji_fonts.json"
     _DEFAULT_AVATAR_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "default_avatar.png"
     _AVATAR_FAILURE_TTL: ClassVar[int] = 300
@@ -474,6 +479,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     _emoji_font_faces: list = []
     _profile_manifest: dict[str, list] = {}
     _profile_image_cache: dict[str, str] = {}
+    _profile_image_failure_cache: dict[str, float] = {}
     _default_avatar_uri: str = ""
     _avatar_failure_cache: dict[str, float] = {}
     _llm_sem: Any = None
@@ -1307,24 +1313,44 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         base["profile_code"] = code
         base["profile_name_zh"] = name_zh
         base["profile_display"] = f"{code}（{name_zh}）" if name_zh else code
-        # 人格水印图：manifest 按 code（sbti/acgti）索引
+        # 人格水印图：manifest 按 code（sbti/acgti）索引；只按 code 精确匹配，
+        # 不做「同 MBTI 兜底」——否则角色不在图库里时会拿同 MBTI 的另一个角色的图顶上（张冠李戴）。
         image_url = ""
         for item in self._profile_manifest.get(mode, []):
             if not isinstance(item, dict):
                 continue
-            if str(item.get("code") or "").strip() == asset_code or (
-                mode == "acgti" and str(item.get("mbti") or "").strip().upper() == normalized
-            ):
+            if str(item.get("code") or "").strip() == asset_code:
                 image_url = str(item.get("file") or "").strip()
-                if name_zh and not str(item.get("name") or "").strip():
-                    pass
                 break
         if image_url:
             base["profile_image"] = self._profile_image_cache.get(image_url, "")
         return base
 
+    @classmethod
+    def _profile_image_candidates(cls, url: str) -> list[str]:
+        """把 jsdelivr 链接展开成多个候选镜像，提高国内服务器下载成功率。
+
+        `fastly.jsdelivr.net` 在国内经常抽风（实测同一批图只成功下到 1/3），
+        因此按「原地址 → 其它 jsdelivr 节点 → GitHub raw → 国内 GitHub 代理」顺序重试。
+        """
+        url = str(url or "").strip()
+        if not url:
+            return []
+        out = [url]
+        m = re.match(r"^https://([^/]+)/gh/([^/]+)/([^/@]+)@([^/]+)/(.+)$", url)
+        if m:
+            host, user, repo, ref, path = m.groups()
+            for mirror in cls._PROFILE_CDN_MIRRORS:
+                if mirror != host:
+                    out.append(f"https://{mirror}/gh/{user}/{repo}@{ref}/{path}")
+            raw = f"https://raw.githubusercontent.com/{user}/{repo}/{ref}/{path}"
+            out.append(raw)
+            for proxy in cls._PROFILE_GH_PROXIES:
+                out.append(proxy + raw)
+        return list(dict.fromkeys(out))
+
     def _load_profile_image_uri(self, url: str) -> str:
-        """下载人格水印图并内联为 data URI（磁盘缓存，一次下载长期复用）。"""
+        """下载人格水印图并内联为 data URI（磁盘缓存，一次下载长期复用；失败不缓存，下次重试）。"""
         import hashlib
         cache_dir = Path(__file__).resolve().parent / "cache" / "profile_assets"
         try:
@@ -1333,13 +1359,30 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             if fp.exists() and fp.stat().st_size > 64:
                 blob = fp.read_bytes()
             else:
-                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                ctx = ssl.create_default_context()  # 保持默认证书校验
-                with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
-                    blob = r.read()
-                if not blob or len(blob) < 64:
+                if url in self._profile_image_failure_cache and (
+                    time.time() - self._profile_image_failure_cache[url] < self._PROFILE_IMAGE_FAILURE_TTL
+                ):
                     return ""
-                fp.write_bytes(blob)
+                blob = b""
+                for candidate in self._profile_image_candidates(url):
+                    try:
+                        req = urllib.request.Request(candidate, headers={"User-Agent": "Mozilla/5.0"})
+                        ctx = ssl.create_default_context()  # 保持默认证书校验
+                        with urllib.request.urlopen(req, timeout=12, context=ctx) as r:
+                            data = r.read()
+                    except Exception:
+                        continue
+                    if data and len(data) >= 64:
+                        blob = data
+                        break
+                if not blob:
+                    self._profile_image_failure_cache[url] = time.time()
+                    return ""
+                self._profile_image_failure_cache.pop(url, None)
+                try:
+                    fp.write_bytes(blob)
+                except OSError:
+                    pass
         except Exception:
             return ""
         if blob[:8] == b"\x89PNG\r\n\x1a\n":
@@ -1371,15 +1414,25 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             for item in self._profile_manifest.get(mode, []):
                 if not isinstance(item, dict):
                     continue
-                if str(item.get("code") or "").strip() == asset_code or (
-                    mode == "acgti" and str(item.get("mbti") or "").strip().upper() == normalized
-                ):
+                if str(item.get("code") or "").strip() == asset_code:
                     u = str(item.get("file") or "").strip()
                     if u and u not in self._profile_image_cache:
                         urls.append(u)
                     break
-        for u in dict.fromkeys(urls):
-            uri = await asyncio.to_thread(self._load_profile_image_uri, u)
+        pending = [u for u in dict.fromkeys(urls) if u not in self._profile_image_cache]
+        if not pending:
+            return
+        sem = asyncio.Semaphore(4)
+
+        async def _one(u: str) -> tuple[str, str]:
+            async with sem:
+                try:
+                    uri = await asyncio.wait_for(asyncio.to_thread(self._load_profile_image_uri, u), timeout=60)
+                except Exception:
+                    uri = ""
+                return u, uri
+
+        for u, uri in await asyncio.gather(*(_one(u) for u in pending)):
             if uri:
                 self._profile_image_cache[u] = uri
 

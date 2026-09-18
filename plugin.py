@@ -461,6 +461,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     _pending_quote: ClassVar[dict | None] = None
     _asset_cache: ClassVar[dict[str, str]] = {}
     _jinja_envs: ClassVar[dict[str, Any]] = {}
+    # 这些码位虽在 emoji 字体范围内（键帽 emoji 需要），但必须交给正文字体，否则数字会被拉宽
+    _EMOJI_RANGE_SKIP: ClassVar[frozenset] = frozenset({"u+23", "u+2a", "u+30-39"})
     _TEMPLATES_ROOT: ClassVar[Path] = Path(__file__).resolve().parent / "templates"
     _STATIC_ASSETS_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "static_assets.json"
     _FONT_SUB_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "fonts" / "LXGW-Regular-sub.woff2"
@@ -1449,12 +1451,22 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
         - 本地（Windows）渲染：已装的 Segoe UI Emoji 优先，效果最佳；
         - 云端（Linux）渲染：Segoe 不存在，回落到内嵌的 Noto Color Emoji webfont（COLRv1 分段）。
+
+        注意：emoji 字体的 `unicode-range` 里含有 `U+30-39`（供 1️⃣ 这类键帽 emoji 用），
+        而注入的字体栈把 emoji 字体放在**最前面**——若不剔除，正文里的数字会全部用 emoji
+        字体的宽字形渲染，出现「1 2 8 4」这种被拉宽的效果。这里把数字与 `#`/`*` 从范围里去掉。
         """
         faces_css = ""
         for f in self._emoji_font_faces:
+            ranges = ", ".join(
+                tok.strip() for tok in str(f.get("range", "")).split(",")
+                if tok.strip().lower() not in self._EMOJI_RANGE_SKIP
+            )
+            if not ranges:
+                continue
             faces_css += (
                 "@font-face { font-family: 'Noto Color Emoji'; "
-                f"src: url({f['uri']}) format('woff2'); unicode-range: {f['range']}; }}\n"
+                f"src: url({f['uri']}) format('woff2'); unicode-range: {ranges}; }}\n"
             )
         # 给水印图打标记（模板里水印是唯一带 pointer-events:none 的 img）
         html = re.sub(
@@ -1983,11 +1995,12 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     @staticmethod
     def _napcat_auth_hint(err: Any) -> str:
-        """403/401 时给出令牌配置提示（NapCat HTTP 服务开启鉴权时最常见）。"""
+        """403/401 时给出令牌配置提示（协议端 HTTP 服务开启鉴权时最常见）。"""
         low = str(err or "").lower()
         if "403" in low or "401" in low or "forbidden" in low or "unauthorized" in low:
-            return ("；NapCat HTTP 服务开启了鉴权：请在「群相册上传 → NapCat 访问令牌」填入令牌"
-                    "（NapCat 的 onebot11 配置 network.httpServers[].token）")
+            return ("；协议端 HTTP 服务开启了鉴权：请在「群相册上传 → 访问令牌」填入令牌。"
+                    "NapCat：onebot11 配置的 network.httpServers[].token；"
+                    "SnowLuma：config/onebot_<QQ号>.json 的 networks.httpServers[].accessToken")
         return ""
 
     def _napcat_api(self, action: str, payload: dict) -> Any:
@@ -2007,6 +2020,65 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         with urllib.request.urlopen(req, timeout=20) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
 
+    def _napcat_api_retry(self, action: str, payload: dict, attempts: int = 3) -> Any:
+        """带重试的 OneBot HTTP API 调用（传输类错误重试，业务错误不重试）。
+
+        `[WinError 10054] 远程主机强迫关闭了一个现有的连接` 这类多为瞬时问题，重试通常即可成功。
+        """
+        last: Exception | None = None
+        for i in range(max(1, attempts)):
+            try:
+                return self._napcat_api(action, payload)
+            except Exception as exc:  # noqa: BLE001 - 网络异常种类多，统一重试
+                last = exc
+                if i + 1 < attempts:
+                    time.sleep(0.8 * (i + 1))
+        raise last if last is not None else RuntimeError("OneBot API 调用失败")
+
+    def _album_file_stem(self, stream_id: str) -> str:
+        """相册里显示的文件名。群相册把「文件名」当照片名，所以取「群名-日报-日期」更好看。"""
+        try:
+            chat = (getattr(self, "_stats", {}) or {}).get("chats", {}).get(stream_id) or {}
+        except Exception:
+            chat = {}
+        name = str(chat.get("chat_name") or chat.get("name") or "").strip()
+        day = datetime.now().strftime("%Y-%m-%d")
+        return ("%s-日报-%s" % (name, day)) if name else ("日报-%s" % day)
+
+    def _write_album_temp(self, group_id: str, image_b64: str, friendly: str = "") -> tuple[str, int]:
+        """把日报图片写成临时文件，返回 (绝对路径, 字节数)；失败返回 ("", 0)。
+
+        为什么要落盘：协议端（SnowLuma / NapCat）的 HTTP API 对请求体有大小限制，
+        传 base64 时日报图常有数 MB，会被直接重置连接（实测 SnowLuma 约 1MB 上限）。
+        改传本地文件路径后请求体只有几百字节，既避开限制也不损失画质。
+
+        `friendly` 会作为文件名，而群相册里显示的就是这个文件名，所以传「群名-日报-日期」更好看。
+        """
+        try:
+            blob = base64.b64decode(image_b64)
+        except Exception:
+            return "", 0
+        if len(blob) < 64:
+            return "", 0
+        ext = ".png"
+        if blob[:2] == b"\xff\xd8":
+            ext = ".jpg"
+        elif blob[:6] in (b"GIF87a", b"GIF89a"):
+            ext = ".gif"
+        elif blob[8:12] == b"WEBP":
+            ext = ".webp"
+        stem = re.sub(r'[\\/:*?"<>|\s]+', "_", str(friendly or "")).strip("_")[:60]
+        if not stem:
+            stem = "report_%s_%d" % (str(group_id or "group"), int(time.time()))
+        try:
+            cache_dir = Path(__file__).resolve().parent / "cache" / "album_upload"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            fp = cache_dir / (stem + ext)
+            fp.write_bytes(blob)
+            return str(fp), len(blob)
+        except OSError:
+            return "", 0
+
     async def _upload_report_to_album(self, stream_id: str, group_id: str, image_b64: str) -> None:
         """把日报图片上传到 QQ 群相册（移植原版 qq_group_upload 语义）。
 
@@ -2022,13 +2094,15 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         try:
             albums: list = []
             album_id = ""
+            resolved_name = ""
             if album_name:
-                resp = await asyncio.to_thread(self._napcat_api, "get_qun_album_list", {"group_id": int(group_id)})
+                resp = await asyncio.to_thread(self._napcat_api_retry, "get_qun_album_list", {"group_id": int(group_id)})
                 albums = self._extract_album_list(resp)
                 for a in albums:
                     nm = str(a.get("name") or a.get("album_name") or "").strip()
                     if nm == album_name:
                         album_id = str(a.get("album_id") or a.get("id") or "").strip()
+                        resolved_name = nm
                         break
                 if not album_id:
                     if strict:
@@ -2042,31 +2116,51 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 return
             if not album_id:
                 if not albums:
-                    resp = await asyncio.to_thread(self._napcat_api, "get_qun_album_list", {"group_id": int(group_id)})
+                    resp = await asyncio.to_thread(self._napcat_api_retry, "get_qun_album_list", {"group_id": int(group_id)})
                     albums = self._extract_album_list(resp)
                 if albums:
                     album_id = str(albums[0].get("album_id") or albums[0].get("id") or "").strip()
+                    resolved_name = str(albums[0].get("name") or albums[0].get("album_name") or "").strip()
             if not album_id:
                 self.ctx.logger.warning("[weekly] 未能确定群相册 ID（群 %s），跳过上传", group_id)
                 return
-            params: dict[str, Any] = {
-                "group_id": int(group_id),
-                "file": "base64://" + image_b64,
-                "album_id": album_id,
-            }
-            if album_name:
-                params["album_name"] = album_name
+            # SnowLuma 把 album_name 当必填参数（缺了会返回 retcode=1400），这里总是带上解析到的真实相册名
+            params_base: dict[str, Any] = {"group_id": int(group_id), "album_id": album_id}
+            if resolved_name or album_name:
+                params_base["album_name"] = resolved_name or album_name
+            # 关键：优先用「本地文件路径」而不是 base64 —— 协议端 HTTP API 对请求体有大小限制
+            # （实测 SnowLuma 约 1MB，超过直接重置连接 → WinError 10054），而日报图常有数 MB。
+            file_path, blob_len = self._write_album_temp(group_id, image_b64, self._album_file_stem(stream_id))
+            variants: list[tuple[str, dict[str, Any]]] = []
+            if file_path:
+                variants.append(("本地路径", {**params_base, "file": file_path}))
+            if len(image_b64) <= 900_000:  # 仅小图回退 base64；大图必然被重置，试了也白试
+                variants.append(("base64", {**params_base, "file": "base64://" + image_b64}))
+            if not variants:
+                self.ctx.logger.warning(
+                    "[weekly] 日报图片落盘失败且 base64 体积过大（%d 字符），跳过群相册上传", len(image_b64))
+                return
             last_err = ""
-            for action in ("upload_image_to_qun_album", "upload_group_album", "upload_qun_album"):
-                try:
-                    resp = await asyncio.to_thread(self._napcat_api, action, params)
-                    retcode = resp.get("retcode") if isinstance(resp, dict) else None
-                    if retcode in (0, None):
-                        self.ctx.logger.info("[weekly] 日报已上传群相册（%s，群 %s）", action, group_id)
-                        return
-                    last_err = str(resp)[:120]
-                except Exception as exc:
-                    last_err = str(exc)[:120]
+            try:
+                for tag, params in variants:
+                    for action in ("upload_image_to_qun_album", "upload_group_album", "upload_qun_album"):
+                        try:
+                            resp = await asyncio.to_thread(self._napcat_api_retry, action, params)
+                            retcode = resp.get("retcode") if isinstance(resp, dict) else None
+                            if retcode in (0, None):
+                                self.ctx.logger.info(
+                                    "[weekly] 日报已上传群相册（%s/%s，群 %s，图片 %d 字节）",
+                                    action, tag, group_id, blob_len or len(image_b64) * 3 // 4)
+                                return
+                            last_err = str(resp)[:120]
+                        except Exception as exc:
+                            last_err = str(exc)[:120]
+            finally:
+                if file_path:
+                    try:
+                        Path(file_path).unlink()
+                    except OSError:
+                        pass
             self.ctx.logger.warning("[weekly] 群相册上传失败（群 %s）: %s%s", group_id, last_err, self._napcat_auth_hint(last_err))
         except Exception as exc:
             self.ctx.logger.warning("[weekly] 群相册上传异常（群 %s）: %s%s", group_id, str(exc)[:120], self._napcat_auth_hint(exc))

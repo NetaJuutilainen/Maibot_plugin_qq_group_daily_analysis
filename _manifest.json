@@ -42,8 +42,9 @@
   },
   "display": {
     "icon": {
-      "type": "lucide",
-      "value": "newspaper"
+      "type": "local",
+      "value": "./assets/icon.svg",
+      "fallback": "newspaper"
     }
   }
 }

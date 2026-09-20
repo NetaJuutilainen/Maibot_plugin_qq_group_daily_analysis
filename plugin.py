@@ -1175,7 +1175,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                             attempt + 1, time.monotonic() - t0, len(last_output),
                         )
                         return parsed
-                    self.ctx.logger.warning("[weekly] LLM 返回无法解析为 JSON（第 %s 次），将降温修复重试", attempt + 1)
+                    self.ctx.logger.warning(
+                        "[weekly] LLM 返回无法解析为 JSON（第 %s 次），将降温修复重试；输出片段：%s",
+                        attempt + 1, re.sub(r"\s+", " ", last_output[:300]),
+                    )
                 else:
                     err = resp.get("error") if isinstance(resp, dict) else str(resp)
                     self.ctx.logger.warning("[weekly] LLM 调用失败（第 %s 次）: %s", attempt + 1, err)
@@ -1189,26 +1192,36 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     @staticmethod
     def _extract_json(raw: str) -> Any | None:
-        text = raw.strip()
-        if text.startswith("```"):
-            first_nl = text.find("\n")
-            if first_nl != -1:
-                text = text[first_nl + 1 :]
-            if text.rstrip().endswith("```"):
-                text = text.rstrip()[:-3]
-        marks = []
-        i_obj, i_arr = text.find("{"), text.find("[")
-        if i_obj != -1:
-            marks.append((i_obj, "{", "}"))
-        if i_arr != -1:
-            marks.append((i_arr, "[", "]"))
-        for _, open_ch, close_ch in sorted(marks):
+        """从 LLM 输出里抠出 JSON（尽量宽容，避免整段分析因为格式毛病而丢结果）。
+
+        模型常见的几种毛病，过去都会让 `json.loads` 直接失败：
+        - 用 ```json 代码块包裹，或前后加解释文字；
+        - 字符串值里出现**裸换行/控制字符**（严格模式拒收）→ 用 `strict=False` 再试；
+        - 数组/对象结尾多一个**尾随逗号**；
+        - 输出里先出现引用标记 `[123456]`，导致误判数组起点（这里两个括号都试）。
+        """
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        # 去掉任意位置的 ``` 围栏（含 ```json 这类语言标记）
+        text = re.sub(r"^\s*```[a-zA-Z0-9_-]*\s*", "", text)
+        text = re.sub(r"\s*```\s*$", "", text)
+        chunks: list[tuple[int, str]] = []
+        for open_ch, close_ch in (("[", "]"), ("{", "}")):
             start, end = text.find(open_ch), text.rfind(close_ch)
             if start != -1 and end > start:
-                try:
-                    return json.loads(text[start : end + 1])
-                except Exception:
-                    continue
+                chunks.append((start, text[start : end + 1]))
+        chunks.append((len(text) + 1, text))  # 兜底：整段直接试（模型可能给裸 JSON）
+        # 按出现位置排序 → 优先最外层结构。否则像 {"title":…,"dimensions":[…]} 这种
+        # 会被先抠出内层数组，把对象结构破坏掉（锐评板块就靠对象）。
+        for _, chunk in sorted(chunks, key=lambda item: item[0]):
+            variants = (chunk, re.sub(r",\s*([}\]])", r"\1", chunk))
+            for variant in variants:
+                for strict in (True, False):
+                    try:
+                        return json.loads(variant, strict=strict)
+                    except Exception:
+                        continue
         return None
 
     @staticmethod
@@ -1502,15 +1515,34 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     @staticmethod
     def _coerce_list(data: Any) -> list:
-        """把 LLM 输出规整为列表：兼容「对象包数组」（如 {"topics": [...]} / {"data": [...]}）的返回。"""
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
+        """把 LLM 输出规整为列表（兼容各种包装写法，尽量不丢结果）。
+
+        除了常见英文键名（topics/titles/quotes/data/…），还兼容：
+        - **中文/任意键名**：对象里只有一个列表值就直接用它（如 {"群友称号": [...]}）；
+        - **多层包装**：如 {"data": {"titles": [...]}}，最多往里剥两层。
+
+        过去这两种都会被静默丢掉，表现为「某个板块整段消失」，而日志里只显示分析"完成"。
+        """
+        def unwrap(node: Any, depth: int = 0) -> list:
+            if isinstance(node, list):
+                return node
+            if not isinstance(node, dict) or depth > 2:
+                return []
             for key in ("topics", "titles", "quotes", "data", "result", "items", "list"):
-                v = data.get(key)
-                if isinstance(v, list):
-                    return v
-        return []
+                value = node.get(key)
+                if isinstance(value, list):
+                    return value
+            lists = [v for v in node.values() if isinstance(v, list)]
+            if len(lists) == 1:
+                return lists[0]
+            for value in node.values():
+                if isinstance(value, dict):
+                    got = unwrap(value, depth + 1)
+                    if got:
+                        return got
+            return []
+
+        return unwrap(data)
 
     async def _analyze_topics(self, context: dict, sample_text: str, acfg: "AnalysisConfig") -> list:
         """话题分析：只做 LLM 输出清洗，返回原始结构（topic=标题字符串，contributors=ID 列表，

@@ -463,6 +463,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     _jinja_envs: ClassVar[dict[str, Any]] = {}
     # 这些码位虽在 emoji 字体范围内（键帽 emoji 需要），但必须交给正文字体，否则数字会被拉宽
     _EMOJI_RANGE_SKIP: ClassVar[frozenset] = frozenset({"u+23", "u+2a", "u+30-39"})
+    # 相册上传超时（秒）：大图（几 MB）传给协议端再转 QQ，实测要 20~40s，给足余量避免客户端超时后重复上传
+    _ALBUM_UPLOAD_TIMEOUT_S: ClassVar[float] = 120.0
     _TEMPLATES_ROOT: ClassVar[Path] = Path(__file__).resolve().parent / "templates"
     _STATIC_ASSETS_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "static_assets.json"
     _FONT_SUB_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "fonts" / "LXGW-Regular-sub.woff2"
@@ -2035,8 +2037,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     "SnowLuma：config/onebot_<QQ号>.json 的 networks.httpServers[].accessToken")
         return ""
 
-    def _napcat_api(self, action: str, payload: dict) -> Any:
-        """调用 NapCat OneBot HTTP API（同步实现，供 asyncio.to_thread 使用）。"""
+    def _napcat_api(self, action: str, payload: dict, timeout: float = 20.0) -> Any:
+        """调用协议端 OneBot HTTP API（同步实现，供 asyncio.to_thread 使用）。"""
         cfg = self._album_cfg()
         base = str(getattr(cfg, "napcat_api_url", "") or "").strip()
         if not base:
@@ -2049,18 +2051,46 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         req = urllib.request.Request(
             url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
         )
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
 
-    def _napcat_api_retry(self, action: str, payload: dict, attempts: int = 3) -> Any:
-        """带重试的 OneBot HTTP API 调用（传输类错误重试，业务错误不重试）。
+    def _album_has_upload(self, group_id: str, album_id: str, filename: str) -> bool:
+        """核对相册里是否已有该文件。
+
+        用途：上传大图时客户端可能先超时，而服务端其实已经传完了 —— 这时若直接重试就会
+        **重复上传**（实测 09-20 月球日相册里出现 3 份同样的日报）。重试前先来这里确认。
+        """
+        if not filename:
+            return False
+        try:
+            resp = self._napcat_api(
+                "get_group_album_media_list",
+                {"group_id": int(group_id), "album_id": album_id},
+                timeout=25.0,
+            )
+        except Exception:
+            return False
+        if not isinstance(resp, dict):
+            return False
+        media = ((resp.get("data") or {}).get("mediaList") or [])[:6]
+        for item in media:
+            if not isinstance(item, dict):
+                continue
+            image = item.get("image") or {}
+            if str(image.get("name") or "").strip() == filename:
+                return True
+        return False
+
+    def _napcat_api_retry(self, action: str, payload: dict, attempts: int = 3, timeout: float = 20.0) -> Any:
+        """带重试的 OneBot HTTP API 调用（仅用于**幂等**的查询类接口，如取相册列表）。
 
         `[WinError 10054] 远程主机强迫关闭了一个现有的连接` 这类多为瞬时问题，重试通常即可成功。
+        注意：上传类接口**不要**用这个（重试会导致重复上传），见 `_upload_report_to_album`。
         """
         last: Exception | None = None
         for i in range(max(1, attempts)):
             try:
-                return self._napcat_api(action, payload)
+                return self._napcat_api(action, payload, timeout=timeout)
             except Exception as exc:  # noqa: BLE001 - 网络异常种类多，统一重试
                 last = exc
                 if i + 1 < attempts:
@@ -2172,28 +2202,52 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 self.ctx.logger.warning(
                     "[weekly] 日报图片落盘失败且 base64 体积过大（%d 字符），跳过群相册上传", len(image_b64))
                 return
-            last_err = ""
+            upload_name = Path(file_path).name if file_path else ""
+            errors: list[str] = []
+
+            async def _try_upload(action: str, params: dict, tag: str) -> bool:
+                """单次上传尝试；返回是否成功（含「请求超时但相册已确认收到」的情况）。"""
+                try:
+                    resp = await asyncio.to_thread(self._napcat_api, action, params, self._ALBUM_UPLOAD_TIMEOUT_S)
+                except Exception as exc:
+                    errors.append("%s(%s): %s" % (action, tag, str(exc)[:90]))
+                    # 传输类失败（超时/连接被重置）时服务端很可能已经传完了 ——
+                    # 先核对相册，避免「客户端超时 → 重试 → 重复上传」（2026-09-20 月球日出现 3 份同样日报）
+                    if upload_name and await asyncio.to_thread(
+                        self._album_has_upload, group_id, album_id, upload_name
+                    ):
+                        self.ctx.logger.info(
+                            "[weekly] 上传请求异常但相册已确认收到该图，按成功处理（群 %s，%s）", group_id, upload_name)
+                        return True
+                    return False
+                retcode = resp.get("retcode") if isinstance(resp, dict) else None
+                if retcode in (0, None):
+                    self.ctx.logger.info(
+                        "[weekly] 日报已上传群相册（%s/%s，群 %s，图片 %d 字节）",
+                        action, tag, group_id, blob_len or len(image_b64) * 3 // 4)
+                    return True
+                errors.append("%s(%s): %s" % (action, tag, str(resp)[:90]))
+                return False
+
             try:
                 for tag, params in variants:
-                    for action in ("upload_image_to_qun_album", "upload_group_album", "upload_qun_album"):
-                        try:
-                            resp = await asyncio.to_thread(self._napcat_api_retry, action, params)
-                            retcode = resp.get("retcode") if isinstance(resp, dict) else None
-                            if retcode in (0, None):
-                                self.ctx.logger.info(
-                                    "[weekly] 日报已上传群相册（%s/%s，群 %s，图片 %d 字节）",
-                                    action, tag, group_id, blob_len or len(image_b64) * 3 // 4)
-                                return
-                            last_err = str(resp)[:120]
-                        except Exception as exc:
-                            last_err = str(exc)[:120]
+                    if await _try_upload("upload_image_to_qun_album", params, tag):
+                        return
+                    # 只有明确「不认识这个 action」时才换别的名字（兼容其它协议端实现）
+                    last_err = errors[-1] if errors else ""
+                    if "unknown action" not in last_err and "1404" not in last_err:
+                        continue
+                    for action in ("upload_group_album", "upload_qun_album"):
+                        if await _try_upload(action, params, tag):
+                            return
             finally:
                 if file_path:
                     try:
                         Path(file_path).unlink()
                     except OSError:
                         pass
-            self.ctx.logger.warning("[weekly] 群相册上传失败（群 %s）: %s%s", group_id, last_err, self._napcat_auth_hint(last_err))
+            joined = " | ".join(errors[-3:]) or "未知错误"
+            self.ctx.logger.warning("[weekly] 群相册上传失败（群 %s）: %s%s", group_id, joined, self._napcat_auth_hint(joined))
         except Exception as exc:
             self.ctx.logger.warning("[weekly] 群相册上传异常（群 %s）: %s%s", group_id, str(exc)[:120], self._napcat_auth_hint(exc))
 

@@ -411,9 +411,10 @@ class AnalysisConfig(PluginConfigBase):
     profile_image_size_mode: str = Field(default="contain", description="称号卡人格水印图尺寸模式 (contain/cover/fill)")
     llm_retries: int = Field(default=2, description="LLM 请求重试次数 (0~5)", ge=0, le=5)
     llm_max_tokens: int = Field(
-        default=8192,
+        default=16384,
         description="单次 LLM 输出的 token 上限（宿主 llm.generate 支持该参数）。"
-                    "推理型模型会把 token 烧在思考上导致正文为空/被截断，失败重试时会自动翻倍（最多 4 倍）",
+                    "思考型模型会把 token 花在思考上，给足预算才不会出现正文为空；"
+                    "失败重试时会自动翻倍，绝对上限 32768",
         ge=512, le=65536,
     )
     llm_backoff: int = Field(default=2, description="LLM 重试退避基值（秒，0~30）", ge=0, le=30)
@@ -1169,9 +1170,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 if model_task and model_task != "auto":
                     kwargs["model"] = model_task
                 # 显式给出输出上限（宿主 llm.generate 支持 max_tokens）：
-                # 推理型模型会把 token 烧在思考上，导致正文为空或被截断 —— 重试时逐次翻倍（最多 4 倍）。
-                base_tokens = int(getattr(acfg, "llm_max_tokens", 8192) or 8192)
-                kwargs["max_tokens"] = min(base_tokens * (2 ** attempt), base_tokens * 4)
+                # 思考型模型会把 token 花在思考上，导致正文为空或被截断 —— 重试时逐次翻倍，
+                # 但设 32768 的绝对上限（再大容易被上游 API 直接拒绝，反而全盘失败）。
+                base_tokens = int(getattr(acfg, "llm_max_tokens", 16384) or 16384)
+                kwargs["max_tokens"] = min(base_tokens * (2 ** attempt), 32768)
                 if self._llm_sem is None:
                     self._llm_sem = asyncio.Semaphore(2)
                 async with self._llm_sem:  # 全局并发闸门（对齐原版 GlobalRateLimiter）

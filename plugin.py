@@ -410,6 +410,12 @@ class AnalysisConfig(PluginConfigBase):
     profile_image_opacity: float = Field(default=0.12, description="称号卡人格水印图透明度 (0~1)", ge=0.0, le=1.0)
     profile_image_size_mode: str = Field(default="contain", description="称号卡人格水印图尺寸模式 (contain/cover/fill)")
     llm_retries: int = Field(default=2, description="LLM 请求重试次数 (0~5)", ge=0, le=5)
+    llm_max_tokens: int = Field(
+        default=8192,
+        description="单次 LLM 输出的 token 上限（宿主 llm.generate 支持该参数）。"
+                    "推理型模型会把 token 烧在思考上导致正文为空/被截断，失败重试时会自动翻倍（最多 4 倍）",
+        ge=512, le=65536,
+    )
     llm_backoff: int = Field(default=2, description="LLM 重试退避基值（秒，0~30）", ge=0, le=30)
     llm_max_concurrent: int = Field(default=2, description="LLM 全局并发上限（多群同时生成时防限流，1~10）", ge=1, le=10)
     llm_timeout_ms: int = Field(default=180000, description="LLM 分析的 RPC 超时（毫秒）", ge=30000)
@@ -1162,6 +1168,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 kwargs: dict[str, Any] = {"prompt": cur_prompt, "temperature": temperature}
                 if model_task and model_task != "auto":
                     kwargs["model"] = model_task
+                # 显式给出输出上限（宿主 llm.generate 支持 max_tokens）：
+                # 推理型模型会把 token 烧在思考上，导致正文为空或被截断 —— 重试时逐次翻倍（最多 4 倍）。
+                base_tokens = int(getattr(acfg, "llm_max_tokens", 8192) or 8192)
+                kwargs["max_tokens"] = min(base_tokens * (2 ** attempt), base_tokens * 4)
                 if self._llm_sem is None:
                     self._llm_sem = asyncio.Semaphore(2)
                 async with self._llm_sem:  # 全局并发闸门（对齐原版 GlobalRateLimiter）
@@ -1170,17 +1180,26 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     )
                 if isinstance(resp, dict) and resp.get("success"):
                     last_output = str(resp.get("response") or "")
-                    parsed = self._extract_json(last_output)
-                    if parsed is not None:
-                        self.ctx.logger.info(
-                            "[weekly] LLM 调用成功（第 %s 次, %.1fs, 输出 %d 字）",
-                            attempt + 1, time.monotonic() - t0, len(last_output),
+                    reasoning = str(resp.get("reasoning") or "")
+                    if not last_output.strip():
+                        # 正文为空但推理段很长 = 典型的「token 用尽 / 被截断」，不是格式问题
+                        self.ctx.logger.warning(
+                            "[weekly] LLM 返回空内容（第 %s 次，推理段 %d 字，疑似 token 用尽或被截断），"
+                            "下次重试会放宽输出上限（当前 max_tokens=%s）",
+                            attempt + 1, len(reasoning), kwargs["max_tokens"],
                         )
-                        return parsed
-                    self.ctx.logger.warning(
-                        "[weekly] LLM 返回无法解析为 JSON（第 %s 次），将降温修复重试；输出片段：%s",
-                        attempt + 1, re.sub(r"\s+", " ", last_output[:300]),
-                    )
+                    else:
+                        parsed = self._extract_json(last_output)
+                        if parsed is not None:
+                            self.ctx.logger.info(
+                                "[weekly] LLM 调用成功（第 %s 次, %.1fs, 输出 %d 字）",
+                                attempt + 1, time.monotonic() - t0, len(last_output),
+                            )
+                            return parsed
+                        self.ctx.logger.warning(
+                            "[weekly] LLM 返回无法解析为 JSON（第 %s 次），将降温修复重试；输出片段：%s",
+                            attempt + 1, re.sub(r"\s+", " ", last_output[:300]),
+                        )
                 else:
                     err = resp.get("error") if isinstance(resp, dict) else str(resp)
                     self.ctx.logger.warning("[weekly] LLM 调用失败（第 %s 次）: %s", attempt + 1, err)

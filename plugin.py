@@ -2542,19 +2542,43 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 pass
             return "failed"
 
+    @staticmethod
+    def _stream_freshness(chat: dict) -> tuple:
+        """给同一个群的多套历史 stream 排序：最新一天越新、当天消息越多，越「新鲜」。
+
+        背景（2026-09-22 月球群实测）：换会话/重启会留下同群的旧 stream，而定时日报是按
+        stream 逐条处理的 → **同一个群被生成两份日报**（20:50 与 21:11 各一份、各上传一次相册）。
+        """
+        days = chat.get("days") or {}
+        if not isinstance(days, dict) or not days:
+            return ("", 0)
+        last_day = max(str(k) for k in days.keys())
+        total = int((days.get(last_day) or {}).get("total") or 0)
+        return (last_day, total)
+
     async def _generate_daily_all(self) -> None:
         today = date.today().strftime("%Y-%m-%d")
         whitelist = self._whitelist_ids()
         daily_groups = self._daily_report_group_ids()
+        # 按群去重：同一个群可能残留多套历史 stream，只保留最新的一套，避免同群生成两份日报
+        best: dict[str, tuple[str, dict]] = {}
         for stream_id, chat in list(self._stats.get("chats", {}).items()):
+            if not isinstance(chat, dict):
+                continue
+            gid = str(chat.get("group_id") or "")
+            if not gid:
+                continue
+            if whitelist is not None and gid not in whitelist:
+                continue
+            if daily_groups is not None and gid not in daily_groups:
+                continue
+            prev = best.get(gid)
+            if prev is None or self._stream_freshness(chat) > self._stream_freshness(prev[1]):
+                best[gid] = (stream_id, chat)
+        for gid, (stream_id, chat) in best.items():
             if chat.get("last_daily") == today:
                 continue
-            if whitelist is not None and str(chat.get("group_id") or "") not in whitelist:
-                continue
-            if daily_groups is not None and str(chat.get("group_id") or "") not in daily_groups:
-                continue
             try:
-                gid = str(chat.get("group_id") or "")
                 theme = self._theme_for_group(gid)
                 await self._rebuild_day_from_db(stream_id, today)
                 if await self._generate_daily_and_send(stream_id, today, theme) == "ok":

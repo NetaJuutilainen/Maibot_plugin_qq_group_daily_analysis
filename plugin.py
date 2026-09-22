@@ -419,7 +419,12 @@ class AnalysisConfig(PluginConfigBase):
     )
     llm_backoff: int = Field(default=2, description="LLM 重试退避基值（秒，0~30）", ge=0, le=30)
     llm_max_concurrent: int = Field(default=2, description="LLM 全局并发上限（多群同时生成时防限流，1~10）", ge=1, le=10)
-    llm_timeout_ms: int = Field(default=180000, description="LLM 分析的 RPC 超时（毫秒）", ge=30000)
+    llm_timeout_ms: int = Field(
+        default=420000,
+        description="LLM 分析的 RPC 超时（毫秒）。实测部分模型单次要 170~220 秒，给到 7 分钟留余量；"
+                    "过小会把分析掐断，整段变空",
+        ge=30000,
+    )
     render_viewport_width: int = Field(default=1080, description="日报渲染视口宽度 (px)", ge=600, le=2000)
     render_scale: float = Field(default=1.5, description="日报渲染缩放（R1 全量档；失败自动降 1.0→精简档）", ge=1.0, le=3.0)
     render_remote_enabled: bool = Field(default=False, description="开启后用云端 t2i 服务渲染（零本地开销；失败自动回落本地渲染）。注意：开启即意味着整份日报（含昵称、用户 ID、头像、群聊样本）会发送到下方配置的第三方服务，默认关闭")

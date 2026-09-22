@@ -355,6 +355,12 @@ class ReportSectionConfig(PluginConfigBase):
         description="定时日报发送的群列表，每行一个群号；留空则发给所有白名单内的活跃群",
         json_schema_extra={"rows": 4, "placeholder": "每行一个群号"},
     )
+    prune_stale_stream_days: int = Field(
+        default=14,
+        description="自动清理历史 stream：同一个群只保留最新的一套；最新数据超过这么多天的也一并清掉"
+                    "（0=不清理）。换会话/重启会留下重复 stream，曾导致同一个群一天出两份日报",
+        ge=0, le=365,
+    )
     # ---- 群相册上传的设置已独立到 AlbumSectionConfig（见下方 album 配置节）----
 
 
@@ -505,6 +511,16 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     async def on_load(self) -> None:
         self._stats = self._load_stats()
+        # 清理历史遗留的重复/过期 stream（同一个群多套 stream 曾导致一天出两份日报）
+        try:
+            _rm, _dup = self._prune_stale_streams()
+            if _rm:
+                self.ctx.logger.info(
+                    "[weekly] 已清理 %d 套无用历史 stream（其中同群重复 %d 套），本次统计已保存",
+                    _rm, _dup)
+                self._save_stats()
+        except Exception as exc:
+            self.ctx.logger.warning("[weekly] 清理历史 stream 失败（不影响运行）: %s", exc)
         # LLM 全局并发闸门（对齐原版 GlobalRateLimiter；改配置后重载插件生效）
         try:
             _conc = int(getattr(self._cfg().analysis, "llm_max_concurrent", 2) or 2)
@@ -2542,6 +2558,65 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 pass
             return "failed"
 
+    def _prune_stale_streams(self) -> tuple[int, int]:
+        """清理无用的历史 stream，返回 (清理总数, 其中属于同群重复的套数)。
+
+        为什么需要：换会话/重启会给同一个群留下多套 stream（2026-09-22 月球群因此一天出了两份日报）。
+        去重逻辑已保证不再重复发送，这里再把死数据真正删掉，免得每次日报都白跑一遍 24h 拉取。
+
+        规则：
+        1. 同一个群只保留 `_stream_freshness` 最靠前（最新一天 + 当天消息数最多）的那套；
+        2. 最新一天超过 `prune_stale_stream_days` 天的 stream 一并清掉（群再次活跃时会自动重建）。
+        """
+        chats = self._stats.get("chats")
+        if not isinstance(chats, dict) or not chats:
+            return 0, 0
+        try:
+            keep_days = int(getattr(self._cfg().analysis, "prune_stale_stream_days", 14) or 0)
+        except Exception:
+            keep_days = 14
+        if keep_days <= 0:  # 0 = 完全关闭清理
+            return 0, 0
+        # 1) 同群去重：保留最新的一套
+        best: dict[str, str] = {}
+        for sid, chat in list(chats.items()):
+            if not isinstance(chat, dict):
+                continue
+            gid = str(chat.get("group_id") or "")
+            if not gid:
+                continue
+            cur = best.get(gid)
+            if cur is None or self._stream_freshness(chat) > self._stream_freshness(chats.get(cur) or {}):
+                best[gid] = sid
+        removed = 0
+        removed_dup = 0
+        for sid, chat in list(chats.items()):
+            if not isinstance(chat, dict):
+                continue
+            gid = str(chat.get("group_id") or "")
+            if gid and best.get(gid) != sid:
+                chats.pop(sid, None)
+                removed += 1
+                removed_dup += 1
+        # 2) 过期 stream
+        today = date.today()
+        for sid, chat in list(chats.items()):
+            if not isinstance(chat, dict):
+                continue
+            last_day = self._stream_freshness(chat)[0]
+            if not last_day:
+                continue
+            try:
+                age = (today - date.fromisoformat(last_day)).days
+            except ValueError:
+                continue
+            if age > keep_days:
+                chats.pop(sid, None)
+                removed += 1
+        if removed:
+            self._dirty = True
+        return removed, removed_dup
+
     @staticmethod
     def _stream_freshness(chat: dict) -> tuple:
         """给同一个群的多套历史 stream 排序：最新一天越新、当天消息越多，越「新鲜」。
@@ -2558,6 +2633,13 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     async def _generate_daily_all(self) -> None:
         today = date.today().strftime("%Y-%m-%d")
+        # 每次批量生成前顺手清理历史遗留的重复/过期 stream
+        try:
+            _rm, _dup = self._prune_stale_streams()
+            if _rm:
+                self.ctx.logger.info("[weekly] 日报前清理了 %d 套无用历史 stream（同群重复 %d 套）", _rm, _dup)
+        except Exception as exc:
+            self.ctx.logger.warning("[weekly] 清理历史 stream 失败（不影响生成）: %s", exc)
         whitelist = self._whitelist_ids()
         daily_groups = self._daily_report_group_ids()
         # 按群去重：同一个群可能残留多套历史 stream，只保留最新的一套，避免同群生成两份日报

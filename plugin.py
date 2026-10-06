@@ -709,6 +709,36 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     def _stats_path(self):
         return self.ctx.paths.data_dir / "stats.json"
 
+    def _runtime_cache_dir(self, sub: str) -> Path:
+        """运行时缓存目录（头像 / 人格水印图 / 相册上传临时文件）。
+
+        优先放到 `data_dir/cache/<sub>`（与 stats.json 同区 —— 审核建议）：插件目录在部分部署里
+        是只读的，市场按 Release 更新时也会整体替换（`cache` 不在保留清单里、会被丢），
+        而 `data/plugins/<插件>/` 更新永远不碰。`data_dir` 不可用时回退插件目录 cache（旧行为），
+        保证任何环境都能跑。
+        """
+        base = None
+        try:
+            ctx = getattr(self, "ctx", None)
+            paths = getattr(ctx, "paths", None) if ctx is not None else None
+            dd = Path(paths.data_dir) if (paths is not None and getattr(paths, "data_dir", None)) else None
+            if dd is not None:
+                base = dd / "cache"
+        except Exception:
+            base = None
+        if base is None:
+            base = Path(__file__).resolve().parent / "cache"
+        d = base / sub
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            try:
+                d = Path(__file__).resolve().parent / "cache" / sub
+                d.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
+        return d
+
     def _load_stats(self) -> dict:
         try:
             path = self._stats_path()
@@ -1411,7 +1441,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     def _load_profile_image_uri(self, url: str) -> str:
         """下载人格水印图并内联为 data URI（磁盘缓存，一次下载长期复用；失败不缓存，下次重试）。"""
         import hashlib
-        cache_dir = Path(__file__).resolve().parent / "cache" / "profile_assets"
+        cache_dir = self._runtime_cache_dir("profile_assets")
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             fp = cache_dir / (hashlib.md5(url.encode("utf-8")).hexdigest() + ".img")
@@ -1927,7 +1957,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         avatars = context.get("avatars") or {}
         if not avatars:
             return html
-        cache_dir = Path(__file__).resolve().parent / "cache" / "avatars"
+        cache_dir = self._runtime_cache_dir("avatars")
         for uid, url in list(avatars.items()):
             if not url:
                 continue
@@ -2175,8 +2205,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         if not stem:
             stem = "report_%s_%d" % (str(group_id or "group"), int(time.time()))
         try:
-            cache_dir = Path(__file__).resolve().parent / "cache" / "album_upload"
-            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_dir = self._runtime_cache_dir("album_upload")
             fp = cache_dir / (stem + ext)
             fp.write_bytes(blob)
             return str(fp), len(blob)

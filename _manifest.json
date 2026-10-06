@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "maibot-plugin-qq-group-daily-analysis",
-  "version": "1.0.1",
+  "version": "1.0.0",
   "name": "群聊每日分析",
   "description": "每天自动生成群聊日报：高光话题、神人称号、金句宝藏瓶、聊天质量锐评，9 套主题可选，支持上传 QQ 群相册。",
   "author": {

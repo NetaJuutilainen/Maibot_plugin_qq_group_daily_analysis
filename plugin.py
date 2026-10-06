@@ -318,7 +318,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件")
-    config_version: str = Field(default="1.1.0", description="配置文件版本号")
+    config_version: str = Field(default="1.2.0", description="配置文件版本号（1.2.0：加入 llm_max_tokens / prune_stale_stream_days）")
 
 
 class ReportSectionConfig(PluginConfigBase):

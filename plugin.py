@@ -2490,11 +2490,12 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         except Exception as exc:
             self.ctx.logger.warning("[weekly] 人格水印图预取失败: %s", exc)
         html_raw = self._render_daily(context, analysis, theme)
-        # 两套 HTML：
-        #  html_ext —— 保留镜像外链素材（POST 体积小、渲染快），只内联头像
-        #  html_inl —— 素材/字体全部内联（零外链，抗网络波动，作为兜底与本地渲染用）
-        html_ext = await self._inline_avatars(html_raw, context)
-        html_text = self._inline_static_assets(html_ext)
+        # HTML 版本：素材/字体全部内联（零外链）。
+        # 历史教训（2026-10-11 月球群）：曾另备一份"只内联头像、装饰素材保留外链"的精简版给云端渲染，
+        # 云端 t2i 去拉 tc.ciallo.ccwu.cc 的素材失败时**仍然出图**，于是产出"美术素材全破图"的日报，
+        # 而且因为返回了图、不会降级到内联兜底档。现在统一只用全内联版：
+        # 代价是 POST 体积略大、云端渲染稍慢；换来的是素材完整性不再依赖第三方站点可达性。
+        html_text = self._inline_static_assets(await self._inline_avatars(html_raw, context))
         # HTML 直发模式：零渲染开销（对齐原版 output_format=html），用自包含的内联版
         if str(getattr(acfg, "output_format", "image") or "image").strip().lower() == "html":
             if await self._send_daily_html(stream_id, context, html_text, day):
@@ -2506,7 +2507,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             self.ctx.logger.warning("[weekly] HTML 直发失败，回落到图片渲染")
         # 在线渲染耗时（字体下载+素材）会超过 RPC 默认 30s 超时，
         # 因此绕过便捷代理，用 call_capability 显式给足 RPC 预算。
-        # 渲染链（前三条属云端渲染，需在配置里显式开启，默认关闭）：云端外链PNG → 云端外链JPEG → 云端内联JPEG → 本地全量 → 本地稳定 → 本地精简
+        # 渲染链（前两条属云端渲染，需在配置里显式开启，默认关闭）：云端PNG → 云端JPEG → 本地全量 → 本地稳定 → 本地精简
+        # 云端两条都送全内联 HTML（素材零外链），避免第三方 t2i 取不到镜像素材而产出破图
         lite_raw = self._render_daily(context, analysis, theme, max_items=(4, 4, 3))
         html_lite = self._inline_static_assets(await self._inline_avatars(lite_raw, context))
         try:
@@ -2519,9 +2521,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         if acfg.render_remote_enabled:
             remote_attempts = []
             if bool(getattr(acfg, "render_remote_png_first", True)):
-                remote_attempts.append(("云端PNG(外链)", html_ext, "png"))
-            remote_attempts.append(("云端JPEG(外链)", html_ext, "jpeg"))
-            remote_attempts.append(("云端JPEG(内联)", html_text, "jpeg"))
+                remote_attempts.append(("云端PNG", html_text, "png"))
+            remote_attempts.append(("云端JPEG", html_text, "jpeg"))
             for label, html, itype in remote_attempts:
                 image = await self._render_remote(html, acfg, image_type=itype)
                 if image:

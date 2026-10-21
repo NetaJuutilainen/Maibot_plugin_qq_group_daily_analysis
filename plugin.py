@@ -402,6 +402,9 @@ class AnalysisConfig(PluginConfigBase):
     max_user_titles: int = Field(default=3, description="单日最大用户称号数量 (1~10)", ge=1, le=10)
     max_golden_quotes: int = Field(default=3, description="单日最大金句数量 (1~10)", ge=1, le=10)
     max_sample_messages: int = Field(default=200, description="日报采样消息条数上限 (10~1000)", ge=10, le=1000)
+    include_bot_messages: bool = Field(
+        default=False, description="统计机器人自身发言（计入话题、称号、金句和消息统计）"
+    )
     min_messages_threshold: int = Field(default=10, description="生成日报的最低消息数", ge=1)
     show_report_caption: bool = Field(default=True, description="日报图片前是否附带提示文字")
     output_format: str = Field(default="image", description="日报输出形态：image=渲染成图片 / html=直接发 HTML 文件（零渲染开销）")
@@ -618,7 +621,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
         user_info = message_info.get("user_info", {})
         user_id = str(user_info.get("user_id") or "")
-        if not user_id or self._is_self(message):
+        if not user_id or (self._is_self(message) and not self._cfg().analysis.include_bot_messages):
             return
 
         stream_id = str(message.get("session_id") or "")
@@ -848,6 +851,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "max_user_titles": {"label": "最大称号数", "ui_type": "number", "min": 1, "max": 10},
             "max_golden_quotes": {"label": "最大金句数", "ui_type": "number", "min": 1, "max": 10},
             "max_sample_messages": {"label": "日报采样条数上限", "ui_type": "number", "min": 10, "max": 1000},
+            "include_bot_messages": {"label": "统计机器人自身发言", "ui_type": "switch", "hint": "开启后，日报从宿主数据库读取机器人已保存的发言；默认关闭以保留原统计口径"},
             "min_messages_threshold": {"label": "生成日报最低消息数", "ui_type": "number", "min": 1},
             "show_report_caption": {"label": "日报图片前附带提示文字", "ui_type": "switch"},
             "output_format": {"label": "日报输出形态", "ui_type": "select", "choices": ["image", "html"], "hint": "image=渲染成图片（默认）；html=直接上传 HTML 文件到群文件，零渲染开销（需 NapCat 地址/令牌）"},
@@ -1068,7 +1072,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             resp = await self.ctx.call_capability(
                 "message.get_by_time_in_chat",
                 chat_id=stream_id, start_time=start_time, end_time=end_time,
-                limit=0, filter_mai=True, filter_command=True,
+                limit=0, filter_mai=not self._cfg().analysis.include_bot_messages, filter_command=True,
                 timeout_ms=20000,
             )
         except Exception as exc:

@@ -145,6 +145,7 @@
 > （WebUI 以自身站点为基准解析相对路径，写成 `assets/previews/…` 会 404；
 > 它也不渲染 README 里的原始 HTML，故此处只用标准 markdown 表格 + 图片语法。）
 > `art_nouveau` / `maria` / `deepseek_maid` 三套模板与素材移植自上游 AstrBot 插件，各自的许可条款见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)（其中 `deepseek_maid` 的角色形象为 CC BY-NC-SA 4.0）。
+
 ---
 
 ## 五、命令

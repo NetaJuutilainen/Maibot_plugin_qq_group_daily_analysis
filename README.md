@@ -63,13 +63,16 @@
 | 云端渲染分辨率档位 | `normal`（1.0x，1080 宽，默认）/ `high`（1.3x）/ `ultra`（1.8x）；仅在开启云端渲染时生效 |
 
 ### 群相册上传
+
+**NapCat 与 SnowLuma 两个适配器都支持**（走的是同一个 OneBot v11 相册接口：`get_qun_album_list` / `upload_image_to_qun_album`）。
+
 | 配置 | 说明 |
 |---|---|
-| 日报生成后上传群相册 | 仅 NapCat 支持；失败不影响正常发图 |
+| 日报生成后上传群相册 | **NapCat / SnowLuma 均支持**；失败不影响正常发图 |
 | 默认相册名称 | 留空 = 第一个相册 |
 | 按群指定相册 | 每行 `群号=相册名`，优先于默认 |
-| NapCat HTTP API 地址 | 例如 `http://127.0.0.1:3002` |
-| NapCat 访问令牌 | 在 NapCat 的 OneBot 配置里找；留空表示无需鉴权 |
+| 协议端 HTTP API 地址 | NapCat / SnowLuma 通用，例如 `http://127.0.0.1:3002`（SnowLuma 默认 `3002`） |
+| 协议端访问令牌 | 留空表示无需鉴权。NapCat 填 `network.httpServers[].token`；SnowLuma 填 `networks.httpServers[].accessToken` |
 
 ### 分析提示词
 四个板块的提示词都可改（支持 `${max_topics}` `${messages_text}` 等变量），另有「分析人设描述」可注入人设口吻。
@@ -107,83 +110,40 @@
 ### 主题预览
 
 下面是这 12 套主题的**真实渲染结果**（由本插件渲染管线实际出图，非设计稿）。
-缩略图截取的是每张日报的顶部区域（宽 380px），点击可看 1000px 完整长图。
+缩略图截取每张日报的顶部区域（宽 260px），**点击图片可看 1000px 完整长图**；每套的一句话风格见表格下方的清单。
 
-#### ATRI · `atri`
+|**ATRI** · `atri`|**BlueArchive** · `bluearchive`|**初音未来** · `hatsunemiku`|
+|:--:|:--:|:--:|
+|[![ATRI 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/atri.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/atri.jpg)|[![BlueArchive 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/bluearchive.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/bluearchive.jpg)|[![初音未来 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/hatsunemiku.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hatsunemiku.jpg)|
 
-深海水族箱 · 群青与荧光气泡
+|**黑客帝国** · `hack`|**复古未来** · `retro_futurism`|**剪贴簿** · `scrapbook`|
+|:--:|:--:|:--:|
+|[![黑客帝国 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/hack.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hack.jpg)|[![复古未来 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/retro_futurism.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/retro_futurism.jpg)|[![剪贴簿 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/scrapbook.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/scrapbook.jpg)|
 
-[![ATRI 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/atri.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/atri.jpg)
+|**新春** · `spring_festival`|**简约** · `simple`|**格式报告** · `format`|
+|:--:|:--:|:--:|
+|[![新春 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/spring_festival.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/spring_festival.jpg)|[![简约 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/simple.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/simple.jpg)|[![格式报告 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/format.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/format.jpg)|
 
-#### BlueArchive · `bluearchive`
+|**新艺术运动** · `art_nouveau`|**圣母在上** · `maria`|**鲸鱼女仆娘** · `deepseek_maid`|
+|:--:|:--:|:--:|
+|[![新艺术运动 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/art_nouveau.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/art_nouveau.jpg)|[![圣母在上 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/maria.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/maria.jpg)|[![鲸鱼女仆娘 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/deepseek_maid.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/deepseek_maid.jpg)|
 
-教室黑板 · 粉笔字与便利贴
-
-[![BlueArchive 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/bluearchive.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/bluearchive.jpg)
-
-#### 初音未来 · `hatsunemiku`
-
-青绿电子 · 波形与荧光条
-
-[![初音未来 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/hatsunemiku.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hatsunemiku.jpg)
-
-#### 黑客帝国 · `hack`
-
-终端绿字 · 黑底扫描线
-
-[![黑客帝国 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/hack.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hack.jpg)
-
-#### 复古未来 · `retro_futurism`
-
-米黄镀铬 · 60 年代太空梦
-
-[![复古未来 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/retro_futurism.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/retro_futurism.jpg)
-
-#### 剪贴簿 · `scrapbook`
-
-手账拼贴 · 胶带与纸片
-
-[![剪贴簿 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/scrapbook.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/scrapbook.jpg)
-
-#### 新春 · `spring_festival`
-
-红金年味 · 灯笼与窗花
-
-[![新春 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/spring_festival.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/spring_festival.jpg)
-
-#### 简约 · `simple`
-
-极简白底 · 大留白排版
-
-[![简约 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/simple.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/simple.jpg)
-
-#### 格式报告 · `format`
-
-商务排版 · 表格化结构
-
-[![格式报告 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/format.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/format.jpg)
-
-#### 新艺术运动 · `art_nouveau`
-
-羊皮纸藤蔓 · 穆夏圣光与烫金
-
-[![新艺术运动 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/art_nouveau.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/art_nouveau.jpg)
-
-#### 圣母在上 · `maria`
-
-学园茶会 · 三蔷薇徽与藏书印
-
-[![圣母在上 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/maria.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/maria.jpg)
-
-#### DeepSeek 鲸鱼女仆娘 · `deepseek_maid`
-
-蓝白打工 · 摸鱼雷达与鱼塘图鉴
-
-[![DeepSeek 鲸鱼女仆娘 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/deepseek_maid.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/deepseek_maid.jpg)
+- `atri` — **ATRI** · 深海水族箱 · 群青气泡
+- `bluearchive` — **BlueArchive** · 教室黑板 · 粉笔便利贴
+- `hatsunemiku` — **初音未来** · 青绿电子 · 波形荧光
+- `hack` — **黑客帝国** · 终端绿字 · 黑底扫描
+- `retro_futurism` — **复古未来** · 米黄镀铬 · 太空梦
+- `scrapbook` — **剪贴簿** · 手账拼贴 · 胶带纸片
+- `spring_festival` — **新春** · 红金年味 · 灯笼窗花
+- `simple` — **简约** · 极简白底 · 大留白
+- `format` — **格式报告** · 商务排版 · 表格结构
+- `art_nouveau` — **新艺术运动** · 羊皮纸藤蔓 · 穆夏烫金
+- `maria` — **圣母在上** · 学园茶会 · 三蔷薇徽
+- `deepseek_maid` — **鲸鱼女仆娘** · 蓝白打工 · 摸鱼雷达
 
 > 图片使用 jsDelivr 镜像的**绝对外链**，因此 MaiBot WebUI 的插件详情页与 GitHub 页面上都能正常显示。
 > （WebUI 以自身站点为基准解析相对路径，写成 `assets/previews/…` 会 404；
-> 它也不渲染 README 里的原始 HTML —— 其 markdown 渲染器未启用 raw HTML 与 GFM 表格，故此处只用标准 markdown 语法。）
+> 它也不渲染 README 里的原始 HTML，故此处只用标准 markdown 表格 + 图片语法。）
 > `art_nouveau` / `maria` / `deepseek_maid` 三套模板与素材移植自上游 AstrBot 插件，各自的许可条款见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)（其中 `deepseek_maid` 的角色形象为 CC BY-NC-SA 4.0）。
 ---
 
@@ -246,13 +206,16 @@
 <details open>
 <summary><b>4. 群相册上传失败？</b></summary>
 
-- 确认「NapCat HTTP API 地址」与「访问令牌」填写正确（令牌在 NapCat 的 OneBot 配置里，
-  路径通常是 `napcat/config/onebot11_<QQ号>.json` → `network.httpServers[].token`）；
-- 日志里出现 `HTTP Error 403: Forbidden` = NapCat 开了鉴权但令牌没填/填错，插件会直接提示你去填；
+- 确认「协议端 HTTP API 地址」与「协议端访问令牌」填写正确，两个适配器都能用：
+  - **NapCat**：令牌在 `napcat/config/onebot11_<QQ号>.json` → `network.httpServers[].token`；
+  - **SnowLuma**：令牌在 `modules/SnowLuma/config/onebot_<QQ号>.json` → `networks.httpServers[].accessToken`
+    （HTTP 服务默认监听 `3002`，需确认该端口已开启）；
+- 日志里出现 `HTTP Error 403: Forbidden` = 协议端开了鉴权但令牌没填/填错，插件会直接提示你去填；
+- 日志里出现 `connection refused` = 协议端 HTTP 服务没开，或端口填错（不要填 WebSocket 端口）；
 - 相册名要**完全一致**；严格模式开启时，指定相册不存在会直接跳过（不会误传到默认相册）；
 - 想让它找不到时自动用第一个相册，把「严格模式」关掉即可。
-- ⚠️ **「NapCat HTTP API 地址」与「云端 t2i 服务地址」指向哪里，数据就会发往哪里**：请只填写你
-  自己信任的地址（默认值指向本机 NapCat / 社区公共 t2i 实例，前者安全；后者属于第三方数据出口，
+- ⚠️ **「协议端 HTTP API 地址」与「云端 t2i 服务地址」指向哪里，数据就会发往哪里**：请只填写你
+  自己信任的地址（默认值指向本机 NapCat / SnowLuma / 社区公共 t2i 实例，前者安全；后者属于第三方数据出口，
   开启即意味着把群聊数据交给该服务，见「六、工作原理」）。
 </details>
 

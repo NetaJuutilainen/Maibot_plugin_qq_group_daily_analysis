@@ -407,7 +407,7 @@ class AlbumSectionConfig(PluginConfigBase):
     __ui_icon__ = "photo_library"
     __ui_order__ = 5
 
-    album_upload_enabled: bool = Field(default=False, description="日报生成后自动上传到 QQ 群相册（仅 NapCat）")
+    album_upload_enabled: bool = Field(default=False, description="日报生成后自动上传到 QQ 群相册（NapCat / SnowLuma 两个适配器均支持）")
     album_name: str = Field(default="", description="目标群相册名称；留空表示使用第一个/默认相册")
     album_name_by_group: str = Field(
         default="",
@@ -415,8 +415,8 @@ class AlbumSectionConfig(PluginConfigBase):
         json_schema_extra={"rows": 4, "placeholder": "123456789=相册名"},
     )
     album_strict_mode: bool = Field(default=True, description="严格模式：指定了相册名但找不到时不上传（防止误传到默认相册）")
-    napcat_api_url: str = Field(default="http://127.0.0.1:3002", description="NapCat OneBot HTTP API 地址")
-    napcat_api_token: str = Field(default="", description="NapCat HTTP API 访问令牌（留空表示无需鉴权）", json_schema_extra={"x-widget": "password"})
+    napcat_api_url: str = Field(default="http://127.0.0.1:3002", description="协议端 OneBot HTTP API 地址（NapCat / SnowLuma 通用）")
+    napcat_api_token: str = Field(default="", description="协议端 HTTP API 访问令牌（留空表示无需鉴权；NapCat 填 token，SnowLuma 填 accessToken）", json_schema_extra={"x-widget": "password"})
 
 
 class AnalysisConfig(PluginConfigBase):
@@ -896,7 +896,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "max_sample_messages": {"label": "日报采样条数上限", "ui_type": "number", "min": 10, "max": 1000},
             "min_messages_threshold": {"label": "生成日报最低消息数", "ui_type": "number", "min": 1},
             "show_report_caption": {"label": "日报图片前附带提示文字", "ui_type": "switch"},
-            "output_format": {"label": "日报输出形态", "ui_type": "select", "choices": ["image", "html"], "hint": "image=渲染成图片（默认）；html=直接上传 HTML 文件到群文件，零渲染开销（需 NapCat 地址/令牌）"},
+            "output_format": {"label": "日报输出形态", "ui_type": "select", "choices": ["image", "html"], "hint": "image=渲染成图片（默认）；html=直接上传 HTML 文件到群文件，零渲染开销（需协议端 HTTP API 地址/令牌，NapCat 与 SnowLuma 通用）"},
             "report_caption": {"label": "提示文字内容", "ui_type": "text"},
             "stagger_seconds": {"label": "多群日报交错间隔（秒）", "ui_type": "number", "min": 0, "max": 300},
             "llm_model_task": {"label": "分析用模型任务名", "ui_type": "select", "choices": ["auto", "utils", "replyer", "planner", "memory", "mid_memory", "learner", "vlm", "expression_use", "emoji", "voice", "embedding"], "hint": "auto=自动选择默认任务"},
@@ -939,12 +939,12 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "icon": "photo_library",
             "order": 4,
             "fields": {
-            "album_upload_enabled": {"label": "日报生成后上传群相册", "ui_type": "switch", "hint": "仅 NapCat 支持；上传失败不影响正常发图"},
+            "album_upload_enabled": {"label": "日报生成后上传群相册", "ui_type": "switch", "hint": "NapCat 与 SnowLuma 两个适配器均支持；上传失败不影响正常发图"},
             "album_name": {"label": "默认相册名称", "ui_type": "text", "hint": "留空=默认（第一个）相册；未在下方单独指定的群使用它"},
             "album_name_by_group": {"label": "按群指定相册", "ui_type": "textarea", "rows": 4, "hint": "每行「群号=相册名」，优先于默认相册名"},
             "album_strict_mode": {"label": "严格模式", "ui_type": "switch", "hint": "指定相册名但找不到时不上传，避免误传到默认相册"},
-            "napcat_api_url": {"label": "NapCat HTTP API 地址", "ui_type": "text", "hint": "例如 http://127.0.0.1:3002"},
-            "napcat_api_token": {"label": "NapCat 访问令牌", "ui_type": "password", "hint": "留空表示该 HTTP 服务无需鉴权"},
+            "napcat_api_url": {"label": "协议端 HTTP API 地址", "ui_type": "text", "hint": "NapCat / SnowLuma 通用，例如 http://127.0.0.1:3002（SnowLuma 默认 3002）"},
+            "napcat_api_token": {"label": "协议端访问令牌", "ui_type": "password", "hint": "留空表示该 HTTP 服务无需鉴权；NapCat 填 network.httpServers[].token，SnowLuma 填 networks.httpServers[].accessToken"},
             },
         },
     }
@@ -2418,7 +2418,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         if not group_id:
             return False
         if not str(getattr(self._album_cfg(), "napcat_api_url", "") or "").strip():
-            self.ctx.logger.warning("[weekly] HTML 直发需要配置 NapCat HTTP API 地址")
+            self.ctx.logger.warning("[weekly] HTML 直发需要配置协议端 HTTP API 地址（NapCat / SnowLuma）")
             return False
         name = f"{(context.get('chat_name') or '群聊')}-日报-{day}.html"
         payload = {

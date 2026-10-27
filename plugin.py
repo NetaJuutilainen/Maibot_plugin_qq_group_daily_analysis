@@ -529,9 +529,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     _DEFAULT_AVATAR_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "default_avatar.png"
     # 主题自带素材根目录（maria / deepseek_maid / HatsuneMiku 的 png 装饰图）
     _THEME_ASSETS_ROOT: ClassVar[Path] = Path(__file__).resolve().parent / "assets"
-    # 形如 assets/maria/rose_red.png 或 assets/deepseek_maid/layers/front.png 的包内引用，渲染后统一换成 data URI
+    # 形如 assets/maria/rose_red.png 或 assets/deepseek_maid/layers/front.png 的**包内相对引用**，
+    # 渲染后统一换成 data URI。前面用负向后视排除 `//`、`/`、`.` 等 URL 内部片段，
+    # 避免误伤 `https://cdn.example.com/assets/foo/bar.png` 这类外部地址。
     _THEME_ASSET_RE: ClassVar[Any] = re.compile(
-        r"assets/([A-Za-z0-9_]+)/([A-Za-z0-9_.\-/]+\.(?:png|jpe?g|webp|gif|svg))"
+        r"(?<![A-Za-z0-9_.:/-])assets/([A-Za-z0-9_]+)/([A-Za-z0-9_.\-/]+\.(?:png|jpe?g|webp|gif|svg))"
     )
     # 1×1 透明 PNG：素材缺失时兜底，避免空 src 引发额外请求或破图占位
     _BLANK_PIXEL_URI: ClassVar[str] = (

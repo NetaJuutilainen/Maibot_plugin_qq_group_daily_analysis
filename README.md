@@ -107,37 +107,84 @@
 ### 主题预览
 
 下面是这 12 套主题的**真实渲染结果**（由本插件渲染管线实际出图，非设计稿）。
+缩略图截取的是每张日报的顶部区域（宽 380px），点击可看 1000px 完整长图。
 
-<table>
-<tr>
-<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/atri.jpg" width="240" alt="ATRI 主题预览"><br><sub><b>ATRI</b> · <code>atri</code></sub></td>
-<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/bluearchive.jpg" width="240" alt="BlueArchive 主题预览"><br><sub><b>BlueArchive</b> · <code>bluearchive</code></sub></td>
-<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hatsunemiku.jpg" width="240" alt="初音未来主题预览"><br><sub><b>初音未来</b> · <code>hatsunemiku</code></sub></td>
-</tr>
-<tr>
-<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hack.jpg" width="240" alt="黑客帝国主题预览"><br><sub><b>黑客帝国</b> · <code>hack</code></sub></td>
-<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/retro_futurism.jpg" width="240" alt="复古未来主题预览"><br><sub><b>复古未来</b> · <code>retro_futurism</code></sub></td>
-<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/scrapbook.jpg" width="240" alt="剪贴簿主题预览"><br><sub><b>剪贴簿</b> · <code>scrapbook</code></sub></td>
-</tr>
-<tr>
-<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/spring_festival.jpg" width="240" alt="新春主题预览"><br><sub><b>新春</b> · <code>spring_festival</code></sub></td>
-<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/simple.jpg" width="240" alt="简约主题预览"><br><sub><b>简约</b> · <code>simple</code></sub></td>
-<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/format.jpg" width="240" alt="格式报告主题预览"><br><sub><b>格式报告</b> · <code>format</code></sub></td>
-</tr>
-<tr>
-<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/art_nouveau.jpg" width="240" alt="新艺术运动主题预览"><br><sub><b>新艺术运动</b> · <code>art_nouveau</code></sub></td>
-<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/maria.jpg" width="240" alt="圣母在上主题预览"><br><sub><b>圣母在上</b> · <code>maria</code></sub></td>
-<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/deepseek_maid.jpg" width="240" alt="DeepSeek 鲸鱼女仆娘主题预览"><br><sub><b>DeepSeek 鲸鱼女仆娘</b> · <code>deepseek_maid</code></sub></td>
-</tr>
-</table>
+#### ATRI · `atri`
 
-> 预览图同时存放于本插件包内的 `assets/previews/`（1000px / JPEG），全部由本项目渲染管线从自身模板实时出图，非设计稿。
-> 上面表格用的是 jsDelivr 镜像的 **绝对外链**（`cdn.jsdmirror.com/gh/…@main/…`），
-> 因此在 MaiBot WebUI 的插件详情页、以及 GitHub 页面上都能正常显示
-> （WebUI 以自身站点为基准解析相对路径，写成 `assets/previews/…` 会 404）。
-> `art_nouveau` / `maria` / `deepseek_maid` 三套模板与素材移植自上游 AstrBot 插件，各自的许可条款见
-> [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)（其中 `deepseek_maid` 的角色形象为 CC BY-NC-SA 4.0）。
+深海水族箱 · 群青与荧光气泡
 
+[![ATRI 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/atri.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/atri.jpg)
+
+#### BlueArchive · `bluearchive`
+
+教室黑板 · 粉笔字与便利贴
+
+[![BlueArchive 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/bluearchive.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/bluearchive.jpg)
+
+#### 初音未来 · `hatsunemiku`
+
+青绿电子 · 波形与荧光条
+
+[![初音未来 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/hatsunemiku.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hatsunemiku.jpg)
+
+#### 黑客帝国 · `hack`
+
+终端绿字 · 黑底扫描线
+
+[![黑客帝国 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/hack.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hack.jpg)
+
+#### 复古未来 · `retro_futurism`
+
+米黄镀铬 · 60 年代太空梦
+
+[![复古未来 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/retro_futurism.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/retro_futurism.jpg)
+
+#### 剪贴簿 · `scrapbook`
+
+手账拼贴 · 胶带与纸片
+
+[![剪贴簿 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/scrapbook.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/scrapbook.jpg)
+
+#### 新春 · `spring_festival`
+
+红金年味 · 灯笼与窗花
+
+[![新春 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/spring_festival.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/spring_festival.jpg)
+
+#### 简约 · `simple`
+
+极简白底 · 大留白排版
+
+[![简约 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/simple.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/simple.jpg)
+
+#### 格式报告 · `format`
+
+商务排版 · 表格化结构
+
+[![格式报告 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/format.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/format.jpg)
+
+#### 新艺术运动 · `art_nouveau`
+
+羊皮纸藤蔓 · 穆夏圣光与烫金
+
+[![新艺术运动 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/art_nouveau.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/art_nouveau.jpg)
+
+#### 圣母在上 · `maria`
+
+学园茶会 · 三蔷薇徽与藏书印
+
+[![圣母在上 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/maria.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/maria.jpg)
+
+#### DeepSeek 鲸鱼女仆娘 · `deepseek_maid`
+
+蓝白打工 · 摸鱼雷达与鱼塘图鉴
+
+[![DeepSeek 鲸鱼女仆娘 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/covers/deepseek_maid.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/deepseek_maid.jpg)
+
+> 图片使用 jsDelivr 镜像的**绝对外链**，因此 MaiBot WebUI 的插件详情页与 GitHub 页面上都能正常显示。
+> （WebUI 以自身站点为基准解析相对路径，写成 `assets/previews/…` 会 404；
+> 它也不渲染 README 里的原始 HTML —— 其 markdown 渲染器未启用 raw HTML 与 GFM 表格，故此处只用标准 markdown 语法。）
+> `art_nouveau` / `maria` / `deepseek_maid` 三套模板与素材移植自上游 AstrBot 插件，各自的许可条款见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)（其中 `deepseek_maid` 的角色形象为 CC BY-NC-SA 4.0）。
 ---
 
 ## 五、命令
@@ -242,8 +289,8 @@
 
 - [SXP-Simon/astrbot_plugin_qq_group_daily_analysis](https://github.com/SXP-Simon/astrbot_plugin_qq_group_daily_analysis)
   — MIT License, Copyright (c) 2025 Helian Nuits
-  （分析维度、9 套主题模板、人格标签映射、群相册上传思路均来自原版；
-  其中 `art_nouveau` / `maria` / `deepseek_maid` 三套为后续从上游移植，
+  （分析维度、全部 12 套主题模板、人格标签映射、群相册上传思路均来自原版；
+  其中 `art_nouveau` / `maria` / `deepseek_maid` 三套为后续从上游 v5.8.4 移植，
   `deepseek_maid` 的角色形象另有 CC BY-NC-SA 4.0 约束，详见 `THIRD-PARTY-NOTICES.md`）
 - [AstrBotDevs/astrbot-t2i-service](https://github.com/AstrBotDevs/astrbot-t2i-service) — 云端文转图渲染服务
 

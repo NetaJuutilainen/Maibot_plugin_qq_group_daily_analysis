@@ -1,4 +1,4 @@
-"""群聊每日分析 —— 每天自动生成群聊日报（话题/称号/金句/锐评），支持 9 套主题与群相册上传。"""
+"""群聊每日分析 —— 每天自动生成群聊日报（话题/称号/金句/锐评），支持 12 套主题与群相册上传。"""
 
 import asyncio
 import base64
@@ -35,19 +35,51 @@ _LOLI_GSTATIC = "https://gstatic.loli.net"
 _GOOGLE_FONT_VARS = {"t2i_google_fonts_mirror": _LOLI_FONTS, "t2i_gstatic_mirror": _LOLI_GSTATIC, "t2i_font_source": "Mainland"}
 LF = "\n"
 
-# 三期：9 套主题注册表（模板目录 + 各自的字体镜像变量）
+# 主题注册表（模板目录 + 各自的字体/素材镜像变量）
+# 素材镜像变量名与上游一致（t2i_*_assets_mirror），值取包内相对路径，
+# 渲染后由 _inline_theme_assets 统一替换成 data URI，做到零外链、离线可用。
+_THEME_ASSETS_DIR = "assets"
+
+
+def _theme_assets_mirror(theme_dir: str) -> str:
+    return f"{_THEME_ASSETS_DIR}/{theme_dir}"
+
+
 THEME_REGISTRY: dict[str, dict] = {
     "atri": {"dir": "atri", "label": "ATRI", "vars": {"t2i_atri_font_mirror": FONT_MIRROR, "t2i_font_source": "Mainland"}},
     "bluearchive": {"dir": "BlueArchive", "label": "BlueArchive", "vars": dict(_GOOGLE_FONT_VARS)},
-    "hatsunemiku": {"dir": "HatsuneMiku", "label": "初音未来", "vars": dict(_GOOGLE_FONT_VARS)},
+    "hatsunemiku": {
+        "dir": "HatsuneMiku",
+        "label": "初音未来",
+        "vars": {**_GOOGLE_FONT_VARS, "t2i_miku_assets_mirror": _theme_assets_mirror("HatsuneMiku")},
+    },
     "hack": {"dir": "hack", "label": "黑客帝国", "vars": dict(_GOOGLE_FONT_VARS)},
     "retro_futurism": {"dir": "retro_futurism", "label": "复古未来", "vars": dict(_GOOGLE_FONT_VARS)},
     "scrapbook": {"dir": "scrapbook", "label": "剪贴簿", "vars": dict(_GOOGLE_FONT_VARS)},
     "spring_festival": {"dir": "spring_festival", "label": "新春", "vars": dict(_GOOGLE_FONT_VARS)},
     "simple": {"dir": "simple", "label": "简约", "vars": dict(_GOOGLE_FONT_VARS)},
     "format": {"dir": "format", "label": "格式报告", "vars": dict(_GOOGLE_FONT_VARS)},
+    "art_nouveau": {
+        "dir": "art_nouveau",
+        "label": "新艺术运动",
+        "vars": dict(_GOOGLE_FONT_VARS),
+    },
+    "maria": {
+        "dir": "maria",
+        "label": "圣母在上",
+        "vars": {**_GOOGLE_FONT_VARS, "t2i_maria_assets_mirror": _theme_assets_mirror("maria")},
+    },
+    "deepseek_maid": {
+        "dir": "deepseek_maid",
+        "label": "DeepSeek 鲸鱼女仆娘",
+        "vars": {**_GOOGLE_FONT_VARS, "t2i_deepseek_maid_assets_mirror": _theme_assets_mirror("deepseek_maid")},
+    },
 }
-THEME_KEYS = Literal["atri", "bluearchive", "hatsunemiku", "hack", "retro_futurism", "scrapbook", "spring_festival", "simple", "format"]
+THEME_KEYS = Literal[
+    "atri", "bluearchive", "hatsunemiku", "hack", "retro_futurism",
+    "scrapbook", "spring_festival", "simple", "format",
+    "art_nouveau", "maria", "deepseek_maid",
+]
 
 # 原版的人格标签映射（mbti / sbti / acgti 三套，code + 中文名 + 资源 code）
 DEFAULT_PROFILE_MAPPING: dict[str, dict] = {
@@ -337,7 +369,7 @@ class ReportSectionConfig(PluginConfigBase):
         description="/日报 命令管理员，每行一个QQ号；留空则所有人可用",
         json_schema_extra={"rows": 4, "placeholder": "每行一个QQ号"},
     )
-    daily_theme: THEME_KEYS = Field(default="atri", description="日报主题（9 套可选）")
+    daily_theme: THEME_KEYS = Field(default="atri", description="日报主题（12 套可选）")
     theme_by_group: str = Field(
         default="",
         description="按群指定日报主题，每行「群号=主题」；优先于上面的默认主题",
@@ -495,6 +527,18 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     _PROFILE_IMAGE_FAILURE_TTL: ClassVar[int] = 1800
     _EMOJI_FONTS_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "emoji_fonts.json"
     _DEFAULT_AVATAR_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "default_avatar.png"
+    # 主题自带素材根目录（maria / deepseek_maid / HatsuneMiku 的 png 装饰图）
+    _THEME_ASSETS_ROOT: ClassVar[Path] = Path(__file__).resolve().parent / "assets"
+    # 形如 assets/maria/rose_red.png 或 assets/deepseek_maid/layers/front.png 的包内引用，渲染后统一换成 data URI
+    _THEME_ASSET_RE: ClassVar[Any] = re.compile(
+        r"assets/([A-Za-z0-9_]+)/([A-Za-z0-9_.\-/]+\.(?:png|jpe?g|webp|gif|svg))"
+    )
+    # 1×1 透明 PNG：素材缺失时兜底，避免空 src 引发额外请求或破图占位
+    _BLANK_PIXEL_URI: ClassVar[str] = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    _theme_asset_cache: dict[str, str] = {}
     _AVATAR_FAILURE_TTL: ClassVar[int] = 300
     _static_map: dict[str, str] = {}
     _font_sub_uri: str = ""
@@ -830,7 +874,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "daily_report_hour": {"label": "日报发送小时", "ui_type": "number", "min": 0, "max": 23},
             "daily_report_minute": {"label": "日报发送分钟", "ui_type": "number", "min": 0, "max": 59},
             "daily_report_groups": {"label": "定时日报群列表", "ui_type": "textarea", "rows": 4, "hint": "每行一个群号；留空=白名单内全部活跃群"},
-            "daily_theme": {"label": "默认日报主题", "ui_type": "select", "choices": ["atri", "bluearchive", "hatsunemiku", "hack", "retro_futurism", "scrapbook", "spring_festival", "simple", "format"]},
+            "daily_theme": {"label": "默认日报主题", "ui_type": "select", "choices": ["atri", "bluearchive", "hatsunemiku", "hack", "retro_futurism", "scrapbook", "spring_festival", "simple", "format", "art_nouveau", "maria", "deepseek_maid"]},
             "theme_by_group": {"label": "按群指定主题", "ui_type": "textarea", "rows": 4, "hint": "每行「群号=主题」，优先于默认主题；主题名见上方下拉"},
             "manual_marks_daily_sent": {"label": "手动日报计入当天已发", "ui_type": "switch", "hint": "关闭后：手动 /日报 不影响定时日报，当天可能收到两份"},
             },
@@ -1531,6 +1575,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         "hack": "screen", "retro_futurism": "screen",
         "scrapbook": "multiply", "spring_festival": "multiply",
         "simple": "multiply", "format": "multiply",
+        # 新三套都是亮色羊皮纸/白底，multiply 压暗才可见
+        "art_nouveau": "multiply", "maria": "multiply", "deepseek_maid": "multiply",
     }
 
     def _inject_emoji_font(self, html: str, theme: str = "atri") -> str:
@@ -1755,7 +1801,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 "detail": self._render_mentions(t.get("detail") or "", context),
             })
         topics_html = (
-            j.get_template("topic_item.html").render(topics=topics, **info["vars"])
+            j.get_template("topic_item.html").render(topics=topics, hide_user_names=False, **info["vars"])
             if topics
             else '<li class="item"><div class="item-main"><div class="item-content">今天没有捕获到高光碎片～</div></div></li>'
         )
@@ -1793,7 +1839,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 "avatar_url": avatar_url,
             })
         titles_html = (
-            j.get_template("user_title_item.html").render(titles=titles, **info["vars"])
+            j.get_template("user_title_item.html").render(titles=titles, hide_user_names=False, **info["vars"])
             if titles
             else '<li class="item"><div class="item-main"><div class="item-content">今天还没有群友获得称号～</div></div></li>'
         )
@@ -1828,7 +1874,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 "avatar_data": avatar_url,
             })
         quotes_html = (
-            j.get_template("quote_item.html").render(quotes=quotes, **info["vars"])
+            j.get_template("quote_item.html").render(quotes=quotes, hide_user_names=False, **info["vars"])
             if quotes
             else '<div class="quote-wrapper"><div class="q-bubble-wrap"><div class="q-bubble"><div class="q-content">今天太淡定，没有名言诞生～</div></div></div></div>'
         )
@@ -1858,9 +1904,12 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 subtitle=llm_subtitle,
                 summary=str(quality.get("summary", "")),
                 dimensions=dimensions,
+                **info["vars"],
             )
 
-        hourly_chart_html = j.get_template("activity_chart.html").render(chart_data=context["chart_data"])
+        hourly_chart_html = j.get_template("activity_chart.html").render(
+            chart_data=context["chart_data"], **info["vars"]
+        )
         prompt_tokens = sum(len(u["t"]) for u in context["sample"]) // 2 + 200
 
         html_text = j.get_template("html_template.html").render(
@@ -1880,8 +1929,45 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             titles_html=titles_html,
             quotes_html=quotes_html,
             chat_quality_html=chat_quality_html,
+            group_name=context.get("chat_name", ""),
         )
         return self._inject_emoji_font(html_text, theme)
+
+    def _inline_theme_assets(self, html: str) -> str:
+        """把模板里 `assets/<主题>/xxx.png` 形式的包内素材引用替换成 data URI。
+
+        主题注册表的 mirror 变量取相对包路径（如 `assets/maria`），模板据此拼出图片地址；
+        渲染完成后在这里统一内联，最终 HTML 零外链，离线和云端渲染都不依赖外部图床。
+        素材缺失时替换成 1×1 透明像素，避免破图占位。
+        """
+        if "assets/" not in html:
+            return html
+
+        def _origin(m: re.Match) -> str:
+            folder, rel = m.group(1), m.group(2)
+            key = f"{folder}/{rel}"
+            cached = self._theme_asset_cache.get(key)
+            if cached is not None:
+                return cached
+            uri = self._BLANK_PIXEL_URI
+            path = self._THEME_ASSETS_ROOT / folder / rel
+            try:
+                if path.is_file():
+                    suffix = path.suffix.lower().lstrip(".")
+                    mime = {
+                        "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                        "webp": "image/webp", "gif": "image/gif", "svg": "image/svg+xml",
+                    }.get(suffix, "application/octet-stream")
+                    uri = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode()
+            except Exception as exc:  # 单个素材失败不影响整份日报
+                try:
+                    self.ctx.logger.warning("[weekly] 主题素材内联失败 %s: %s", key, exc)
+                except Exception:
+                    pass
+            self._theme_asset_cache[key] = uri
+            return uri
+
+        return self._THEME_ASSET_RE.sub(_origin, html)
 
     def _inline_static_assets(self, html: str) -> str:
         """把镜像上的 GIF/webp 装饰图与 Regular 字体替换为内联 data URI，实现零外链页面。
@@ -1893,6 +1979,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             for url, uri in self._static_map.items():
                 if url in html:
                     html = html.replace(url, uri)
+        html = self._inline_theme_assets(html)
         if self._font_sub_uri:
             html = html.replace(self._FONT_REGULAR_URL, self._font_sub_uri)
         html = re.sub(r"@font-face\s*\{[^}]*Medium[^}]*\}", "", html)

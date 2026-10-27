@@ -25,7 +25,7 @@ SOFTWARE.
 
 ## 第三方资源与许可
 
-本项目的分析维度、9 套主题模板、人格标签映射与群相册上传功能思路均来自以下 MIT 项目，
+本项目的分析维度、12 套主题模板、人格标签映射与群相册上传功能思路均来自以下 MIT 项目，
 其版权声明已按 MIT 许可要求保留于上方：
 
 - [SXP-Simon/astrbot_plugin_qq_group_daily_analysis](https://github.com/SXP-Simon/astrbot_plugin_qq_group_daily_analysis)
@@ -38,3 +38,15 @@ SOFTWARE.
 - `fonts/LXGW-Regular-sub.woff2`：霞鹜文楷 LXGW WenKai（SIL Open Font License 1.1）的常用字子集
 - `emoji_fonts.json`：内嵌 Noto Color Emoji（SIL Open Font License 1.1）分段 woff2
 - `profile_assets.json`：人格水印图资源索引（指向 SXP-Simon/profile_assets 公开图床）
+
+### ⚠️ 不在 MIT 覆盖范围内的内容
+
+下列内容**不适用**本项目的 MIT 许可，各自条款见 `THIRD-PARTY-NOTICES.md`：
+
+- `templates/deepseek_maid/` 与 `assets/deepseek_maid/` 中的**角色美术**
+  — **CC BY-NC-SA 4.0**（署名—非商业性使用—相同方式共享），
+  权利人链：上善无形（原设）、ZipZipPipe（女仆版设计）、StuGRua（模板设计与改绘）
+- `assets/maria/`、`assets/HatsuneMiku/` 及 `atri` / `bluearchive` 主题中的
+  **第三方角色形象** — 角色 IP 归原作者/出版方，本项目与上游均为非商业同人使用
+
+再分发（含生成本插件产出的日报图片）时请一并保留 `THIRD-PARTY-NOTICES.md`。

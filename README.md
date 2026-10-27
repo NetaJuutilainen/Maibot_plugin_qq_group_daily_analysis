@@ -1,7 +1,7 @@
 # 群聊每日分析
 
 > 每天自动给群聊生成一份图文日报：**高光话题**、**神人称号**、**金句宝藏瓶**、**聊天质量锐评**。
-> 9 套主题皮肤、本地零外发渲染（可选云端加速）、可自动上传 QQ 群相册。
+> 12 套主题皮肤、本地零外发渲染（可选云端加速）、可自动上传 QQ 群相册。
 
 本插件是 AstrBot 插件 [astrbot_plugin_qq_group_daily_analysis](https://github.com/SXP-Simon/astrbot_plugin_qq_group_daily_analysis) 的 MaiBot 移植重构版。
 
@@ -44,7 +44,7 @@
 | 命令管理员 | 每行一个 QQ 号；留空 = 所有人可用 `/日报` |
 | 每日日报开关 / 发送小时 / 分钟 | 定时生成时间 |
 | 定时日报群列表 | 每行一个群号；留空 = 白名单内全部活跃群 |
-| 默认日报主题 | 9 套皮肤，详见「四、主题一览」 |
+| 默认日报主题 | 12 套皮肤，详见「四、主题一览」 |
 | 按群指定主题 | 每行 `群号=主题`，优先于默认主题 |
 | 手动日报计入当天已发 | 开启后手动 `/日报` 当天定时不再重复发 |
 
@@ -76,7 +76,7 @@
 
 ---
 
-## 四、主题一览（9 套）
+## 四、主题一览（12 套）
 
 所有主题都包含**同样的四块内容**（话题 / 称号 / 金句 / 锐评）+ 24 小时活跃度图 + Token 消耗页脚，
 差别在于**配色、字体、排版，以及每个板块的标题文案**。
@@ -92,6 +92,9 @@
 | `spring_festival` | 新春 | 宣纸底 + 红金 `#b71c1c` `#ffca28`，书法字体 | 🧧 春节特供日报 🧧 / —— 岁在丙午 —— / 巅峰时刻 / 🏮 鸿运齐天 · 众友云集 🏮 / 核心话题回顾 / 活跃时序图 / 群友风云榜 / 每日金句回响 |
 | `simple` | 简约 | 灰白极简，素材最轻（约 10 KB） | Simple Report / 群聊日报 / 基础统计 / 活跃度图表 / 群圣经 / 热门话题 / 群友称号 |
 | `format` | 格式报告 | 白底蓝字 `#007bff`，正式文档风 | 群聊日常分析报告 / 基础统计 / 24小时活跃度分布 / 群聊质量分析 EXECUTIVE SUMMARY / 群圣经 / 热门话题 / 群友称号 |
+| `art_nouveau` | 新艺术运动 | 羊皮纸底 + 森林绿 `#2d5016` × 复古金 `#c9a227`，穆夏式圣光光环、流动藤蔓与罗马碑铭体 | 群聊风雅漫步 CHRONICLES OF NATURAL HARMONY / 廿四小时走势 · 24-Hour Rhythm / 核心热议话题 · Selected Topics / 群芳雅鉴 / 精选金句回响 · 观察锐评 / 整体洞察华章 · 群聊综合评述 / 四象核心数据 |
+| `maria` | 圣母在上 | 羊皮纸底 + 古金 `#d4a94a` + 墨绿 `#38553f` + 酒红 `#9e3447`，莉莉安女子学园茶会风，三蔷薇徽章与圣母像 | 莉莉安茶会 · 今日群聊公报 BULLETIN DU SALON DES ROSES / 钟楼时刻 · 24小时作息 / 核心议题 · 花语拾遗（红白黄三色蔷薇分卷）/ 学园名册 · 淑女风采 / 今日金句 · 蔷薇私语 / 学园庭园的省察 · 总评纪要 |
+| `deepseek_maid` | DeepSeek 鲸鱼女仆娘 | 白底 + 蓝紫渐变 `#4860a8` `#4878c0`，可换表情（睁眼/闭眼）的女仆娘立绘与铁盆 | 大肥鱼值班室 DAILY LOG / 工作便签 / 鱼塘今日收获 / 摸鱼雷达 / 今日话题（别急，上下文还在）/ 今日鱼塘图鉴 / 今日名言收藏（嗯哼，这样啊）/ 铁盆防御 · 鱼塘锐评 / 今日交班 |
 
 **怎么切换**：
 
@@ -100,6 +103,37 @@
 - 临时指定：群里发 `/日报 scrapbook`（主题名即上表的 key）。
 
 > 深色主题（`hack` / `retro_futurism`）下，称号卡的人格水印会自动切换混合模式以保持可见。
+
+### 主题预览
+
+下面是这 12 套主题的**真实渲染结果**（由本插件渲染管线实际出图，非设计稿）。
+
+<table>
+<tr>
+<td align="center"><img src="assets/previews/atri.jpg" width="240" alt="ATRI 主题预览"><br><sub><b>ATRI</b> · <code>atri</code></sub></td>
+<td align="center"><img src="assets/previews/bluearchive.jpg" width="240" alt="BlueArchive 主题预览"><br><sub><b>BlueArchive</b> · <code>bluearchive</code></sub></td>
+<td align="center"><img src="assets/previews/hatsunemiku.jpg" width="240" alt="初音未来主题预览"><br><sub><b>初音未来</b> · <code>hatsunemiku</code></sub></td>
+</tr>
+<tr>
+<td align="center"><img src="assets/previews/hack.jpg" width="240" alt="黑客帝国主题预览"><br><sub><b>黑客帝国</b> · <code>hack</code></sub></td>
+<td align="center"><img src="assets/previews/retro_futurism.jpg" width="240" alt="复古未来主题预览"><br><sub><b>复古未来</b> · <code>retro_futurism</code></sub></td>
+<td align="center"><img src="assets/previews/scrapbook.jpg" width="240" alt="剪贴簿主题预览"><br><sub><b>剪贴簿</b> · <code>scrapbook</code></sub></td>
+</tr>
+<tr>
+<td align="center"><img src="assets/previews/spring_festival.jpg" width="240" alt="新春主题预览"><br><sub><b>新春</b> · <code>spring_festival</code></sub></td>
+<td align="center"><img src="assets/previews/simple.jpg" width="240" alt="简约主题预览"><br><sub><b>简约</b> · <code>simple</code></sub></td>
+<td align="center"><img src="assets/previews/format.jpg" width="240" alt="格式报告主题预览"><br><sub><b>格式报告</b> · <code>format</code></sub></td>
+</tr>
+<tr>
+<td align="center"><img src="assets/previews/art_nouveau.jpg" width="240" alt="新艺术运动主题预览"><br><sub><b>新艺术运动</b> · <code>art_nouveau</code></sub></td>
+<td align="center"><img src="assets/previews/maria.jpg" width="240" alt="圣母在上主题预览"><br><sub><b>圣母在上</b> · <code>maria</code></sub></td>
+<td align="center"><img src="assets/previews/deepseek_maid.jpg" width="240" alt="DeepSeek 鲸鱼女仆娘主题预览"><br><sub><b>DeepSeek 鲸鱼女仆娘</b> · <code>deepseek_maid</code></sub></td>
+</tr>
+</table>
+
+> 预览图位于 `assets/previews/`，全部由本项目从自身模板实时渲染生成。
+> `art_nouveau` / `maria` / `deepseek_maid` 三套模板与素材移植自上游 AstrBot 插件，各自的许可条款见
+> [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)（其中 `deepseek_maid` 的角色形象为 CC BY-NC-SA 4.0）。
 
 ---
 
@@ -176,7 +210,7 @@
 <summary><b>5. 想换皮肤 / 每个群不同风格？</b></summary>
 
 改「默认日报主题」即可全局换肤；想让不同群用不同主题，用「按群指定主题」（每行 `群号=主题`），或临时用 `/日报 主题名`。
-9 套主题的风格与文案差异见「四、主题一览」。
+12 套主题的风格与文案差异见「四、主题一览」。
 深色主题（hack / retro_futurism）下，人格水印会自动切换混合模式以保持可见。
 </details>
 
@@ -205,9 +239,17 @@
 
 - [SXP-Simon/astrbot_plugin_qq_group_daily_analysis](https://github.com/SXP-Simon/astrbot_plugin_qq_group_daily_analysis)
   — MIT License, Copyright (c) 2025 Helian Nuits
-  （分析维度、9 套主题模板、人格标签映射、群相册上传思路均来自原版）
+  （分析维度、9 套主题模板、人格标签映射、群相册上传思路均来自原版；
+  其中 `art_nouveau` / `maria` / `deepseek_maid` 三套为后续从上游移植，
+  `deepseek_maid` 的角色形象另有 CC BY-NC-SA 4.0 约束，详见 `THIRD-PARTY-NOTICES.md`）
 - [AstrBotDevs/astrbot-t2i-service](https://github.com/AstrBotDevs/astrbot-t2i-service) — 云端文转图渲染服务
 
 字体素材：霞鹜文楷（LXGW WenKai）、Noto Color Emoji，均为 SIL OFL 1.1 许可。
 
 本移植版：MIT License, Copyright (c) 2026 NetaJuutilainenP
+
+> ⚠️ **完整且逐项的第三方许可清单见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)**。
+> 简要说：上游代码与全部 12 套模板为 **MIT**；`deepseek_maid` 的**角色美术为 CC BY-NC-SA 4.0**
+> （非商业 + 相同方式共享，署名链：上善无形 / ZipZipPipe / StuGRua）；
+> `atri` / `bluearchive` / `hatsunemiku` / `maria` 主题中的角色形象，其 IP 归原作者，
+> 本项目与上游一样属非商业同人使用。

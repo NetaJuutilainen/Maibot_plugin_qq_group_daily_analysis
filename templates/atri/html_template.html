@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="{{ 'zh-CN' if t2i_font_source == 'Mainland' else 'zh-Hant' }}">
 
 <head>
@@ -2809,7 +2809,7 @@
                             src="{{ t2i_atri_font_mirror }}/file/1775132804506_1774881263342_观察.gif" alt="badge icon">
                     </div>
                 </div>
-                <div class="html-slot">{{ topics_html | safe }}</div>
+                {% if topics_html %}<div class="html-slot">{{ topics_html | safe }}</div>{% endif %}
             </section>
 
             <section class="glass-card section title-section">
@@ -2829,7 +2829,7 @@
                             src="{{ t2i_atri_font_mirror }}/file/1775132808652_1774881267385_得意-1.gif" alt="badge icon">
                     </div>
                 </div>
-                <div class="html-slot title-grid">{{ titles_html | safe }}</div>
+                {% if titles_html %}<div class="html-slot title-grid">{{ titles_html | safe }}</div>{% endif %}
             </section>
 
             <section class="glass-card section quote-section">
@@ -2849,7 +2849,7 @@
                             src="{{ t2i_atri_font_mirror }}/file/1775132805485_1774881263748_可爱-3.gif" alt="badge icon">
                     </div>
                 </div>
-                <div class="html-slot">{{ quotes_html | safe }}</div>
+                {% if quotes_html %}<div class="html-slot">{{ quotes_html | safe }}</div>{% endif %}
             </section>
 
             {% if chat_quality_html %}

@@ -110,32 +110,33 @@
 
 <table>
 <tr>
-<td align="center"><img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/assets/previews/atri.jpg" width="240" alt="ATRI 主题预览"><br><sub><b>ATRI</b> · <code>atri</code></sub></td>
-<td align="center"><img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/assets/previews/bluearchive.jpg" width="240" alt="BlueArchive 主题预览"><br><sub><b>BlueArchive</b> · <code>bluearchive</code></sub></td>
-<td align="center"><img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/assets/previews/hatsunemiku.jpg" width="240" alt="初音未来主题预览"><br><sub><b>初音未来</b> · <code>hatsunemiku</code></sub></td>
+<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/atri.jpg" width="240" alt="ATRI 主题预览"><br><sub><b>ATRI</b> · <code>atri</code></sub></td>
+<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/bluearchive.jpg" width="240" alt="BlueArchive 主题预览"><br><sub><b>BlueArchive</b> · <code>bluearchive</code></sub></td>
+<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hatsunemiku.jpg" width="240" alt="初音未来主题预览"><br><sub><b>初音未来</b> · <code>hatsunemiku</code></sub></td>
 </tr>
 <tr>
-<td align="center"><img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/assets/previews/hack.jpg" width="240" alt="黑客帝国主题预览"><br><sub><b>黑客帝国</b> · <code>hack</code></sub></td>
-<td align="center"><img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/assets/previews/retro_futurism.jpg" width="240" alt="复古未来主题预览"><br><sub><b>复古未来</b> · <code>retro_futurism</code></sub></td>
-<td align="center"><img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/assets/previews/scrapbook.jpg" width="240" alt="剪贴簿主题预览"><br><sub><b>剪贴簿</b> · <code>scrapbook</code></sub></td>
+<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hack.jpg" width="240" alt="黑客帝国主题预览"><br><sub><b>黑客帝国</b> · <code>hack</code></sub></td>
+<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/retro_futurism.jpg" width="240" alt="复古未来主题预览"><br><sub><b>复古未来</b> · <code>retro_futurism</code></sub></td>
+<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/scrapbook.jpg" width="240" alt="剪贴簿主题预览"><br><sub><b>剪贴簿</b> · <code>scrapbook</code></sub></td>
 </tr>
 <tr>
-<td align="center"><img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/assets/previews/spring_festival.jpg" width="240" alt="新春主题预览"><br><sub><b>新春</b> · <code>spring_festival</code></sub></td>
-<td align="center"><img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/assets/previews/simple.jpg" width="240" alt="简约主题预览"><br><sub><b>简约</b> · <code>simple</code></sub></td>
-<td align="center"><img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/assets/previews/format.jpg" width="240" alt="格式报告主题预览"><br><sub><b>格式报告</b> · <code>format</code></sub></td>
+<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/spring_festival.jpg" width="240" alt="新春主题预览"><br><sub><b>新春</b> · <code>spring_festival</code></sub></td>
+<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/simple.jpg" width="240" alt="简约主题预览"><br><sub><b>简约</b> · <code>simple</code></sub></td>
+<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/format.jpg" width="240" alt="格式报告主题预览"><br><sub><b>格式报告</b> · <code>format</code></sub></td>
 </tr>
 <tr>
-<td align="center"><img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/assets/previews/art_nouveau.jpg" width="240" alt="新艺术运动主题预览"><br><sub><b>新艺术运动</b> · <code>art_nouveau</code></sub></td>
-<td align="center"><img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/assets/previews/maria.jpg" width="240" alt="圣母在上主题预览"><br><sub><b>圣母在上</b> · <code>maria</code></sub></td>
-<td align="center"><img src="https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/assets/previews/deepseek_maid.jpg" width="240" alt="DeepSeek 鲸鱼女仆娘主题预览"><br><sub><b>DeepSeek 鲸鱼女仆娘</b> · <code>deepseek_maid</code></sub></td>
+<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/art_nouveau.jpg" width="240" alt="新艺术运动主题预览"><br><sub><b>新艺术运动</b> · <code>art_nouveau</code></sub></td>
+<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/maria.jpg" width="240" alt="圣母在上主题预览"><br><sub><b>圣母在上</b> · <code>maria</code></sub></td>
+<td align="center"><img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/deepseek_maid.jpg" width="240" alt="DeepSeek 鲸鱼女仆娘主题预览"><br><sub><b>DeepSeek 鲸鱼女仆娘</b> · <code>deepseek_maid</code></sub></td>
 </tr>
 </table>
 
 > 预览图同时存放于本插件包内的 `assets/previews/`（1000px / JPEG），全部由本项目渲染管线从自身模板实时出图，非设计稿。
-> 上面表格用的是 `raw.githubusercontent.com` **绝对外链**，因此在 MaiBot WebUI 的插件详情页里也能正常显示
-> （WebUI 以自身站点为基准解析相对路径，写成相对路径会 404）。
+> 上面表格用的是 jsDelivr 镜像的 **绝对外链**（`cdn.jsdmirror.com/gh/…@main/…`），
+> 因此在 MaiBot WebUI 的插件详情页、以及 GitHub 页面上都能正常显示
+> （WebUI 以自身站点为基准解析相对路径，写成 `assets/previews/…` 会 404）。
 > `art_nouveau` / `maria` / `deepseek_maid` 三套模板与素材移植自上游 AstrBot 插件，各自的许可条款见
-> [`THIRD-PARTY-NOTICES.md`](https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/THIRD-PARTY-NOTICES.md)（其中 `deepseek_maid` 的角色形象为 CC BY-NC-SA 4.0）。
+> [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)（其中 `deepseek_maid` 的角色形象为 CC BY-NC-SA 4.0）。
 
 ---
 
@@ -250,7 +251,7 @@
 
 本移植版：MIT License, Copyright (c) 2026 NetaJuutilainenP
 
-> ⚠️ **完整且逐项的第三方许可清单见 [`THIRD-PARTY-NOTICES.md`](https://raw.githubusercontent.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/main/THIRD-PARTY-NOTICES.md)**。
+> ⚠️ **完整且逐项的第三方许可清单见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)**。
 > 简要说：上游代码与全部 12 套模板为 **MIT**；`deepseek_maid` 的**角色美术为 CC BY-NC-SA 4.0**
 > （非商业 + 相同方式共享，署名链：上善无形 / ZipZipPipe / StuGRua）；
 > `atri` / `bluearchive` / `hatsunemiku` / `maria` 主题中的角色形象，其 IP 归原作者，

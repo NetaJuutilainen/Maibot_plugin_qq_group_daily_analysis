@@ -479,6 +479,16 @@ class AnalysisConfig(PluginConfigBase):
     render_remote_png_first: bool = Field(default=True, description="云端优先请求 PNG（失败再请求 JPEG，对齐原版两轮策略）")
     render_remote_scale_level: str = Field(default="normal", description="云端渲染分辨率档位 (normal=1.0x / high=1.3x / ultra=1.8x)")
     render_timeout_ms: int = Field(default=100000, description="日报渲染超时（毫秒）", ge=30000)
+    render_settle_ms: int = Field(
+        default=3000,
+        description="渲染后静止等待（毫秒）。页面 2 秒后自动暂停全部动画（v1.3.0 起），资产已全内联，一般无需长等；弱机可再调小",
+        ge=0, le=30000,
+    )
+    inline_cjk_font: bool = Field(
+        default=True,
+        description="全主题内嵌中文字体：把包内 LXGW 子集字体以 @font-face 注入非 ATRI 主题（每份 HTML +约1.2MB，云端渲染 POST 也随之变大），"
+                    "外链字体摘除后中文观感与 ATRI 一致；关闭则回落系统字体（能出字不出豆腐块，但观感与 ATRI 不同）",
+    )
 
 
 class PromptsConfig(PluginConfigBase):
@@ -532,6 +542,12 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     _DEFAULT_AVATAR_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "default_avatar.png"
     # 主题自带素材根目录（maria / deepseek_maid / HatsuneMiku 的 png 装饰图）
     _THEME_ASSETS_ROOT: ClassVar[Path] = Path(__file__).resolve().parent / "assets"
+    # BlueArchive 的两个远程素材（issue #2/#3 甲-1 本地化）：立绘走显式映射而非改模板——
+    # 模板从上游移植，升级主题会被整目录覆盖。文件缺失时兜底透明像素，与 _inline_theme_assets 同策略。
+    _REMOTE_ASSET_FILES: ClassVar[dict[str, str]] = {
+        "https://img.dkdun.cn/v1/2026/17/7170c8669dad05dd.png": "assets/BlueArchive/arona.png",
+        "https://img.dkdun.cn/v1/2026/17/314653a2aa301144.png": "assets/BlueArchive/chat_quality_illustration.png",
+    }
     # 形如 assets/maria/rose_red.png 或 assets/deepseek_maid/layers/front.png 的**包内相对引用**，
     # 渲染后统一换成 data URI。前面用负向后视排除 `//`、`/`、`.` 等 URL 内部片段，
     # 避免误伤 `https://cdn.example.com/assets/foo/bar.png` 这类外部地址。
@@ -924,6 +940,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "render_remote_png_first": {"label": "云端优先 PNG", "ui_type": "switch", "hint": "对齐原版：先请求 PNG，失败再 JPEG"},
             "render_remote_scale_level": {"label": "云端渲染分辨率档位", "ui_type": "select", "choices": ["normal", "high", "ultra"], "hint": "normal=1.0x（1080 宽，推荐）/ high=1.3x / ultra=1.8x；档位越高越清晰也越大越慢"},
             "render_timeout_ms": {"label": "日报渲染超时（毫秒）", "ui_type": "number", "min": 30000},
+            "render_settle_ms": {"label": "渲染后静止等待（毫秒）", "ui_type": "number", "min": 0, "max": 30000, "hint": "页面 2 秒后自动暂停全部动画（v1.3.0 起，弱机减负核心），资产已全内联，默认 3000 足够；弱机可再调小"},
+            "inline_cjk_font": {"label": "全主题内嵌中文字体", "ui_type": "switch", "hint": "非 ATRI 主题注入包内 LXGW 子集字体，摘除阻塞外链后中文观感与 ATRI 一致（每份 HTML +约1.2MB，云端渲染 POST 变大）；关闭回落系统字体，仍能出字不出豆腐块"},
             },
         },
         "prompts": {
@@ -1586,7 +1604,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     }
 
     def _inject_emoji_font(self, html: str, theme: str = "atri") -> str:
-        """注入彩色 emoji 字体 + 水印混合模式，避免 🎭/📝/🥭 等被中文字体的单色字形抢先或云端缺 emoji 字体变豆腐块。
+        """注入彩色 emoji 字体、全主题中文字体与水印混合模式，避免 🎭/📝/🥭 等被中文字体的单色字形抢先或云端缺 emoji 字体变豆腐块。
 
         - 本地（Windows）渲染：已装的 Segoe UI Emoji 优先，效果最佳；
         - 云端（Linux）渲染：Segoe 不存在，回落到内嵌的 Noto Color Emoji webfont（COLRv1 分段）。
@@ -1606,6 +1624,19 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             faces_css += (
                 "@font-face { font-family: 'Noto Color Emoji'; "
                 f"src: url({f['uri']}) format('woff2'); unicode-range: {ranges}; }}\n"
+            )
+        # 全主题中文字体（issue #2 随附，D2 拍板）：只有 atri 模板自带 'LXGW WenKai' 的 @font-face，
+        # 其余 11 套的外链字体样式表摘除后正文会一路回落系统字体。这里把包内子集字体补进去，
+        # 12 套主题中文观感一致。族名必须正好是 'LXGW WenKai' 且块内不得含 Medium/Mono 字样——
+        # 本函数注入的 CSS 之后会被 _inline_static_assets 的 Medium/Mono 清理正则再扫一遍。
+        try:
+            inline_cjk = bool(getattr(self._cfg().analysis, "inline_cjk_font", True))
+        except Exception:
+            inline_cjk = True
+        if inline_cjk and theme != "atri" and self._font_sub_uri:
+            faces_css += (
+                "@font-face { font-family: 'LXGW WenKai'; "
+                f"src: url({self._font_sub_uri}) format('woff2'); font-weight: 400; }}\n"
             )
         # 给水印图打标记（模板里水印是唯一带 pointer-events:none 的 img）
         html = re.sub(
@@ -1638,6 +1669,26 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         if "</head>" in html:
             return html.replace("</head>", style + "</head>", 1)
         return html + style
+
+    # 页面自静止（issue #3 核心修复）：主题里的无限动画（atri 30s 轮播、4s 浮动、飘落花瓣等）
+    # 会在渲染等待窗口里逼 SwiftShader 以 60fps 持续合成——弱机（2c2g）上 GPU 进程实测烧 28.7% CPU。
+    # 入场动画最长 ~1.4s，2s 后页面已到最终态，此时暂停全部动画/过渡：
+    # 等待窗口剩余时间 CPU 归零，截图取到的也是稳定的最终帧。须与 render_settle_ms（默认 3000）配合。
+    _RENDER_SETTLE_PAUSE_MS: ClassVar[int] = 2000
+    _RENDER_SETTLE_CSS: ClassVar[str] = (
+        "*,*::before,*::after{animation-play-state:paused!important;transition:none!important}"
+    )
+
+    def _inject_render_settle(self, html: str) -> str:
+        """在页面尾部注入「2 秒后暂停全部 CSS 动画/过渡」的小脚本，让页面自动进入静止态。"""
+        script = (
+            "<script>setTimeout(function(){var s=document.createElement('style');"
+            f"s.textContent='{self._RENDER_SETTLE_CSS}';"
+            f"document.head.appendChild(s);}},{self._RENDER_SETTLE_PAUSE_MS});</script>"
+        )
+        if "</body>" in html:
+            return html.replace("</body>", script + "</body>", 1)
+        return html + script
 
     @staticmethod
     def _coerce_list(data: Any) -> list:
@@ -1937,7 +1988,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             chat_quality_html=chat_quality_html,
             group_name=context.get("chat_name", ""),
         )
-        return self._inject_emoji_font(html_text, theme)
+        return self._inject_render_settle(self._inject_emoji_font(html_text, theme))
 
     def _inline_theme_assets(self, html: str) -> str:
         """把模板里 `assets/<主题>/xxx.png` 形式的包内素材引用替换成 data URI。
@@ -1985,12 +2036,53 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             for url, uri in self._static_map.items():
                 if url in html:
                     html = html.replace(url, uri)
+        html = self._inline_remote_assets(html)
         html = self._inline_theme_assets(html)
         if self._font_sub_uri:
             html = html.replace(self._FONT_REGULAR_URL, self._font_sub_uri)
         html = re.sub(r"@font-face\s*\{[^}]*Medium[^}]*\}", "", html)
         html = re.sub(r"@font-face\s*\{[^}]*Mono[^}]*\}", "", html)
+        # 摘除阻塞式外链字体样式表（issue #2）：模板里写的是 {{ t2i_google_fonts_mirror }}/css2?...，
+        # 走到这里已是渲染后的字面量 URL，正则必须写字面域。re.S 处理跨行写法
+        # （miku / format / hack / scrapbook 等 6 套是跨行）。只删 css2 的 rel=stylesheet，
+        # preconnect 保留；BlueArchive 的 Blueaka.css 一并摘除（甲-1，字体回落系统字体）。
+        html = re.sub(r"<link[^>]*?fonts\.loli\.net/css2.*?>", "", html, flags=re.S | re.I)
+        html = re.sub(r"<link[^>]*?cdn\.xcnahida\.cn.*?>", "", html, flags=re.S | re.I)
         return html
+
+    def _inline_remote_assets(self, html: str) -> str:
+        """把 BlueArchive 模板里引用的两个远程素材替换为包内文件的 data URI（甲-1 本地化）。
+
+        与 `_inline_static_assets` 的 static_map 同套路：URL 是渲染后字面量，直接整串替换。
+        """
+        for url, rel in self._REMOTE_ASSET_FILES.items():
+            if url not in html:
+                continue
+            html = html.replace(url, self._packaged_asset_uri(rel))
+        return html
+
+    def _packaged_asset_uri(self, rel: str) -> str:
+        """加载包内素材（`assets/<主题>/<文件>` 相对路径）为 data URI，带缓存；缺失时透明像素兜底。"""
+        cached = self._theme_asset_cache.get(rel)
+        if cached is not None:
+            return cached
+        uri = self._BLANK_PIXEL_URI
+        path = self._THEME_ASSETS_ROOT / rel.removeprefix("assets/")
+        try:
+            if path.is_file():
+                suffix = path.suffix.lower().lstrip(".")
+                mime = {
+                    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "webp": "image/webp", "gif": "image/gif", "svg": "image/svg+xml",
+                }.get(suffix, "application/octet-stream")
+                uri = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode()
+        except Exception as exc:
+            try:
+                self.ctx.logger.warning("[weekly] 本地化素材内联失败 %s: %s", rel, exc)
+            except Exception:
+                pass
+        self._theme_asset_cache[rel] = uri
+        return uri
 
     def _load_avatar_datauri(self, cache_dir: Path, uid: str, url: str) -> str:
         """下载单个头像（qlogo s=100），缩放到 ≤96px 后内联为 data URI（磁盘缓存）。
@@ -2625,10 +2717,18 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 last_err = "云端渲染失败"
                 self.ctx.logger.warning("[weekly] 云端渲染未出图，回落本地渲染链")
         if not image:
+            try:
+                settle_ms = int(getattr(acfg, "render_settle_ms", 3000) or 0)
+            except (TypeError, ValueError):
+                settle_ms = 3000
+            settle_ms = max(0, min(30000, settle_ms))
+            # allow_network=False（issue #3）：v1.3.0 起成品页零外链（阻塞字体样式表摘除 + 素材全内联），
+            # 断网渲染让任何残留外链请求立即失败而不是挂住（同时杜绝「挂外链 → 等 render_timeout」的卡死类故障）。
+            # 超时直落精简档（issue #3）：全量档超时 ≈ 机器弱或页面挂，1.0x 全量档大概率同样超时，
+            # 不再烧中间档的 render_timeout；非超时错误仍逐档降级。
             attempts = [
-                ("本地全量档", html_text, scale_r1, 8000),
-                ("本地稳定档", html_text, 1.0, 8000),
-                ("本地精简档", html_lite, 1.0, 6000),
+                ("本地全量档", html_text, scale_r1, settle_ms),
+                ("本地稳定档", html_text, 1.0, settle_ms),
             ]
             for label, html, dsf, wait_ms in attempts:
                 try:
@@ -2640,7 +2740,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                         viewport={"width": acfg.render_viewport_width, "height": 500},
                         device_scale_factor=dsf,
                         full_page=True,
-                        allow_network=True,
+                        allow_network=False,
                         wait_until="domcontentloaded",
                         wait_for_timeout_ms=wait_ms,
                         render_timeout_ms=acfg.render_timeout_ms,
@@ -2653,7 +2753,34 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     self.ctx.logger.warning("[weekly] 日报%s渲染结果为空，尝试降级", label)
                 except Exception as exc:
                     last_err = str(exc)[:100] or type(exc).__name__
+                    if "timeout" in str(exc).lower():
+                        self.ctx.logger.warning("[weekly] 日报%s渲染超时，跳过余下全量档直落精简档", label)
+                        break
                     self.ctx.logger.warning("[weekly] 日报%s渲染失败: %s，尝试降级", label, last_err)
+            if not image:
+                try:
+                    result = await self.ctx.call_capability(
+                        "render.html2png",
+                        timeout_ms=max(240000, acfg.render_timeout_ms + 60000),
+                        html=html_lite,
+                        selector="body",
+                        viewport={"width": acfg.render_viewport_width, "height": 500},
+                        device_scale_factor=1.0,
+                        full_page=True,
+                        allow_network=False,
+                        wait_until="domcontentloaded",
+                        wait_for_timeout_ms=settle_ms,
+                        render_timeout_ms=acfg.render_timeout_ms,
+                    )
+                    image = str(result.get("image_base64") or "") if isinstance(result, dict) else ""
+                    if image:
+                        self.ctx.logger.info("[weekly] 日报本地精简档渲染成功 (dsf=1.00)")
+                    else:
+                        last_err = "渲染结果为空"
+                        self.ctx.logger.warning("[weekly] 日报本地精简档渲染结果为空")
+                except Exception as exc:
+                    last_err = str(exc)[:100] or type(exc).__name__
+                    self.ctx.logger.warning("[weekly] 日报本地精简档渲染失败: %s", last_err)
         if not image:
             raise RuntimeError(last_err or "渲染失败")
         try:

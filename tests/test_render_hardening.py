@@ -130,7 +130,7 @@ class RenderHardeningTest(unittest.IsolatedAsyncioTestCase):
     def test_render_tiers_use_settle_config_offline_and_lite_fallback(self):
         """发送路径契约：三档本地渲染都断网、都用 render_settle_ms、第三档是精简档 HTML。"""
         p = self.plugin()
-        p._plugin_config_instance.analysis.render_settle_ms = 1234
+        p._plugin_config_instance.analysis.render_settle_ms = 5000
         captured = []
 
         async def fake_capability(cap, **kwargs):
@@ -163,8 +163,44 @@ class RenderHardeningTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(captured), 3, '应有三档本地渲染调用（云端默认关）')
         for kwargs in captured:
             self.assertFalse(kwargs['allow_network'], '本地渲染必须断网')
-            self.assertEqual(kwargs['wait_for_timeout_ms'], 1234, '三档都应使用 render_settle_ms')
+            self.assertEqual(kwargs['wait_for_timeout_ms'], 5000, '三档都应使用 render_settle_ms')
         self.assertEqual(captured[2]['html'], 'LITE_HTML', '第三档必须是精简档 HTML')
+
+    def test_render_settle_floor_clamped(self):
+        """A-2：render_settle_ms 低于动画暂停点+余量时被钳到 2800，避免截到入场动画中途。"""
+        p = self.plugin()
+        p._plugin_config_instance.analysis.render_settle_ms = 0
+        captured = []
+
+        async def fake_capability(cap, **kwargs):
+            captured.append(kwargs)
+            raise RuntimeError('Page.set_content: Timeout 100000ms exceeded.')
+
+        p.ctx.call_capability = fake_capability
+
+        class _Send:
+            async def text(self, *_a, **_k):
+                pass
+
+            async def image(self, *_a, **_k):
+                pass
+
+        p.ctx.send = _Send()
+
+        async def run():
+            patches = self._patched_send_path(p, 'FULL_HTML', 'LITE_HTML')
+            for ctx in patches:
+                ctx.start()
+            try:
+                with self.assertRaises(RuntimeError):
+                    await p._generate_daily_and_send('sid', '2026-10-30', 'atri', mark_sent=False)
+            finally:
+                for ctx in patches:
+                    ctx.stop()
+
+        asyncio.run(run())
+        self.assertTrue(captured, '至少应发起一次渲染调用')
+        self.assertEqual(captured[0]['wait_for_timeout_ms'], 2800, '设 0 应被钳到 2000+800=2800')
 
     def test_render_timeout_skips_middle_tier(self):
         """R1 超时 → 跳过稳定档直落精简档（issue #3 降级链止损）。"""

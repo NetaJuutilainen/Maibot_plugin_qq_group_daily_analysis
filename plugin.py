@@ -481,7 +481,7 @@ class AnalysisConfig(PluginConfigBase):
     render_timeout_ms: int = Field(default=100000, description="日报渲染超时（毫秒）", ge=30000)
     render_settle_ms: int = Field(
         default=3000,
-        description="渲染后静止等待（毫秒）。页面 2 秒后自动暂停全部动画（v1.3.0 起），资产已全内联，一般无需长等；弱机可再调小",
+        description="渲染后静止等待（毫秒）。页面 2 秒后自动暂停全部动画（v1.3.0 起），资产已全内联，一般无需长等；弱机可再调小。地板 2800ms：低于此值按 2800ms 执行（动画暂停点在 2000ms，等待过短会截到入场动画中途）",
         ge=0, le=30000,
     )
     inline_cjk_font: bool = Field(
@@ -940,7 +940,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "render_remote_png_first": {"label": "云端优先 PNG", "ui_type": "switch", "hint": "对齐原版：先请求 PNG，失败再 JPEG"},
             "render_remote_scale_level": {"label": "云端渲染分辨率档位", "ui_type": "select", "choices": ["normal", "high", "ultra"], "hint": "normal=1.0x（1080 宽，推荐）/ high=1.3x / ultra=1.8x；档位越高越清晰也越大越慢"},
             "render_timeout_ms": {"label": "日报渲染超时（毫秒）", "ui_type": "number", "min": 30000},
-            "render_settle_ms": {"label": "渲染后静止等待（毫秒）", "ui_type": "number", "min": 0, "max": 30000, "hint": "页面 2 秒后自动暂停全部动画（v1.3.0 起，弱机减负核心），资产已全内联，默认 3000 足够；弱机可再调小"},
+            "render_settle_ms": {"label": "渲染后静止等待（毫秒）", "ui_type": "number", "min": 0, "max": 30000, "hint": "页面 2 秒后自动暂停全部动画（v1.3.0 起，弱机减负核心），资产已全内联，默认 3000 足够；弱机可再调小。低于 2800 按 2800 执行（避免截到入场动画中途）"},
             "inline_cjk_font": {"label": "全主题内嵌中文字体", "ui_type": "switch", "hint": "非 ATRI 主题注入包内 LXGW 子集字体，摘除阻塞外链后中文观感与 ATRI 一致（每份 HTML +约1.2MB，云端渲染 POST 变大）；关闭回落系统字体，仍能出字不出豆腐块"},
             },
         },
@@ -2062,12 +2062,17 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         return html
 
     def _packaged_asset_uri(self, rel: str) -> str:
-        """加载包内素材（`assets/<主题>/<文件>` 相对路径）为 data URI，带缓存；缺失时透明像素兜底。"""
-        cached = self._theme_asset_cache.get(rel)
+        """加载包内素材（`assets/<主题>/<文件>` 相对路径）为 data URI，带缓存；缺失时透明像素兜底。
+
+        缓存键统一归一化为 `<主题>/<文件>`（去掉 `assets/` 前缀），与 `_inline_theme_assets`
+        写入的键（`f"{folder}/{rel}"`）同空间——同一张图无论从哪条路径进来只存一份。
+        """
+        key = rel.removeprefix("assets/")
+        cached = self._theme_asset_cache.get(key)
         if cached is not None:
             return cached
         uri = self._BLANK_PIXEL_URI
-        path = self._THEME_ASSETS_ROOT / rel.removeprefix("assets/")
+        path = self._THEME_ASSETS_ROOT / key
         try:
             if path.is_file():
                 suffix = path.suffix.lower().lstrip(".")
@@ -2081,7 +2086,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 self.ctx.logger.warning("[weekly] 本地化素材内联失败 %s: %s", rel, exc)
             except Exception:
                 pass
-        self._theme_asset_cache[rel] = uri
+        self._theme_asset_cache[key] = uri
         return uri
 
     def _load_avatar_datauri(self, cache_dir: Path, uid: str, url: str) -> str:
@@ -2722,6 +2727,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             except (TypeError, ValueError):
                 settle_ms = 3000
             settle_ms = max(0, min(30000, settle_ms))
+            # 动画暂停点在 _RENDER_SETTLE_PAUSE_MS(2000)；等待短于它会在入场动画中途截图
+            # （atri 的 fadeInUp ... both 共 6 处、.sakura 从 opacity:0 起跳，出图会半透明/截断）。
+            # 保留用户调小能力，但地板钳到「暂停点 + 800ms 余量」，避免把插件"调坏"当成故障。
+            settle_ms = max(self._RENDER_SETTLE_PAUSE_MS + 800, settle_ms)
             # allow_network=False（issue #3）：v1.3.0 起成品页零外链（阻塞字体样式表摘除 + 素材全内联），
             # 断网渲染让任何残留外链请求立即失败而不是挂住（同时杜绝「挂外链 → 等 render_timeout」的卡死类故障）。
             # 超时直落精简档（issue #3）：全量档超时 ≈ 机器弱或页面挂，1.0x 全量档大概率同样超时，
@@ -2753,7 +2762,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     self.ctx.logger.warning("[weekly] 日报%s渲染结果为空，尝试降级", label)
                 except Exception as exc:
                     last_err = str(exc)[:100] or type(exc).__name__
-                    if "timeout" in str(exc).lower():
+                    _exc_text = str(exc)
+                    _exc_lower = _exc_text.lower()
+                    if "timeout" in _exc_lower or "timed out" in _exc_lower or "超时" in _exc_text:
                         self.ctx.logger.warning("[weekly] 日报%s渲染超时，跳过余下全量档直落精简档", label)
                         break
                     self.ctx.logger.warning("[weekly] 日报%s渲染失败: %s，尝试降级", label, last_err)

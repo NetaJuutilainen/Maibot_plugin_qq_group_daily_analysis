@@ -115,7 +115,7 @@
 | `retro_futurism` | 复古未来 | 米白 `#F8F4E8` + 荧光绿 `#00FF41`，CRT 终端风 | Retro Futurism Daily Export / 累计消息数量 / 参与者计数 / 文本总字数 / 活跃序列 SCAN / ACTIVITY_SPECTRUM / TOPICS_MODULE / TITLES_MODULE / QUOTES_MODULE |
 | `scrapbook` | 剪贴簿 | 点阵纸 + 手写体，卡通调色板 | 五彩斑斓的一天，来看看群里发生了什么吧！/ ✨ Highlight Time（此刻，世界色彩斑斓）/ 24H 活跃轨迹 / 统计邮票 / 群贤毕至 Bible Quotes |
 | `spring_festival` | 新春 | 宣纸底 + 红金 `#b71c1c` `#ffca28`，书法字体 | 🧧 春节特供日报 🧧 / —— 岁在丙午 —— / 巅峰时刻 / 🏮 鸿运齐天 · 众友云集 🏮 / 核心话题回顾 / 活跃时序图 / 群友风云榜 / 每日金句回响 |
-| `simple` | 简约 | 灰白极简，素材最轻（约 10 KB） | Simple Report / 群聊日报 / 基础统计 / 活跃度图表 / 群圣经 / 热门话题 / 群友称号 |
+| `simple` | 简约 | 灰白极简，内置素材最少 | Simple Report / 群聊日报 / 基础统计 / 活跃度图表 / 群圣经 / 热门话题 / 群友称号 |
 | `format` | 格式报告 | 白底蓝字 `#007bff`，正式文档风 | 群聊日常分析报告 / 基础统计 / 24小时活跃度分布 / 群聊质量分析 EXECUTIVE SUMMARY / 群圣经 / 热门话题 / 群友称号 |
 | `art_nouveau` | 新艺术运动 | 羊皮纸底 + 森林绿 `#2d5016` × 复古金 `#c9a227`，穆夏式圣光光环、流动藤蔓与罗马碑铭体 | 群聊风雅漫步 CHRONICLES OF NATURAL HARMONY / 廿四小时走势 · 24-Hour Rhythm / 核心热议话题 · Selected Topics / 群芳雅鉴 / 精选金句回响 · 观察锐评 / 整体洞察华章 · 群聊综合评述 / 四象核心数据 |
 | `maria` | 圣母在上 | 羊皮纸底 + 古金 `#d4a94a` + 墨绿 `#38553f` + 酒红 `#9e3447`，莉莉安女子学园茶会风，三蔷薇徽章与圣母像 | 莉莉安茶会 · 今日群聊公报 BULLETIN DU SALON DES ROSES / 钟楼时刻 · 24小时作息 / 核心议题 · 花语拾遗（红白黄三色蔷薇分卷）/ 学园名册 · 淑女风采 / 今日金句 · 蔷薇私语 / 学园庭园的省察 · 总评纪要 |

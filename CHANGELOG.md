@@ -14,8 +14,9 @@
 - **新增能力声明 `chat.get_avatar`**（`_manifest.json`），头像改由宿主统一解析：
   非纯数字 ID 交给平台适配器取头像——官方 QQ 适配器会按 AppID + OpenID 路由到
   `q.qlogo.cn/qqapp/{app_id}/{openid}/100`，其它平台由各自适配器处理。
-  同时把 `host_application.max_version` 抬到 `1.4.99`（`chat.get_avatar` 自 1.4.0 起提供；
-  低版本宿主仍可加载本插件，只是 OpenID 头像留空走默认头像）。
+  同时把 `host_application.max_version` 抬到 `1.4.99`（宿主已发布 1.4.x 版本线，抬上界保证新宿主可加载）。
+  版本口径说明：`chat.get_avatar` 能力自宿主 **1.3.2** 起即提供；真正需要宿主 **≥1.4.0** 的是内置
+  官方 QQ 适配器（`qq_official_adapter`，1.4.0 起内置）。低版本宿主仍可加载本插件，只是 OpenID 头像留空走默认头像。
 - **头像解析异步化**：新增 `_attach_avatars`，仅对 ID 非纯数字的群友按当日发言量
   Top 60 并发（4 路）查询，单次超时 8s；任何失败（能力缺失 / 平台未知 / 适配器
   unsupported / 网络异常）都只留空，由既有默认头像兜底，不影响日报生成。

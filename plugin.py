@@ -2,18 +2,18 @@
 
 import asyncio
 import base64
-import json
-from datetime import date, datetime, timedelta
-from pathlib import Path
-from typing import Any, ClassVar, Dict, Literal, cast
-
+import hashlib
 import html as html_esc
 import io
+import json
 import os
 import re
 import ssl
 import time
 import urllib.request
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any, ClassVar, Dict, Literal, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from maibot_sdk import Command, Field, HookHandler, MaiBotPlugin, PluginConfigBase
@@ -342,6 +342,69 @@ def _is_forward_message(segments: Any, text: str) -> bool:
     return p.startswith("【合并转发消息") or p.strip() == "[forward]"
 STATS_RETENTION_DAYS = 14
 MIN_MESSAGES_FOR_REPORT = 10
+
+# ---------------------------------------------------------------------------
+# 群友身份与头像取值（兼容 QQ 官方 OpenID 场景）
+# ---------------------------------------------------------------------------
+# 入站消息里的 user_id 有两种形态：
+#   1) 纯数字 —— 真实 QQ 号（NapCat/SnowLuma 侧，或官 Q 已完成身份绑定后的统一 ID）；
+#   2) 32 位大小写字母数字串 —— QQ 官方 openid（如 2C9FD5BC5264B1C0999D8F47C5E809F8）。
+# openid 拼不进 qlogo 的「按 QQ 号取头像」路由，也不适合直接当昵称展示，
+# 头像必须走宿主 chat.get_avatar 能力（宿主再转发给 qq_official_adapter 的
+# adapter.avatar.get，由它按 AppID + openid 路由取值）。
+QQ_AVATAR_URL_TEMPLATE = "https://q1.qlogo.cn/g?b=qq&nk={uid}&s=100"
+# LLM 回传的 [用户ID] 引用；字符集只含 ASCII 字母数字/下划线/短横，
+# 中英文占位符（[图片]、[更早的消息已截断…]）与 [CQ:at,...] 都不会被误匹配。
+UID_REF_RE = re.compile(r"\[([0-9A-Za-z_-]{4,64})\]")
+# openid 头像解析上限：只解析最有存在感的群友，避免大群把能力调用打爆
+AVATAR_LOOKUP_LIMIT = 60
+AVATAR_LOOKUP_CONCURRENCY = 4
+AVATAR_LOOKUP_TIMEOUT_MS = 8000
+
+
+def _is_openid(user_id: str) -> bool:
+    """user_id 是否不是纯数字（QQ 官方 openid / 其他平台的字符串 ID）。"""
+    uid = str(user_id or "").strip()
+    return bool(uid) and not uid.isdecimal()
+
+
+def _display_name(user_id: str, nickname: str) -> str:
+    """昵称兜底：openid 拿不到可读昵称时显示「群友 + ID 后 6 位」。
+
+    纯数字 ID 保持既有行为（无昵称时直接显示 QQ 号）。
+    """
+    uid = str(user_id or "").strip()
+    nick = str(nickname or "").strip()
+    if nick and nick != uid:
+        return nick
+    if _is_openid(uid):
+        return f"群友{uid[-6:].upper()}"
+    return nick or uid
+
+
+def _avatar_cache_key(user_id: str) -> str:
+    """头像缓存文件名：只留安全字符，附加短哈希避免不同 ID 清洗后撞名。"""
+    uid = str(user_id or "")
+    safe = re.sub(r"[^0-9A-Za-z_-]", "_", uid)[:48] or "unknown"
+    return f"{safe}-{hashlib.sha1(uid.encode('utf-8')).hexdigest()[:8]}"
+
+
+def _extract_avatar_url(payload: Any) -> str:
+    """从 chat.get_avatar 的多种返回形状里取出可用头像 URL，取不到返回空串。
+
+    兼容 {"success": true, "avatar": {...}} / {"avatar": {...}} / 直接 {status, url}。
+    """
+    if not isinstance(payload, dict):
+        return ""
+    node = payload.get("avatar")
+    if not isinstance(node, dict):
+        node = payload
+    if str(node.get("status") or "") != "available":
+        return ""
+    url = str(node.get("url") or "").strip()
+    if url.startswith(("http://", "https://")):
+        return url
+    return ""
 
 
 class PluginSectionConfig(PluginConfigBase):
@@ -694,7 +757,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         _nick = str(user_info.get("user_cardname") or "").strip()
         if not _nick:
             _nick = str(user_info.get("user_nickname") or "").strip()
-        nickname = _nick or str(user_id)
+        nickname = _display_name(user_id, _nick)
         group_name = str(group_info.get("group_name") or "")
 
         try:
@@ -723,6 +786,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         if group_name:
             chat["name"] = group_name
         chat["group_id"] = group_id
+        # 记住会话所属的平台/账号，供 chat.get_avatar 定位适配器（官 Q 的 openid 头像必需）
+        for key in ("platform", "account_id", "scope"):
+            value = str(message.get(key) or "").strip()
+            if value:
+                chat[key] = value
         day_data = chat["days"].setdefault(day, {"users": {}, "total": 0, "quotes": []})
 
         user = day_data["users"].setdefault(
@@ -1111,10 +1179,62 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 for h, c in enumerate(hours)
             ],
             "sample": day_data.get("sample", []),
-            "avatars": {uid: f"https://q1.qlogo.cn/g?b=qq&nk={uid}&s=100" for uid in users},
-            "user_names": {uid: u.get("n", uid) for uid, u in users.items()},
+            # 纯数字 QQ 号可直接走 qlogo；openid 在此留空，由 _attach_avatars 走宿主能力补齐
+            "avatars": {
+                uid: (QQ_AVATAR_URL_TEMPLATE.format(uid=uid) if not _is_openid(uid) else "")
+                for uid in users
+            },
+            "user_names": {uid: _display_name(uid, u.get("n", "")) for uid, u in users.items()},
             "user_stats": {uid: dict(u) for uid, u in users.items()},
         }
+
+    async def _attach_avatars(self, stream_id: str, context: dict) -> None:
+        """为 openid 形态的群友补齐头像 URL（原地改写 context["avatars"]）。
+
+        走宿主 chat.get_avatar → 适配器 adapter.avatar.get：官 Q 适配器按 AppID + openid
+        路由到 https://q.qlogo.cn/qqapp/{app_id}/{openid}/100；非 QQ 平台由各自适配器处理。
+        任何失败（能力未注册 / 平台未知 / 适配器 unsupported / 超时）都只留空，
+        渲染时由模板的 avatar 判空与 _inline_avatars 的默认头像兜底。
+        """
+        avatars = context.get("avatars") or {}
+        pending = [uid for uid, url in avatars.items() if not url]
+        if not pending:
+            return
+        chat = self._stats.get("chats", {}).get(stream_id) or {}
+        platform = str(chat.get("platform") or "").strip()
+        if not platform:
+            # 平台未知（老 stats.json 或重建失败）时无法定位头像适配器，保持留空
+            return
+        account_id = str(chat.get("account_id") or "").strip()
+        scope = str(chat.get("scope") or "").strip()
+
+        # 只解析最有存在感的群友，控制能力调用量
+        stats = context.get("user_stats") or {}
+        pending.sort(key=lambda uid: int(stats.get(uid, {}).get("msg", 0) or 0), reverse=True)
+        pending = pending[:AVATAR_LOOKUP_LIMIT]
+
+        semaphore = asyncio.Semaphore(AVATAR_LOOKUP_CONCURRENCY)
+
+        async def _one(uid: str) -> None:
+            async with semaphore:
+                try:
+                    resp = await self.ctx.call_capability(
+                        "chat.get_avatar",
+                        platform=platform,
+                        target_id=uid,
+                        target_type="user",
+                        account_id=account_id,
+                        scope=scope,
+                        timeout_ms=AVATAR_LOOKUP_TIMEOUT_MS,
+                    )
+                except Exception as exc:
+                    self.ctx.logger.debug("[weekly] 头像解析失败 %s: %s", uid, exc)
+                    return
+                url = _extract_avatar_url(resp)
+                if url:
+                    avatars[uid] = url
+
+        await asyncio.gather(*(_one(uid) for uid in pending))
 
     def _day_total(self, stream_id: str, day: str) -> int:
         """读取某群某天（或 24h 窗口重建后）的消息总数。"""
@@ -1159,6 +1279,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
         fresh = {"users": {}, "total": 0, "quotes": [], "hours": [0] * 24, "sample": []}
         sample_seen = set()
+        chat_meta: dict[str, str] = {}
         acfg = self._cfg().analysis
         for msg in messages:
             if not isinstance(msg, dict):
@@ -1168,11 +1289,17 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             user_id = str(user_info.get("user_id") or "")
             if not user_id:
                 continue
+            # 从消息里补齐会话平台上下文（库中消息同样带 platform/account_id/scope）
+            for key in ("platform", "account_id", "scope"):
+                if not chat_meta.get(key):
+                    value = str(msg.get(key) or "").strip()
+                    if value:
+                        chat_meta[key] = value
             # prefer group card name; nickname equal to QQ number is invalid (NapCat often puts the number in user_nickname)
             _nick = str(user_info.get("user_cardname") or "").strip()
             if not _nick:
                 _nick = str(user_info.get("user_nickname") or user_info.get("nickname") or "").strip()
-            nickname = _nick or user_id
+            nickname = _display_name(user_id, _nick)
             try:
                 ts = float(msg.get("timestamp") or 0)
             except (TypeError, ValueError):
@@ -1230,6 +1357,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             del fresh["sample"][: len(fresh["sample"]) - acfg.max_sample_messages]
 
         chat = self._stats["chats"].setdefault(stream_id, {"name": "", "days": {}, "last_daily": ""})
+        # 重建路径同样补平台上下文，供 chat.get_avatar 定位头像适配器
+        for key in ("platform", "account_id", "scope"):
+            value = chat_meta.get(key, "")
+            if value:
+                chat[key] = value
         day_data = chat.setdefault("days", {}).setdefault(day, {})
         day_data.clear()
         day_data.update(fresh)
@@ -1390,9 +1522,12 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     def _replace_uid_refs(self, text: str, context: dict) -> str:
         """把 LLM 输出里的 [用户ID] 引用替换为昵称（纯文本场景，如称号理由）。"""
+        names = context.get("user_names") or {}
+
         def repl(m):
-            return context["user_names"].get(m.group(1), m.group(0))
-        return re.sub(r"\[(\d{4,})\]", repl, str(text))
+            uid = m.group(1)
+            return names.get(uid, m.group(0)) if uid in names else m.group(0)
+        return UID_REF_RE.sub(repl, str(text))
 
     def _render_mentions(self, text: str, context: dict) -> str:
         """把文本里的 [用户ID] 渲染成「头像+昵称」胶囊 HTML（对齐原版 _render_mentions）。
@@ -1404,7 +1539,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         source = str(text)
         names = context.get("user_names", {})
         avatars = context.get("avatars", {})
-        matches = list(re.finditer(r"\[(\d{4,})\]", source))
+        # 只认确实出现在本群统计里的 ID（含官 Q 的 32 位 openid），其余方括号内容原样保留
+        matches = [m for m in UID_REF_RE.finditer(source) if m.group(1) in names]
         if not matches:
             return _escape_text_segment(source)
         capsule_style = (
@@ -1912,13 +2048,14 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             if not content:
                 continue
             uid = ""
-            uid_m = re.search(r"\[(\d{4,})\]", sender_raw)
+            uid_m = UID_REF_RE.search(sender_raw)
             if uid_m:
                 cand = uid_m.group(1)
                 if cand in names:
                     uid, sender = cand, names[cand]
                 else:
-                    sender = cand  # ID 不在统计里，就裸显示数字，避免方括号
+                    # ID 不在本群统计里（例如 LLM 编的号），保留原文而不裸显 ID
+                    sender = sender_raw
             else:
                 uid = next((u for u, n in names.items() if n == sender_raw), "")
                 sender = names.get(uid, sender_raw)
@@ -2095,11 +2232,13 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         对齐原版：LANCZOS 缩放 + JPEG 压缩降低渲染体积；失败时返回空串并写入短时失败缓存。
         """
         try:
-            failed_until = self._avatar_failure_cache.get(uid, 0)
+            # 官 Q 的 openid 是 32 位串，统一走安全化后的缓存键（避免非法文件名与碰撞）
+            cache_key = _avatar_cache_key(uid)
+            failed_until = self._avatar_failure_cache.get(cache_key, 0)
             if failed_until > time.monotonic():
                 return ""
             cache_dir.mkdir(parents=True, exist_ok=True)
-            fp = cache_dir / f"{uid}.img"
+            fp = cache_dir / f"{cache_key}.img"
             if fp.exists() and fp.stat().st_size > 64:
                 blob = fp.read_bytes()
             else:
@@ -2107,7 +2246,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 with urllib.request.urlopen(req, timeout=10) as r:
                     blob = r.read()
                 if not blob or len(blob) < 64:
-                    self._avatar_failure_cache[uid] = time.monotonic() + self._AVATAR_FAILURE_TTL
+                    self._avatar_failure_cache[cache_key] = time.monotonic() + self._AVATAR_FAILURE_TTL
                     return ""
                 fp.write_bytes(blob)
             try:
@@ -2136,7 +2275,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 mime = "image/png"
             return f"data:{mime};base64," + base64.b64encode(blob).decode()
         except Exception:
-            self._avatar_failure_cache[uid] = time.monotonic() + self._AVATAR_FAILURE_TTL
+            self._avatar_failure_cache[_avatar_cache_key(uid)] = time.monotonic() + self._AVATAR_FAILURE_TTL
             return ""
 
     async def _inline_avatars(self, html: str, context: dict) -> str:
@@ -2628,6 +2767,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         context = self._daily_context(stream_id, day)
         if context is None:
             return "insufficient"
+        await self._attach_avatars(stream_id, context)
         self.ctx.logger.info("[weekly] 生成日报: %s %s（%s 条消息，主题 %s）", context["chat_name"], day, context["message_count"], theme)
         acfg = self._cfg().analysis
         analysis: dict[str, Any] = {"topics": [], "titles": [], "quotes": [], "quality": None}

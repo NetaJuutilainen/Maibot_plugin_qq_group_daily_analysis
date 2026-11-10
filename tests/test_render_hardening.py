@@ -13,8 +13,12 @@ from unittest.mock import Mock, patch
 
 import unittest
 
-spec = spec_from_file_location('daily_analysis', Path(__file__).resolve().parents[1] / 'plugin.py')
+import sys
+
+root = Path(__file__).resolve().parents[1]
+spec = spec_from_file_location('daily_analysis_render', root / 'plugin.py', submodule_search_locations=[str(root)])
 module = module_from_spec(spec)
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 FAKE_FONT_URI = 'data:font/woff2;base64,QUFBQQ=='

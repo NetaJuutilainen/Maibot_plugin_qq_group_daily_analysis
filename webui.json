@@ -1,0 +1,181 @@
+{
+  "schema_version": 2,
+  "required_capabilities": ["custom_pages", "declarative_basic"],
+  "workspace_title": "群聊分析",
+  "pages": [
+    {
+      "id": "report-library",
+      "mode": "custom",
+      "title": "报告库",
+      "description": "筛选与预览报告存档、重发及逐条删除。P1 状态仅包含从 WebUI 启动的任务。",
+      "placement": "workspace",
+      "icon": "database",
+      "entry": "webui/report_library.html",
+      "layout": "viewport",
+      "queries": {
+        "reports": {
+          "api": "reports",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "max_length": 128},
+            "date_from": {"type": "string", "max_length": 10},
+            "date_to": {"type": "string", "max_length": 10},
+            "page": {"type": "integer", "minimum": 1, "maximum": 1000000}
+          }
+        },
+        "detail": {
+          "api": "report_detail",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "required": true, "max_length": 10}
+          }
+        },
+        "thumb": {
+          "api": "report_thumb",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "required": true, "max_length": 10},
+            "revision": {"type": "string", "required": true, "max_length": 128}
+          }
+        },
+        "chunk": {
+          "api": "report_chunk",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "required": true, "max_length": 10},
+            "kind": {"type": "string", "required": true, "choices": ["image"], "max_length": 5},
+            "offset": {"type": "integer", "required": true, "minimum": 0, "maximum": 33554432},
+            "revision": {"type": "string", "required": true, "max_length": 128}
+          }
+        },
+        "overview": {"api": "overview", "version": "1"}
+      },
+      "actions": {
+        "trigger": {
+          "api": "trigger",
+          "version": "1",
+          "confirmation": "生成会消耗模型额度并发往所选群。当日使用滚动24小时；历史日仅用已有统计。确认生成或重新生成？",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "max_length": 10},
+            "theme": {"type": "string", "max_length": 64}
+          }
+        },
+        "rerun": {
+          "api": "rerun",
+          "version": "1",
+          "confirmation": "将这份报告成品重新发送到原群，不重新分析或绘图。确认重发？",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "required": true, "max_length": 10},
+            "revision": {"type": "string", "required": true, "max_length": 128}
+          }
+        },
+        "delete": {
+          "api": "delete",
+          "version": "1",
+          "confirmation": "仅删除当前所选的一份报告存档，不删除任何群消息。此操作不可撤销，确认删除？",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "required": true, "max_length": 10},
+            "revision": {"type": "string", "required": true, "max_length": 128}
+          }
+        },
+        "cancel": {
+          "api": "cancel",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128}
+          }
+        }
+      }
+    },
+    {
+      "id": "overview",
+      "mode": "declarative",
+      "title": "分析总览",
+      "description": "报告统计与近七天消息量；每5秒刷新，操作后自动刷新。P1 仅显示 WebUI 启动的任务。",
+      "placement": "sidebar",
+      "icon": "chart",
+      "auto_refresh": true,
+      "poll_interval_seconds": 5,
+      "queries": {
+        "overview": {"api": "overview", "version": "1"}
+      },
+      "actions": {
+        "trigger": {
+          "api": "trigger",
+          "version": "1",
+          "confirmation": "生成会消耗模型额度并发往所选群。当日使用滚动24小时；历史日仅用已有统计。确认生成或重新生成？",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "max_length": 10},
+            "theme": {"type": "string", "max_length": 64}
+          }
+        },
+        "cancel": {
+          "api": "cancel",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128}
+          }
+        }
+      },
+      "content": [
+        {
+          "type": "grid",
+          "columns": 3,
+          "children": [
+            {"type": "stat", "label": "今日报告", "value": {"source": "overview", "field": "today_count"}},
+            {"type": "stat", "label": "最近生成", "value": {"source": "overview", "field": "last_generated"}},
+            {"type": "stat", "label": "消息数", "value": {"source": "overview", "field": "message_count"}}
+          ]
+        },
+        {
+          "type": "card",
+          "label": "WebUI 任务状态 · P1",
+          "children": [
+            {"type": "text", "value": "仅显示 WebUI 启动的任务，不包含命令或定时任务；不是完整任务历史。每5秒轮询，忙碌时跳过。"},
+            {"type": "stat", "label": "WebUI 活跃任务", "value": {"source": "overview", "field": "active_count"}},
+            {"type": "text", "label": "状态（仅 WebUI）", "value": {"source": "overview", "field": "status"}},
+            {"type": "progress", "label": "WebUI 任务进度", "value": {"source": "overview", "field": "progress"}}
+          ]
+        },
+        {
+          "type": "card",
+          "label": "立即生成 / 取消",
+          "children": [
+            {"type": "input", "name": "group_id", "label": "群号（必填）", "value": ""},
+            {"type": "input", "name": "day", "label": "报告日期（YYYY-MM-DD，留空为今天）", "value": ""},
+            {"type": "input", "name": "theme", "label": "主题键（留空使用默认主题）", "value": ""},
+            {"type": "text", "value": "当日重新生成统计滚动24小时；历史日期只用既有统计，不补造历史。生成会消耗模型额度并发送到所选群。取消按群生效，已发出的报告不会撤回；操作后请看上方状态。"},
+            {"type": "button", "label": "立即生成", "action": "trigger", "variant": "primary"},
+            {"type": "button", "label": "取消该群 WebUI 任务", "action": "cancel", "variant": "muted"}
+          ]
+        },
+        {
+          "type": "table",
+          "label": "最近10份报告",
+          "value": {"source": "overview", "field": "recent"},
+          "columns": [
+            {"field": "group_name", "label": "群聊"},
+            {"field": "day", "label": "日期"},
+            {"field": "theme", "label": "主题"},
+            {"field": "message_count", "label": "消息数"}
+          ]
+        },
+        {
+          "type": "chart",
+          "label": "近7天消息量",
+          "chart_type": "bar",
+          "value": {"source": "overview", "field": "week"},
+          "x": "day",
+          "y": "message_count"
+        }
+      ]
+    }
+  ]
+}

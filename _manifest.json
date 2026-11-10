@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "maibot-plugin-qq-group-daily-analysis",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "changelog": "CHANGELOG.md",
   "name": "群聊每日分析",
   "description": "每天自动生成群聊日报：高光话题、神人称号、金句宝藏瓶、聊天质量锐评，12 套主题可选，支持上传 QQ 群相册。",
@@ -15,12 +15,12 @@
     "issues": "https://github.com/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis/issues"
   },
   "host_application": {
-    "min_version": "1.0.0",
+    "min_version": "1.3.19",
     "max_version": "1.4.99"
   },
   "sdk": {
-    "min_version": "2.5.1",
-    "max_version": "2.16.99"
+    "min_version": "2.12.0",
+    "max_version": "2.22.99"
   },
   "plugin_type": "data",
   "dependencies": [
@@ -28,6 +28,11 @@
       "type": "python_package",
       "name": "jinja2",
       "version_spec": ">=3.1"
+    },
+    {
+      "type": "python_package",
+      "name": "pillow",
+      "version_spec": ">=9.0.0"
     }
   ],
   "capabilities": [
@@ -37,7 +42,8 @@
     "llm.get_available_models",
     "render.html2png",
     "message.get_by_time_in_chat",
-    "chat.get_avatar"
+    "chat.get_avatar",
+    "webui.claim_upload"
   ],
   "i18n": {
     "default_locale": "zh-CN"

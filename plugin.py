@@ -16,8 +16,10 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, Literal, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from maibot_sdk import Command, Field, HookHandler, MaiBotPlugin, PluginConfigBase
+from maibot_sdk import API, Command, Field, HookHandler, MaiBotPlugin, PluginConfigBase
 from maibot_sdk.types import HookMode
+
+from .report_store import ReportStore
 
 FONT_MIRROR = "https://tc.ciallo.ccwu.cc"
 DAILY_SAMPLE_MAX = 1000
@@ -442,6 +444,7 @@ class ReportSectionConfig(PluginConfigBase):
         default=True,
         description="手动 /日报 成功后是否计入「当天已发」（开启则定时不再重复发同一群）",
     )
+    archive_retention_days: int = Field(default=90, ge=0, le=3650, description="报告库保留天数，启动时清理过期报告；0=不自动清理")
     enable_daily_report: bool = Field(default=True, description="每天自动生成群聊日报")
     daily_report_hour: int = Field(default=22, description="每天自动生成日报的小时（0~23）", ge=0, le=23)
     daily_report_minute: int = Field(default=0, description="每天自动生成日报的分钟（0~59）", ge=0, le=59)
@@ -638,7 +641,14 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     _available_model_tasks: ClassVar[list[str]] = ["auto", "utils", "replyer", "planner", "memory", "mid_memory", "learner", "vlm", "expression_use", "emoji", "voice", "embedding"]
 
     async def on_load(self) -> None:
+        self._report_store = ReportStore(self.ctx.paths.data_dir)
+        self._webui_tasks: dict[str, asyncio.Task] = {}
+        self._webui_operations: dict[str, dict] = {}
         self._stats = self._load_stats()
+        try:
+            await asyncio.to_thread(self._report_store.cleanup, self._report_cfg().archive_retention_days)
+        except (OSError, ValueError) as exc:
+            self.ctx.logger.warning("[weekly] 报告库清理失败: %s", type(exc).__name__)
         # 清理历史遗留的重复/过期 stream（同一个群多套 stream 曾导致一天出两份日报）
         try:
             _rm, _dup = self._prune_stale_streams()
@@ -959,6 +969,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "debug_mode": {"label": "调试模式（输出详细日志）", "ui_type": "switch"},
             "chat_whitelist": {"label": "群白名单", "ui_type": "textarea", "rows": 6, "hint": "每行一个群号；留空=所有群"},
             "command_admins": {"label": "命令管理员", "ui_type": "textarea", "rows": 4, "hint": "每行一个QQ号；留空=所有人可用"},
+            "archive_retention_days": {"label": "报告库保留天数", "ui_type": "number", "min": 0, "max": 3650, "default": 90, "hint": "启动时清理过期报告；0=不自动清理"},
             "enable_daily_report": {"label": "每日日报开关", "ui_type": "switch"},
             "daily_report_hour": {"label": "日报发送小时", "ui_type": "number", "min": 0, "max": 23},
             "daily_report_minute": {"label": "日报发送分钟", "ui_type": "number", "min": 0, "max": 59},
@@ -2762,8 +2773,189 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         base["dimensions"] = dims
         return base
 
+    async def _archive_report(self, stream_id, day, theme, context, analysis, image, html_text, started):
+        chat = self._stats.get("chats", {}).get(stream_id) or {}
+        acfg = self._cfg().analysis
+        metadata = {
+            "group_name": str(context["chat_name"])[:200], "stream_id": stream_id,
+            "theme": theme, "version": "1.5.0",
+            "message_count": context["message_count"], "participant_count": context["participant_count"],
+            "elapsed_seconds": round(time.monotonic() - started, 2),
+            "model_tasks": {key: getattr(acfg, "llm_task_" + key) or acfg.llm_model_task
+                            for key in ("topics", "titles", "quotes", "quality")},
+            "analysis": analysis,
+        }
+        try:
+            await asyncio.to_thread(self._report_store.save, str(chat.get("group_id") or ""),
+                                    day, image, html_text, metadata)
+        except Exception as exc:
+            self.ctx.logger.warning("[weekly] 报告存档失败，仍继续发送: %s", type(exc).__name__)
+
+    def _webui_group(self, group_id: str) -> tuple[str, dict]:
+        if not self._cfg().plugin.enabled:
+            raise ValueError("插件已关闭")
+        if not isinstance(group_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", group_id):
+            raise ValueError("请选择有效的群")
+        whitelist = self._whitelist_ids()
+        if whitelist is not None and group_id not in whitelist:
+            raise ValueError("该群不在白名单中")
+        choices = [(sid, chat) for sid, chat in self._stats.get("chats", {}).items()
+                   if str(chat.get("group_id") or "") == group_id]
+        if not choices:
+            raise ValueError("找不到该群的当前会话，请先让机器人收到群消息")
+        return max(choices, key=lambda pair: self._stream_freshness(pair[1]))
+
+    def _start_webui_operation(self, group_id, day, kind, work) -> dict:
+        task = self._webui_tasks.get(group_id)
+        if task is not None and not task.done():
+            return {"accepted": False, "status": "busy", "message": "该群已有 WebUI 操作正在进行，请勿重复提交"}
+        state = {"group_id": group_id, "day": day, "kind": kind, "status": "running",
+                 "stage": "已受理", "error": "", "started_at": datetime.now().isoformat(timespec="seconds"),
+                 "finished_at": ""}
+        self._webui_operations[group_id] = state
+
+        async def run():
+            outcome = await work(state)
+            if outcome != "ok":
+                state.update(status="failed", stage="未完成",
+                             error="消息不足，未生成日报" if outcome == "insufficient" else "发送失败，请查看插件日志")
+            else:
+                state.update(status="succeeded", stage="已完成")
+
+        def finished(completed):
+            if completed.cancelled():
+                state.update(status="cancelled", stage="已取消")
+            elif completed.exception() is not None:
+                state.update(status="failed", stage="失败", error="操作失败，请查看插件日志；不要连续重复提交")
+                self.ctx.logger.warning("[weekly] WebUI 操作失败: %s", type(completed.exception()).__name__)
+            state["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            if self._webui_tasks.get(group_id) is completed:
+                self._webui_tasks.pop(group_id, None)
+
+        task = self._spawn(run())
+        self._webui_tasks[group_id] = task
+        task.add_done_callback(finished)
+        return {"accepted": True, "status": "running", "message": "已受理，完成后发送到所选群"}
+
+    @API("overview", version="1")
+    async def webui_overview(self) -> dict:
+        today = date.today().isoformat()
+        recent = await asyncio.to_thread(self._report_store.list_reports)
+        daily = await asyncio.to_thread(self._report_store.list_reports, date_from=today, date_to=today)
+        best = {}
+        whitelist = self._whitelist_ids()
+        for sid, chat in self._stats.get("chats", {}).items():
+            gid = str(chat.get("group_id") or "")
+            if not gid or (whitelist is not None and gid not in whitelist):
+                continue
+            if gid not in best or self._stream_freshness(chat) > self._stream_freshness(best[gid]):
+                best[gid] = chat
+        week = []
+        for back in range(6, -1, -1):
+            day = (date.today() - timedelta(days=back)).isoformat()
+            week.append({"day": day, "message_count": sum(
+                int((chat.get("days", {}).get(day) or {}).get("total", 0)) for chat in best.values())})
+        operations = list(self._webui_operations.values())
+        active = sum(state["status"] in ("running", "cancelling") for state in operations)
+        operations.sort(key=lambda state: state["started_at"], reverse=True)
+        return {
+            "today_count": daily["total"],
+            "last_generated": max((r["created_at"] for r in recent["items"]), default="尚无报告"),
+            "message_count": week[-1]["message_count"], "active_count": active,
+            "progress": 0 if active or not operations else 100,
+            "status": f"WebUI 操作进行中：{active}；本页暂不跟踪命令与定时任务的进度",
+            "recent": recent["items"][:10], "week": week, "operations": operations[:100],
+            "groups": [{"group_id": gid, "group_name": str(chat.get("name") or gid)[:200]}
+                       for gid, chat in sorted(best.items())][:100],
+            "themes": [{"key": key, "label": value["label"]} for key, value in THEME_REGISTRY.items()],
+        }
+
+    @API("reports", version="1")
+    async def webui_reports(self, group_id: str = "", date_from: str = "", date_to: str = "", page: int = 1) -> dict:
+        return await asyncio.to_thread(self._report_store.list_reports, group_id, date_from, date_to, page)
+
+    @API("report_detail", version="1")
+    async def webui_report_detail(self, group_id: str, day: str) -> dict:
+        return await asyncio.to_thread(self._report_store.detail, group_id, day)
+
+    @API("report_thumb", version="1")
+    async def webui_report_thumb(self, group_id: str, day: str, revision: str = "") -> dict:
+        return await asyncio.to_thread(self._report_store.thumbnail, group_id, day, revision)
+
+    @API("report_chunk", version="1")
+    async def webui_report_chunk(self, group_id: str, day: str, kind: str = "image", offset: int = 0,
+                                 revision: str = "") -> dict:
+        return await asyncio.to_thread(self._report_store.read_chunk, group_id, day, kind, offset, revision)
+
+    @API("trigger", version="1")
+    async def webui_trigger(self, group_id: str, day: str = "", theme: str = "") -> dict:
+        try:
+            stream_id, chat = self._webui_group(group_id)
+            day = day or date.today().isoformat()
+            if date.fromisoformat(day).isoformat() != day or day > date.today().isoformat():
+                raise ValueError("日期需为 YYYY-MM-DD，且不能晚于今天")
+            theme = theme or self._theme_for_group(group_id)
+            if theme not in THEME_REGISTRY:
+                raise ValueError("未知日报主题")
+            if day != date.today().isoformat() and day not in chat.get("days", {}):
+                raise ValueError("该日期已无统计数据，仅可重发已存档报告")
+        except (TypeError, ValueError):
+            return {"accepted": False, "status": "rejected", "message": "群不在白名单、会话不可用，或日期/主题无效；历史日期需有统计数据"}
+
+        async def generate(state):
+            if day == date.today().isoformat():
+                state["stage"] = "重建过去 24 小时统计"
+                await self._rebuild_day_from_db(stream_id, day)
+            state["stage"] = "分析、渲染并发送"
+            return await self._generate_daily_and_send(
+                stream_id, day, theme,
+                mark_sent=day == date.today().isoformat() and self._report_cfg().manual_marks_daily_sent)
+
+        return self._start_webui_operation(group_id, day, "report", generate)
+
+    @API("rerun", version="1")
+    async def webui_rerun(self, group_id: str, day: str, revision: str = "") -> dict:
+        try:
+            stream_id, _ = self._webui_group(group_id)
+            meta = await asyncio.to_thread(self._report_store.detail, group_id, day)
+            if not revision or revision != meta["revision"]:
+                raise ValueError("报告已更新，请刷新后重发")
+        except (OSError, TypeError, ValueError):
+            return {"accepted": False, "status": "rejected", "message": "报告已更新、已删除或原群会话不可用，请刷新列表"}
+
+        async def resend(state):
+            state["stage"] = "重发存档（不重新分析）"
+            kind = "image" if meta["has_image"] else "html"
+            blob = await asyncio.to_thread(self._report_store.read_bytes, group_id, day, kind, revision)
+            if kind == "image":
+                result = await self.ctx.send.image(base64.b64encode(blob).decode("ascii"), stream_id)
+                return "failed" if result is False or (isinstance(result, dict) and result.get("success") is False) else "ok"
+            ok = await self._send_daily_html(stream_id, {"chat_name": meta["group_name"]}, blob.decode("utf-8"), day)
+            return "ok" if ok else "failed"
+
+        return self._start_webui_operation(group_id, day, "resend", resend)
+
+    @API("delete", version="1")
+    async def webui_delete(self, group_id: str, day: str, revision: str = "") -> dict:
+        if not revision:
+            raise ValueError("删除报告需要版本标识，请刷新列表")
+        task = self._webui_tasks.get(group_id)
+        if task is not None and not task.done():
+            raise ValueError("该群正在生成或重发报告，请完成或取消后再删除")
+        return await asyncio.to_thread(self._report_store.delete, group_id, day, revision)
+
+    @API("cancel", version="1")
+    async def webui_cancel(self, group_id: str) -> dict:
+        task = self._webui_tasks.get(group_id)
+        if task is None or task.done():
+            return {"accepted": False, "status": "idle", "message": "该群没有可取消的 WebUI 操作"}
+        self._webui_operations[group_id].update(status="cancelling", stage="正在取消")
+        task.cancel()
+        return {"accepted": True, "status": "cancelling", "message": "已请求取消；已提交的模型请求、存档和发送无法撤回"}
+
     async def _generate_daily_and_send(self, stream_id: str, day: str, theme: str, mark_sent: bool = True) -> str:
         """生成并发送日报。返回 ok / failed（已向群里发失败提示）/ insufficient（数据不足）。"""
+        started = time.monotonic()
         context = self._daily_context(stream_id, day)
         if context is None:
             return "insufficient"
@@ -2828,6 +3020,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         html_text = self._inline_static_assets(await self._inline_avatars(html_raw, context))
         # HTML 直发模式：零渲染开销（对齐原版 output_format=html），用自包含的内联版
         if str(getattr(acfg, "output_format", "image") or "image").strip().lower() == "html":
+            await self._archive_report(stream_id, day, theme, context, analysis, "", html_text, started)
             if await self._send_daily_html(stream_id, context, html_text, day):
                 _chat0 = self._stats.get("chats", {}).get(stream_id)
                 if mark_sent and isinstance(_chat0, dict):
@@ -2925,6 +3118,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     )
                     image = str(result.get("image_base64") or "") if isinstance(result, dict) else ""
                     if image:
+                        html_text = html_lite
                         self.ctx.logger.info("[weekly] 日报本地精简档渲染成功 (dsf=1.00)")
                     else:
                         last_err = "渲染结果为空"
@@ -2934,6 +3128,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     self.ctx.logger.warning("[weekly] 日报本地精简档渲染失败: %s", last_err)
         if not image:
             raise RuntimeError(last_err or "渲染失败")
+        await self._archive_report(stream_id, day, theme, context, analysis, image, html_text, started)
         try:
             if acfg.show_report_caption and acfg.report_caption.strip():
                 await self.ctx.send.text(acfg.report_caption, stream_id)

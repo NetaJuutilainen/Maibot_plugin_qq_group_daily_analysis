@@ -96,9 +96,12 @@
     <section aria-labelledby="library-title">
       <div class="section-heading"><h2 id="library-title">报告存档</h2><button id="refresh" type="button" disabled>刷新列表</button></div>
       <div id="filters" class="fields" role="search" aria-label="报告筛选">
+        <label>搜索<input id="filter-search" type="search" maxlength="100" placeholder="群名 / 群号 / 日期 / 主题" disabled></label>
         <label>筛选群聊<select id="filter-group" disabled><option value="">全部群聊</option></select></label>
         <label>起始日期<input id="date-from" type="date" disabled></label>
         <label>结束日期<input id="date-to" type="date" disabled></label>
+        <label>类型<select id="filter-type" disabled><option value="">全部类型</option><option value="image">图片报告</option><option value="html">仅 HTML</option></select></label>
+        <label>排序<select id="filter-sort" disabled><option value="desc">从新到旧</option><option value="asc">从旧到新</option></select></label>
         <button id="apply-filter" type="button" disabled>应用筛选</button>
       </div>
       <div class="row"><p id="list-summary" class="muted">每页12份报告</p><p id="library-hint" class="hint" aria-live="polite"></p></div>
@@ -115,6 +118,11 @@
       <dl id="detail-stats" class="stats"></dl>
       <details id="analysis-section" hidden><summary>主题与分析摘录（纯文本）</summary><pre id="analysis-text"></pre></details>
       <div id="detail-actions" class="buttons"></div>
+      <div id="rerender-row" class="buttons" style="margin-top:10px" hidden>
+        <label style="flex-direction:row;align-items:center;gap:8px">重绘主题<select id="rerender-theme" disabled style="width:auto"><option value="">选择主题</option></select></label>
+        <button id="rerender" type="button" data-mutation disabled>换主题重绘（免 Token）</button>
+      </div>
+      <p id="rerender-note" class="hint" hidden></p>
       <div class="buttons" style="margin-top:14px">
         <button id="load-image" type="button" disabled>查看完整原图</button>
         <button id="image-size" type="button" disabled>原始尺寸</button>
@@ -135,13 +143,14 @@
       const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
       const TERMINAL = new Set(['completed', 'succeeded', 'success', 'done', 'failed', 'error', 'cancelled', 'canceled', 'rejected']);
       const STATUS_NAMES = { queued: '排队中', pending: '等待中', accepted: '已接受', running: '运行中', cancelling: '正在取消', cancelled: '已取消', canceled: '已取消', completed: '已完成', succeeded: '已完成', success: '已完成', done: '已完成', failed: '失败', error: '失败', rejected: '已拒绝', idle: '空闲' };
-      const KIND_NAMES = { report: '生成', trigger: '生成', generate: '生成', rerun: '重发成品', resend: '重发成品' };
+      const KIND_NAMES = { report: '生成', trigger: '生成', generate: '生成', rerun: '重发成品', resend: '重发成品', rerender: '换主题重绘' };
       const state = { ready: false, disposed: false, actionBusy: false, overviewBusy: false, listLoading: false, pending: 0, page: 1, pages: 1, listToken: 0, modalToken: 0, imageToken: 0, modalRow: null, imageBusy: false, overviewStamp: null, reportsDirty: false, timer: null };
       let bridge;
       let queue = Promise.resolve();
-      let filters = { group_id: '', date_from: '', date_to: '' };
+      let filters = { group_id: '', date_from: '', date_to: '', search: '', report_type: '', sort_order: 'desc' };
       let reportGroups = [];
       let overviewGroups = [];
+      let themeEntries = [];
       let returnFocus = null;
       const blobURLs = new Set();
       class StaleRequest extends Error {}
@@ -186,7 +195,8 @@
 
       function syncControls() {
         const locked = !state.ready || state.actionBusy;
-        for (const id of ['generate-group', 'generate-day', 'generate-theme', 'filter-group', 'date-from', 'date-to', 'apply-filter', 'refresh', 'overview-link']) $(id).disabled = locked;
+        for (const id of ['generate-group', 'generate-day', 'generate-theme', 'filter-group', 'filter-search', 'filter-type', 'filter-sort', 'date-from', 'date-to', 'apply-filter', 'refresh', 'overview-link']) $(id).disabled = locked;
+        $('rerender-theme').disabled = locked || $('rerender').dataset.invalid === 'true';
         for (const button of document.querySelectorAll('[data-mutation]')) button.disabled = locked || button.dataset.invalid === 'true';
         $('generate').disabled = locked || !validGroup($('generate-group').value);
         $('previous').disabled = locked || state.page <= 1;
@@ -244,10 +254,12 @@
         if (!state.ready || state.disposed || state.actionBusy) return;
         if (!validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
         if ((name === 'rerun' || name === 'delete') && !validRevision(args.revision)) { notice('存档版本缺失，请刷新列表后重试。', true); return; }
+        if (name === 'rerender' && !themeEntries.some(entry => object(entry) && entry.key === args.theme)) { notice('请选择有效的重绘主题。', true); return; }
         state.actionBusy = true;
         syncControls();
         notice(`${label}：请在宿主确认框中确认（如有），正在等待结果…`);
         let deleted = false;
+        let replaced = false;
         try {
           const result = await call('action', name, args);
           if (state.disposed) return;
@@ -259,6 +271,7 @@
           } else {
             const accepted = result.accepted === true;
             notice(`${accepted ? '已接受' : '未接受'}：${text(result.message || result.status)}${accepted ? ' 请查看 WebUI 任务状态；接受不代表已完成。' : ''}`, !accepted);
+            if (name === 'rerender' && accepted) { replaced = true; closeModal(); }
           }
         } catch (error) {
           if (!(error instanceof StaleRequest)) notice(`${label}未完成或确认已取消：${text(error.message)}。若请求已发送，请先刷新状态再重试，避免重复操作。`, true);
@@ -266,7 +279,7 @@
           state.actionBusy = false;
           if (!state.disposed) {
             syncControls();
-            if (deleted) void loadReports(state.page);
+            if (deleted || replaced) void loadReports(state.page);
             void loadOverview();
           }
         }
@@ -311,7 +324,8 @@
           if (!object(result)) throw new Error('状态响应格式不正确');
           overviewGroups = Array.isArray(result.groups) ? result.groups : [];
           renderGroups();
-          replaceOptions($('generate-theme'), Array.isArray(result.themes) ? result.themes : [], '默认主题', 'key', 'label');
+          themeEntries = Array.isArray(result.themes) ? result.themes : [];
+          replaceOptions($('generate-theme'), themeEntries, '默认主题', 'key', 'label');
           $('active-count').textContent = `WebUI 活跃任务：${text(result.active_count)}`;
           $('task-status').textContent = `仅 WebUI：${text(result.status)} · 更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
           $('task-progress').value = typeof result.progress === 'number' && Number.isFinite(result.progress) ? Math.max(0, Math.min(100, result.progress)) : 0;
@@ -442,6 +456,8 @@
         state.modalToken += 1;
         state.modalRow = null;
         state.imageBusy = false;
+        $('rerender-row').hidden = true;
+        $('rerender-note').hidden = true;
         releaseImages();
         const wasOpen = !$('overlay').hidden;
         $('overlay').hidden = true;
@@ -468,6 +484,8 @@
         $('modal-state').textContent = '正在读取报告详情…';
         $('detail-stats').replaceChildren();
         $('detail-actions').replaceChildren();
+        $('rerender-row').hidden = true;
+        $('rerender-note').hidden = true;
         $('analysis-text').textContent = '';
         $('analysis-section').hidden = true;
         $('analysis-section').open = false;
@@ -494,6 +512,16 @@
             $('analysis-section').hidden = false;
           }
           $('detail-actions').append(reportActions(detail));
+          replaceOptions($('rerender-theme'), themeEntries, '选择主题', 'key', 'label');
+          $('rerender-theme').value = typeof detail.theme === 'string' ? detail.theme : '';
+          const canRerender = detail.has_context === true;
+          $('rerender').dataset.invalid = String(!canRerender);
+          $('rerender-row').hidden = false;
+          $('rerender-note').hidden = false;
+          $('rerender-note').textContent = canRerender
+            ? '重绘使用已存分析与渲染上下文重新出图并替换存档，不消耗模型额度、不发送群消息。'
+            : '该存档没有渲染上下文（旧版生成或上下文过大未保存），仅可重发或重新生成。';
+          syncControls();
           $('load-image').disabled = detail.has_image !== true;
           $('modal-state').textContent = detail.has_image === true ? '详情已加载。原图按块顺序读取，可关闭弹窗停止后续读取。' : '仅 HTML 报告：没有可预览的原图。本页不渲染存档 HTML，仍可重发成品到原群。';
           if (preview && detail.has_image === true) void loadOriginal();
@@ -590,7 +618,9 @@
         const from = $('date-from').value;
         const to = $('date-to').value;
         if (from && to && from > to) { notice('起始日期不能晚于结束日期。', true); return; }
-        filters = { group_id: $('filter-group').value, date_from: from, date_to: to };
+        filters = { group_id: $('filter-group').value, date_from: from, date_to: to,
+                    search: $('filter-search').value.trim(), report_type: $('filter-type').value,
+                    sort_order: $('filter-sort').value };
         void loadReports(1);
       }
       $('apply-filter').addEventListener('click', applyFilters);
@@ -601,6 +631,11 @@
       $('next').addEventListener('click', () => { void loadReports(state.page + 1); });
       $('refresh').addEventListener('click', () => { void loadReports(state.page); void loadOverview(); });
       $('generate-group').addEventListener('change', syncControls);
+      $('rerender').addEventListener('click', () => {
+        const row = state.modalRow;
+        if (!row) return;
+        void performAction('rerender', { ...reportArgs(row), theme: $('rerender-theme').value }, '换主题重绘');
+      });
       $('generate').addEventListener('click', () => {
         void performAction('trigger', { group_id: $('generate-group').value, day: $('generate-day').value, theme: $('generate-theme').value }, '生成报告');
       });

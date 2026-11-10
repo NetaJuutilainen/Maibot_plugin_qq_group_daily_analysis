@@ -33,9 +33,10 @@ class ReportStoreTest(unittest.TestCase):
         self.data = Path(self.temp.name)
         self.store = ReportStore(self.data)
 
-    def save(self, group='123', day=DAY, image=None, **meta):
+    def save(self, group='123', day=DAY, image=None, context=None, **meta):
         return self.store.save(group, day, encoded_image() if image is None else image, '<html>synthetic</html>',
-                               {'group_name': '测试群', 'theme': 'atri', 'message_count': 20, 'participant_count': 3, **meta})
+                               {'group_name': '测试群', 'theme': 'atri', 'message_count': 20, 'participant_count': 3, **meta},
+                               context)
 
     def test_query_has_no_write_side_effect(self):
         self.assertEqual(self.store.list_reports()['total'], 0)
@@ -120,6 +121,29 @@ class ReportStoreTest(unittest.TestCase):
         for kwargs in [{'page': 0}, {'page': True}, {'page_size': 13}, {'date_from': DAY, 'date_to': '2020-01-01'}]:
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 self.store.list_reports(**kwargs)
+
+    def test_search_type_and_sort(self):
+        self.save(group='123', theme='atri')
+        self.save(group='456', day=(date.today() - timedelta(days=1)).isoformat(), image='', theme='simple')
+        self.assertEqual(self.store.list_reports(search='456')['total'], 1)
+        self.assertEqual(self.store.list_reports(search='SIMPLE')['total'], 1)
+        self.assertEqual(self.store.list_reports(report_type='html')['total'], 1)
+        self.assertEqual(self.store.list_reports(report_type='image')['total'], 1)
+        self.assertEqual(self.store.list_reports(sort_order='asc')['items'][0]['group_id'], '123')
+        self.assertEqual(self.store.list_reports(sort_order='desc')['items'][0]['group_id'], '456')
+        for kwargs in [{'search': 'x' * 101}, {'report_type': 'comic'}, {'sort_order': 'up'}]:
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                self.store.list_reports(**kwargs)
+
+    def test_context_roundtrip_and_cap(self):
+        meta = self.save(context={'sample': [{'t': '你好'}]})
+        self.assertTrue(meta['has_context'])
+        self.assertEqual(self.store.read_context('123', DAY)['sample'][0]['t'], '你好')
+        oversized = self.save(context={'blob': 'x' * (ReportStore.MAX_CONTEXT_BYTES + 1)})
+        self.assertFalse(oversized['has_context'])
+        with self.assertRaises(ValueError):
+            self.store.read_context('123', DAY)
+        self.assertFalse(self.save()['has_context'])
 
     def test_path_traversal_devices_dates_and_kinds(self):
         for group in ['../123', 'a/b', 'a\\b', '.', '', 'a:b', 'CON', 'lpt1', 'x' * 129]:

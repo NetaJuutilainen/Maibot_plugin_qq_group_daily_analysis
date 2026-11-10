@@ -58,10 +58,10 @@ class ReportLibraryTest(unittest.IsolatedAsyncioTestCase):
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    def save(self, day=DAY, image=True):
+    def save(self, day=DAY, image=True, context=None):
         return self.p._report_store.save('123', day, png_base64() if image else '', '<html>report</html>',
                                          {'group_name': '测试群', 'stream_id': 'obsolete', 'theme': 'atri',
-                                          'message_count': 20, 'participant_count': 3})
+                                          'message_count': 20, 'participant_count': 3}, context)
 
     async def wait_for_operation(self):
         tasks = list(self.p._webui_tasks.values())
@@ -174,6 +174,31 @@ class ReportLibraryTest(unittest.IsolatedAsyncioTestCase):
         await self.wait_for_operation()
         self.assertEqual(self.p._webui_operations['123']['status'], 'failed')
         self.p.ctx.send.image.assert_not_awaited()
+
+    async def test_rerender_replaces_archive_without_llm_or_send(self):
+        context = {'chat_name': '测试群', 'day': DAY, 'message_count': 20, 'participant_count': 3,
+                   'emoji_count': 0, 'total_characters': 100, 'most_active_period': '20点',
+                   'chart_data': [], 'user_stats': {}, 'user_names': {}, 'avatars': {}, 'sample': []}
+        meta = self.save(context=context)
+        self.p._render_daily = Mock(return_value='<html>rerendered</html>')
+        self.p._call_llm_json = AsyncMock(side_effect=AssertionError('重绘不得调用模型'))
+        self.assertTrue((await self.p.webui_rerender('123', DAY, 'bluearchive', meta['revision']))['accepted'])
+        await self.wait_for_operation()
+        self.assertEqual(self.p._webui_operations['123']['status'], 'succeeded')
+        current = self.p._report_store.detail('123', DAY)
+        self.assertEqual(current['theme'], 'bluearchive')
+        self.assertNotEqual(current['revision'], meta['revision'])
+        self.assertTrue(current['has_context'])
+        self.assertEqual(self.p._render_daily.call_args_list[0].args[2], 'bluearchive')
+        self.p.ctx.send.image.assert_not_awaited()
+        self.p._call_llm_json.assert_not_awaited()
+        self.assertFalse((await self.p.webui_rerender('123', DAY, 'bluearchive', meta['revision']))['accepted'])
+        self.assertFalse((await self.p.webui_rerender('123', DAY, 'unknown', current['revision']))['accepted'])
+
+    async def test_rerender_rejected_without_context(self):
+        meta = self.save()
+        self.assertFalse((await self.p.webui_rerender('123', DAY, 'atri', meta['revision']))['accepted'])
+        self.assertEqual(self.p._tasks, [])
 
     async def test_stale_resend_and_delete_are_rejected(self):
         old = self.save()

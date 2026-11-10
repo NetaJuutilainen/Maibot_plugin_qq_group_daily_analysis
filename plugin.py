@@ -2787,7 +2787,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         }
         try:
             await asyncio.to_thread(self._report_store.save, str(chat.get("group_id") or ""),
-                                    day, image, html_text, metadata)
+                                    day, image, html_text, metadata, context)
         except Exception as exc:
             self.ctx.logger.warning("[weekly] 报告存档失败，仍继续发送: %s", type(exc).__name__)
 
@@ -2871,8 +2871,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         }
 
     @API("reports", version="1")
-    async def webui_reports(self, group_id: str = "", date_from: str = "", date_to: str = "", page: int = 1) -> dict:
-        return await asyncio.to_thread(self._report_store.list_reports, group_id, date_from, date_to, page)
+    async def webui_reports(self, group_id: str = "", date_from: str = "", date_to: str = "", page: int = 1,
+                            search: str = "", report_type: str = "", sort_order: str = "desc") -> dict:
+        return await asyncio.to_thread(self._report_store.list_reports, group_id, date_from, date_to, page,
+                                       12, search, report_type, sort_order)
 
     @API("report_detail", version="1")
     async def webui_report_detail(self, group_id: str, day: str) -> dict:
@@ -2935,6 +2937,45 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
         return self._start_webui_operation(group_id, day, "resend", resend)
 
+    @API("rerender", version="1")
+    async def webui_rerender(self, group_id: str, day: str, theme: str, revision: str = "") -> dict:
+        try:
+            stream_id, _ = self._webui_group(group_id)
+            meta = await asyncio.to_thread(self._report_store.detail, group_id, day)
+            if not revision or revision != meta["revision"]:
+                raise ValueError("报告已更新，请刷新后重绘")
+            if theme not in THEME_REGISTRY:
+                raise ValueError("未知日报主题")
+            if not meta.get("has_context"):
+                raise ValueError("该存档没有渲染上下文")
+        except (OSError, TypeError, ValueError):
+            return {"accepted": False, "status": "rejected",
+                    "message": "报告已更新/删除、缺少渲染上下文或主题无效；旧存档仅可重发或重新生成"}
+
+        async def rerender(state):
+            state["stage"] = "用已存分析换主题重绘（不消耗模型额度）"
+            started = time.monotonic()
+            context = await asyncio.to_thread(self._report_store.read_context, group_id, day)
+            analysis = meta.get("analysis") or {"topics": [], "titles": [], "quotes": [], "quality": None}
+            try:
+                await self._prefetch_profile_images(analysis.get("titles") or [])
+            except Exception as exc:
+                self.ctx.logger.warning("[weekly] 重绘人格水印图预取失败: %s", type(exc).__name__)
+            acfg = self._cfg().analysis
+            html_raw = self._render_daily(context, analysis, theme)
+            html_text = self._inline_static_assets(await self._inline_avatars(html_raw, context))
+            lite_raw = self._render_daily(context, analysis, theme, max_items=(4, 4, 3))
+            html_lite = self._inline_static_assets(await self._inline_avatars(lite_raw, context))
+            image, html_text = await self._render_report_image(html_text, html_lite, acfg)
+            metadata = {key: meta[key] for key in ("group_name", "stream_id", "message_count",
+                                                   "participant_count", "model_tasks") if key in meta}
+            metadata.update(theme=theme, version=meta.get("version", ""), analysis=analysis,
+                            elapsed_seconds=round(time.monotonic() - started, 2))
+            await asyncio.to_thread(self._report_store.save, group_id, day, image, html_text, metadata, context)
+            return "ok"
+
+        return self._start_webui_operation(group_id, day, "rerender", rerender)
+
     @API("delete", version="1")
     async def webui_delete(self, group_id: str, day: str, revision: str = "") -> dict:
         if not revision:
@@ -2953,87 +2994,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         task.cancel()
         return {"accepted": True, "status": "cancelling", "message": "已请求取消；已提交的模型请求、存档和发送无法撤回"}
 
-    async def _generate_daily_and_send(self, stream_id: str, day: str, theme: str, mark_sent: bool = True) -> str:
-        """生成并发送日报。返回 ok / failed（已向群里发失败提示）/ insufficient（数据不足）。"""
-        started = time.monotonic()
-        context = self._daily_context(stream_id, day)
-        if context is None:
-            return "insufficient"
-        await self._attach_avatars(stream_id, context)
-        self.ctx.logger.info("[weekly] 生成日报: %s %s（%s 条消息，主题 %s）", context["chat_name"], day, context["message_count"], theme)
-        acfg = self._cfg().analysis
-        analysis: dict[str, Any] = {"topics": [], "titles": [], "quotes": [], "quality": None}
-        sample_text = self._sample_messages_text(context, acfg.max_sample_messages)
-        if sample_text:
-            # 四路 LLM 分析并发执行（对齐原版 asyncio.gather），总耗时 = 最慢一路
-            async def _timed(key: str, coro) -> Any:
-                t0 = time.monotonic()
-                try:
-                    r = await coro
-                    self.ctx.logger.info("[weekly] LLM %s 完成 (%.1fs)", key, time.monotonic() - t0)
-                    return r
-                except Exception as exc:
-                    self.ctx.logger.warning("[weekly] LLM %s 异常 (%.1fs): %s", key, time.monotonic() - t0, exc)
-                    return None
-
-            jobs: dict[str, Any] = {}
-            chunks = self._split_sample_chunks(sample_text)
-            if len(chunks) > 1:
-                self.ctx.logger.info("[weekly] 聊天记录较长，启用分段-合并分析（%d 段）", len(chunks))
-            if acfg.topic_analysis_enabled:
-                jobs["topics"] = _timed("话题分析", self._analyze_topics_multi(context, chunks, acfg))
-            if acfg.user_title_analysis_enabled:
-                jobs["titles"] = _timed("称号分析", self._analyze_titles(context, acfg))
-            if acfg.golden_quote_analysis_enabled:
-                jobs["quotes"] = _timed("金句分析", self._analyze_quotes_multi(context, chunks, acfg))
-            if acfg.chat_quality_analysis_enabled:
-                jobs["quality"] = _timed("锐评分析", self._analyze_quality_multi(context, chunks, acfg))
-            if jobs:
-                keys = list(jobs.keys())
-                values = await asyncio.gather(*jobs.values())
-                res = dict(zip(keys, values))
-                analysis["topics"] = res.get("topics") or []
-                analysis["titles"] = res.get("titles") or []
-                analysis["quotes"] = res.get("quotes") or []
-                analysis["quality"] = res.get("quality") or None
-                if not analysis["quotes"]:
-                    # 金句分析失败/为空时的兜底：收进当天最长的两条原话（对齐原版的保底出图策略）
-                    analysis["quotes"] = [
-                        {
-                            "sender": u["n"],
-                            "content": u["t"],
-                            "reason": "\n" + "今天最长的一段话，先收进宝藏瓶！",
-                        }
-                        for u in sorted(context["sample"], key=lambda u: len(u["t"]), reverse=True)[:2]
-                    ]
-        # 预取称号卡人格水印图（按本批称号的 MBTI 去重下载，内联缓存）——必须在 _render_daily 之前
-        try:
-            await self._prefetch_profile_images(analysis.get("titles") or [])
-        except Exception as exc:
-            self.ctx.logger.warning("[weekly] 人格水印图预取失败: %s", exc)
-        html_raw = self._render_daily(context, analysis, theme)
-        # HTML 版本：素材/字体全部内联（零外链）。
-        # 历史教训（2026-10-11 月球群）：曾另备一份"只内联头像、装饰素材保留外链"的精简版给云端渲染，
-        # 云端 t2i 去拉 tc.ciallo.ccwu.cc 的素材失败时**仍然出图**，于是产出"美术素材全破图"的日报，
-        # 而且因为返回了图、不会降级到内联兜底档。现在统一只用全内联版：
-        # 代价是 POST 体积略大、云端渲染稍慢；换来的是素材完整性不再依赖第三方站点可达性。
-        html_text = self._inline_static_assets(await self._inline_avatars(html_raw, context))
-        # HTML 直发模式：零渲染开销（对齐原版 output_format=html），用自包含的内联版
-        if str(getattr(acfg, "output_format", "image") or "image").strip().lower() == "html":
-            await self._archive_report(stream_id, day, theme, context, analysis, "", html_text, started)
-            if await self._send_daily_html(stream_id, context, html_text, day):
-                _chat0 = self._stats.get("chats", {}).get(stream_id)
-                if mark_sent and isinstance(_chat0, dict):
-                    _chat0["last_daily"] = day
-                    self._dirty = True
-                return "ok"
-            self.ctx.logger.warning("[weekly] HTML 直发失败，回落到图片渲染")
-        # 在线渲染耗时（字体下载+素材）会超过 RPC 默认 30s 超时，
-        # 因此绕过便捷代理，用 call_capability 显式给足 RPC 预算。
-        # 渲染链（前两条属云端渲染，需在配置里显式开启，默认关闭）：云端PNG → 云端JPEG → 本地全量 → 本地稳定 → 本地精简
-        # 云端两条都送全内联 HTML（素材零外链），避免第三方 t2i 取不到镜像素材而产出破图
-        lite_raw = self._render_daily(context, analysis, theme, max_items=(4, 4, 3))
-        html_lite = self._inline_static_assets(await self._inline_avatars(lite_raw, context))
+    async def _render_report_image(self, html_text: str, html_lite: str, acfg) -> tuple[str, str]:
+        """渲染成品图；返回 (image, 实际出图所用 HTML)。精简档出图时 HTML 同步换成精简档。"""
         try:
             scale_r1 = float(getattr(acfg, "render_scale", 1.5) or 1.5)
         except (TypeError, ValueError):
@@ -3128,6 +3090,90 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     self.ctx.logger.warning("[weekly] 日报本地精简档渲染失败: %s", last_err)
         if not image:
             raise RuntimeError(last_err or "渲染失败")
+        return image, html_text
+
+    async def _generate_daily_and_send(self, stream_id: str, day: str, theme: str, mark_sent: bool = True) -> str:
+        """生成并发送日报。返回 ok / failed（已向群里发失败提示）/ insufficient（数据不足）。"""
+        started = time.monotonic()
+        context = self._daily_context(stream_id, day)
+        if context is None:
+            return "insufficient"
+        await self._attach_avatars(stream_id, context)
+        self.ctx.logger.info("[weekly] 生成日报: %s %s（%s 条消息，主题 %s）", context["chat_name"], day, context["message_count"], theme)
+        acfg = self._cfg().analysis
+        analysis: dict[str, Any] = {"topics": [], "titles": [], "quotes": [], "quality": None}
+        sample_text = self._sample_messages_text(context, acfg.max_sample_messages)
+        if sample_text:
+            # 四路 LLM 分析并发执行（对齐原版 asyncio.gather），总耗时 = 最慢一路
+            async def _timed(key: str, coro) -> Any:
+                t0 = time.monotonic()
+                try:
+                    r = await coro
+                    self.ctx.logger.info("[weekly] LLM %s 完成 (%.1fs)", key, time.monotonic() - t0)
+                    return r
+                except Exception as exc:
+                    self.ctx.logger.warning("[weekly] LLM %s 异常 (%.1fs): %s", key, time.monotonic() - t0, exc)
+                    return None
+
+            jobs: dict[str, Any] = {}
+            chunks = self._split_sample_chunks(sample_text)
+            if len(chunks) > 1:
+                self.ctx.logger.info("[weekly] 聊天记录较长，启用分段-合并分析（%d 段）", len(chunks))
+            if acfg.topic_analysis_enabled:
+                jobs["topics"] = _timed("话题分析", self._analyze_topics_multi(context, chunks, acfg))
+            if acfg.user_title_analysis_enabled:
+                jobs["titles"] = _timed("称号分析", self._analyze_titles(context, acfg))
+            if acfg.golden_quote_analysis_enabled:
+                jobs["quotes"] = _timed("金句分析", self._analyze_quotes_multi(context, chunks, acfg))
+            if acfg.chat_quality_analysis_enabled:
+                jobs["quality"] = _timed("锐评分析", self._analyze_quality_multi(context, chunks, acfg))
+            if jobs:
+                keys = list(jobs.keys())
+                values = await asyncio.gather(*jobs.values())
+                res = dict(zip(keys, values))
+                analysis["topics"] = res.get("topics") or []
+                analysis["titles"] = res.get("titles") or []
+                analysis["quotes"] = res.get("quotes") or []
+                analysis["quality"] = res.get("quality") or None
+                if not analysis["quotes"]:
+                    # 金句分析失败/为空时的兜底：收进当天最长的两条原话（对齐原版的保底出图策略）
+                    analysis["quotes"] = [
+                        {
+                            "sender": u["n"],
+                            "content": u["t"],
+                            "reason": "\n" + "今天最长的一段话，先收进宝藏瓶！",
+                        }
+                        for u in sorted(context["sample"], key=lambda u: len(u["t"]), reverse=True)[:2]
+                    ]
+        # 预取称号卡人格水印图（按本批称号的 MBTI 去重下载，内联缓存）——必须在 _render_daily 之前
+        try:
+            await self._prefetch_profile_images(analysis.get("titles") or [])
+        except Exception as exc:
+            self.ctx.logger.warning("[weekly] 人格水印图预取失败: %s", exc)
+        html_raw = self._render_daily(context, analysis, theme)
+        # HTML 版本：素材/字体全部内联（零外链）。
+        # 历史教训（2026-10-11 月球群）：曾另备一份"只内联头像、装饰素材保留外链"的精简版给云端渲染，
+        # 云端 t2i 去拉 tc.ciallo.ccwu.cc 的素材失败时**仍然出图**，于是产出"美术素材全破图"的日报，
+        # 而且因为返回了图、不会降级到内联兜底档。现在统一只用全内联版：
+        # 代价是 POST 体积略大、云端渲染稍慢；换来的是素材完整性不再依赖第三方站点可达性。
+        html_text = self._inline_static_assets(await self._inline_avatars(html_raw, context))
+        # HTML 直发模式：零渲染开销（对齐原版 output_format=html），用自包含的内联版
+        if str(getattr(acfg, "output_format", "image") or "image").strip().lower() == "html":
+            await self._archive_report(stream_id, day, theme, context, analysis, "", html_text, started)
+            if await self._send_daily_html(stream_id, context, html_text, day):
+                _chat0 = self._stats.get("chats", {}).get(stream_id)
+                if mark_sent and isinstance(_chat0, dict):
+                    _chat0["last_daily"] = day
+                    self._dirty = True
+                return "ok"
+            self.ctx.logger.warning("[weekly] HTML 直发失败，回落到图片渲染")
+        # 在线渲染耗时（字体下载+素材）会超过 RPC 默认 30s 超时，
+        # 因此绕过便捷代理，用 call_capability 显式给足 RPC 预算。
+        # 渲染链（前两条属云端渲染，需在配置里显式开启，默认关闭）：云端PNG → 云端JPEG → 本地全量 → 本地稳定 → 本地精简
+        # 云端两条都送全内联 HTML（素材零外链），避免第三方 t2i 取不到镜像素材而产出破图
+        lite_raw = self._render_daily(context, analysis, theme, max_items=(4, 4, 3))
+        html_lite = self._inline_static_assets(await self._inline_avatars(lite_raw, context))
+        image, html_text = await self._render_report_image(html_text, html_lite, acfg)
         await self._archive_report(stream_id, day, theme, context, analysis, image, html_text, started)
         try:
             if acfg.show_report_caption and acfg.report_caption.strip():

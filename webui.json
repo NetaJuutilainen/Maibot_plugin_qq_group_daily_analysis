@@ -20,7 +20,10 @@
             "group_id": {"type": "string", "max_length": 128},
             "date_from": {"type": "string", "max_length": 10},
             "date_to": {"type": "string", "max_length": 10},
-            "page": {"type": "integer", "minimum": 1, "maximum": 1000000}
+            "page": {"type": "integer", "minimum": 1, "maximum": 1000000},
+            "search": {"type": "string", "max_length": 100},
+            "report_type": {"type": "string", "choices": ["image", "html"], "max_length": 5},
+            "sort_order": {"type": "string", "choices": ["desc", "asc"], "max_length": 4}
           }
         },
         "detail": {
@@ -71,6 +74,17 @@
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
             "day": {"type": "string", "required": true, "max_length": 10},
+            "revision": {"type": "string", "required": true, "max_length": 128}
+          }
+        },
+        "rerender": {
+          "api": "rerender",
+          "version": "1",
+          "confirmation": "将用已存分析结果以所选主题重新渲染并替换这份存档，不消耗模型额度、不发送群消息。确认重绘？",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "required": true, "max_length": 10},
+            "theme": {"type": "string", "required": true, "max_length": 64},
             "revision": {"type": "string", "required": true, "max_length": 128}
           }
         },

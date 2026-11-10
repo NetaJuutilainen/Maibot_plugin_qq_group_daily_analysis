@@ -20,6 +20,7 @@ class ReportStore:
     MAX_IMAGE_BYTES = 32 * 1024 * 1024
     MAX_HTML_BYTES = 32 * 1024 * 1024
     MAX_META_BYTES = 128 * 1024
+    MAX_CONTEXT_BYTES = 4 * 1024 * 1024
     MAX_PIXELS = 40_000_000
     SUMMARY_FIELDS = ('group_id', 'group_name', 'day', 'theme', 'created_at', 'revision',
                       'has_image', 'message_count', 'participant_count', 'elapsed_seconds', 'version')
@@ -130,7 +131,7 @@ class ReportStore:
                     return raw, jpeg
                 thumb.thumbnail((max(1, thumb.width * 3 // 4), max(1, thumb.height * 3 // 4)))
 
-    def save(self, group_id, day, image_b64, html_text, metadata):
+    def save(self, group_id, day, image_b64, html_text, metadata, context=None):
         directory = self._directory(group_id, day)
         if not isinstance(html_text, str) or not html_text:
             raise ValueError('报告 HTML 不能为空')
@@ -145,6 +146,15 @@ class ReportStore:
                     theme=str(metadata.get('theme') or '')[:200], version=str(metadata.get('version') or '')[:200],
                     message_count=metadata.get('message_count', 0), participant_count=metadata.get('participant_count', 0),
                     elapsed_seconds=metadata.get('elapsed_seconds', 0))
+        context_bytes = b''
+        if context is not None:
+            try:
+                context_bytes = json.dumps(context, ensure_ascii=False, allow_nan=False).encode('utf-8')
+            except (TypeError, ValueError):
+                context_bytes = b''
+            if len(context_bytes) > self.MAX_CONTEXT_BYTES:
+                context_bytes = b''
+        meta['has_context'] = bool(context_bytes)
         encoded = json.dumps(meta, ensure_ascii=False, allow_nan=False).encode('utf-8')
         if len(encoded) > self.MAX_META_BYTES:
             raise ValueError('报告元数据超过 128 KiB')
@@ -156,6 +166,8 @@ class ReportStore:
             moved = False
             try:
                 (staging / 'report.html').write_bytes(html)
+                if context_bytes:
+                    (staging / 'context.json').write_bytes(context_bytes)
                 if image is not None:
                     (staging / 'report.png').write_bytes(image)
                     (staging / 'thumb.jpg').write_bytes(thumb)
@@ -202,7 +214,22 @@ class ReportStore:
         result.sort(key=lambda row: (row['created_at'], row['day'], row['group_id']), reverse=True)
         return result
 
-    def list_reports(self, group_id='', date_from='', date_to='', page=1, page_size=12):
+    def read_context(self, group_id, day):
+        with self._lock:
+            directory = self._directory(group_id, day)
+            meta = self._read_meta(directory)
+            if not meta.get('has_context'):
+                raise ValueError('该存档没有渲染上下文，无法免 Token 重绘')
+            path = self._file(directory, 'context.json')
+            if path.stat().st_size > self.MAX_CONTEXT_BYTES:
+                raise ValueError('渲染上下文过大')
+            context = json.loads(path.read_text(encoding='utf-8'))
+            if not isinstance(context, dict):
+                raise ValueError('渲染上下文无效')
+            return context
+
+    def list_reports(self, group_id='', date_from='', date_to='', page=1, page_size=12,
+                     search='', report_type='', sort_order='desc'):
         if group_id:
             self._group(group_id)
         if date_from:
@@ -213,13 +240,25 @@ class ReportStore:
             raise ValueError('起始日期晚于结束日期')
         if type(page) is not int or not 1 <= page <= 1_000_000 or type(page_size) is not int or not 1 <= page_size <= 12:
             raise ValueError('分页参数无效')
+        if not isinstance(search, str) or len(search) > 100:
+            raise ValueError('搜索词无效')
+        if report_type not in ('', 'image', 'html'):
+            raise ValueError('报告类型无效')
+        if sort_order not in ('desc', 'asc'):
+            raise ValueError('排序方向无效')
+        keyword = search.strip().casefold()
         with self._lock:
             all_rows = self._catalog()
             groups = {}
             for row in all_rows:
                 groups.setdefault(row['group_id'], row['group_name'])
             rows = [row for row in all_rows if (not group_id or row['group_id'] == group_id)
-                    and (not date_from or row['day'] >= date_from) and (not date_to or row['day'] <= date_to)]
+                    and (not date_from or row['day'] >= date_from) and (not date_to or row['day'] <= date_to)
+                    and (not report_type or row['has_image'] == (report_type == 'image'))
+                    and (not keyword or any(keyword in str(row[key]).casefold()
+                                            for key in ('group_name', 'group_id', 'day', 'theme')))]
+            if sort_order == 'asc':
+                rows.reverse()
             start = (page - 1) * page_size
             return {'items': [{key: row[key] for key in self.SUMMARY_FIELDS} for row in rows[start:start + page_size]],
                     'total': len(rows), 'page': page, 'pages': (len(rows) + page_size - 1) // page_size,

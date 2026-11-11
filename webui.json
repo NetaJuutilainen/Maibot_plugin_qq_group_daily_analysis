@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
-  "required_capabilities": ["custom_pages", "declarative_basic"],
+  "required_capabilities": ["custom_pages", "declarative_basic", "image_upload"],
   "workspace_title": "群聊分析",
   "pages": [
     {
       "id": "report-library",
       "mode": "custom",
       "title": "报告库",
-      "description": "筛选与预览报告存档、重发及逐条删除。P1 状态仅包含从 WebUI 启动的任务。",
+      "description": "筛选与预览报告存档、重发及逐条删除；任务状态含 WebUI、命令与定时来源。",
       "placement": "workspace",
       "icon": "database",
       "entry": "webui/report_library.html",
@@ -91,7 +91,7 @@
         "delete": {
           "api": "delete",
           "version": "1",
-          "confirmation": "仅删除当前所选的一份报告存档，不删除任何群消息。此操作不可撤销，确认删除？",
+          "confirmation": "仅删除当前所选的一份报告存档，不删除任何群消息；若当日有漫画存档会一并删除。此操作不可撤销，确认删除？",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
             "day": {"type": "string", "required": true, "max_length": 10},
@@ -108,10 +108,135 @@
       }
     },
     {
+      "id": "comic-gallery",
+      "mode": "custom",
+      "title": "漫画廊",
+      "description": "把日报画成四格漫画/单幅海报（经麦麦绘图协作）；预览、重发、恢复进度与参考图管理。",
+      "placement": "workspace",
+      "icon": "puzzle",
+      "entry": "webui/comic_gallery.html",
+      "layout": "viewport",
+      "queries": {
+        "comic_overview": {"api": "comic_overview", "version": "1"},
+        "comics": {
+          "api": "comics",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "max_length": 128},
+            "date_from": {"type": "string", "max_length": 10},
+            "date_to": {"type": "string", "max_length": 10},
+            "page": {"type": "integer", "minimum": 1, "maximum": 1000000},
+            "search": {"type": "string", "max_length": 100},
+            "sort_order": {"type": "string", "choices": ["desc", "asc"], "max_length": 4}
+          }
+        },
+        "comic_detail": {
+          "api": "comic_detail",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "required": true, "max_length": 10}
+          }
+        },
+        "comic_thumb": {
+          "api": "comic_thumb",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "required": true, "max_length": 10},
+            "revision": {"type": "string", "required": true, "max_length": 128}
+          }
+        },
+        "comic_chunk": {
+          "api": "comic_chunk",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "required": true, "max_length": 10},
+            "offset": {"type": "integer", "required": true, "minimum": 0, "maximum": 33554432},
+            "revision": {"type": "string", "required": true, "max_length": 128}
+          }
+        },
+        "comic_ref_thumb": {
+          "api": "comic_ref_thumb",
+          "version": "1",
+          "parameters": {
+            "ref_id": {"type": "string", "required": true, "max_length": 32}
+          }
+        }
+      },
+      "actions": {
+        "draw": {
+          "api": "draw",
+          "version": "1",
+          "confirmation": "绘图会消耗麦麦绘图的额度，并把成图发往所选群（需该日已有日报存档）。确认开始画漫画？",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "max_length": 10},
+            "style": {"type": "string", "choices": ["four_panel", "poster"], "max_length": 16}
+          }
+        },
+        "comic_resume": {
+          "api": "comic_resume",
+          "version": "1",
+          "confirmation": "恢复只查证原任务进度并读取成图，不会重新提交绘图；若已存档则只重发。确认恢复进度？",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "required": true, "max_length": 10}
+          }
+        },
+        "comic_resend": {
+          "api": "comic_resend",
+          "version": "1",
+          "confirmation": "将这份漫画存档重新发送到原群，不重新绘图。确认重发？",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "required": true, "max_length": 10},
+            "revision": {"type": "string", "required": true, "max_length": 128}
+          }
+        },
+        "delete_comic": {
+          "api": "delete_comic",
+          "version": "1",
+          "confirmation": "仅删除这一份漫画存档，当日日报存档保留。此操作不可撤销，确认删除？",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "day": {"type": "string", "required": true, "max_length": 10},
+            "revision": {"type": "string", "required": true, "max_length": 128}
+          }
+        },
+        "upload_ref": {
+          "api": "upload_ref",
+          "version": "1",
+          "parameters": {
+            "upload_id": {"type": "string", "required": true, "max_length": 128}
+          }
+        },
+        "delete_ref": {
+          "api": "delete_ref",
+          "version": "1",
+          "confirmation": "删除这张参考图？之后的绘图将不再附带它。确认删除？",
+          "parameters": {
+            "ref_id": {"type": "string", "required": true, "max_length": 32}
+          }
+        },
+        "cancel": {
+          "api": "cancel",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128}
+          }
+        }
+      },
+      "uploads": {
+        "ref": {"action": "upload_ref", "image_max_edge": 4096}
+      }
+    },
+    {
       "id": "overview",
       "mode": "declarative",
       "title": "分析总览",
-      "description": "报告统计与近七天消息量；每5秒刷新，操作后自动刷新。P1 仅显示 WebUI 启动的任务。",
+      "description": "报告统计与近七天消息量；每5秒刷新，操作后自动刷新。任务状态含 WebUI、命令与定时来源。",
       "placement": "sidebar",
       "icon": "chart",
       "auto_refresh": true,
@@ -150,12 +275,12 @@
         },
         {
           "type": "card",
-          "label": "WebUI 任务状态 · P1",
+          "label": "任务状态",
           "children": [
-            {"type": "text", "value": "仅显示 WebUI 启动的任务，不包含命令或定时任务；不是完整任务历史。每5秒轮询，忙碌时跳过。"},
-            {"type": "stat", "label": "WebUI 活跃任务", "value": {"source": "overview", "field": "active_count"}},
-            {"type": "text", "label": "状态（仅 WebUI）", "value": {"source": "overview", "field": "status"}},
-            {"type": "progress", "label": "WebUI 任务进度", "value": {"source": "overview", "field": "progress"}}
+            {"type": "text", "value": "显示 WebUI、命令与定时启动的任务；每群仅保留最近状态，不是完整任务历史。每5秒轮询，忙碌时跳过。"},
+            {"type": "stat", "label": "活跃任务", "value": {"source": "overview", "field": "active_count"}},
+            {"type": "text", "label": "状态", "value": {"source": "overview", "field": "status"}},
+            {"type": "progress", "label": "任务进度", "value": {"source": "overview", "field": "progress"}}
           ]
         },
         {
@@ -167,7 +292,7 @@
             {"type": "input", "name": "theme", "label": "主题键（留空使用默认主题）", "value": ""},
             {"type": "text", "value": "当日重新生成统计滚动24小时；历史日期只用既有统计，不补造历史。生成会消耗模型额度并发送到所选群。取消按群生效，已发出的报告不会撤回；操作后请看上方状态。"},
             {"type": "button", "label": "立即生成", "action": "trigger", "variant": "primary"},
-            {"type": "button", "label": "取消该群 WebUI 任务", "action": "cancel", "variant": "muted"}
+            {"type": "button", "label": "取消该群任务", "action": "cancel", "variant": "muted"}
           ]
         },
         {

@@ -4,7 +4,7 @@
   "version": "1.5.0",
   "changelog": "CHANGELOG.md",
   "name": "群聊每日分析",
-  "description": "每天自动生成群聊日报：高光话题、神人称号、金句宝藏瓶、聊天质量锐评，12 套主题可选，支持上传 QQ 群相册。",
+  "description": "每天自动生成群聊日报：高光话题、神人称号、金句宝藏瓶、聊天质量锐评，12 套主题可选，支持上传 QQ 群相册；还能把日报画成四格漫画（需麦麦绘图插件）。",
   "author": {
     "name": "NetaJuutilainen",
     "url": "https://github.com/NetaJuutilainen"
@@ -43,7 +43,9 @@
     "render.html2png",
     "message.get_by_time_in_chat",
     "chat.get_avatar",
-    "webui.claim_upload"
+    "webui.claim_upload",
+    "api.call",
+    "api.get"
   ],
   "i18n": {
     "default_locale": "zh-CN"

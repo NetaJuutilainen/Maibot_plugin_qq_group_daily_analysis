@@ -86,9 +86,9 @@
     </section>
 
     <section class="panel" aria-labelledby="tasks-title">
-      <div class="section-heading"><h2 id="tasks-title">WebUI 任务状态 <span class="badge">P1</span></h2><span id="active-count" class="muted">等待状态</span></div>
-      <p class="hint">仅显示 WebUI 启动的任务，不含命令 / 定时任务；每群仅保留最近状态，不是完整任务历史。每5秒轮询，忙碌时跳过；取消不会撤回已发出的报告。</p>
-      <progress id="task-progress" value="0" max="100" aria-label="WebUI 任务进度"></progress>
+      <div class="section-heading"><h2 id="tasks-title">后台任务状态</h2><span id="active-count" class="muted">等待状态</span></div>
+      <p class="hint">显示 WebUI、命令与定时启动的任务；每群仅保留最近状态，不是完整任务历史。每5秒轮询，忙碌时跳过；取消不会撤回已发出的报告。</p>
+      <progress id="task-progress" value="0" max="100" aria-label="任务进度"></progress>
       <p id="task-status" class="muted" role="status">尚未读取</p>
       <div id="tasks" class="tasks"></div>
     </section>
@@ -143,8 +143,9 @@
       const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
       const TERMINAL = new Set(['completed', 'succeeded', 'success', 'done', 'failed', 'error', 'cancelled', 'canceled', 'rejected']);
       const STATUS_NAMES = { queued: '排队中', pending: '等待中', accepted: '已接受', running: '运行中', cancelling: '正在取消', cancelled: '已取消', canceled: '已取消', completed: '已完成', succeeded: '已完成', success: '已完成', done: '已完成', failed: '失败', error: '失败', rejected: '已拒绝', idle: '空闲' };
-      const KIND_NAMES = { report: '生成', trigger: '生成', generate: '生成', rerun: '重发成品', resend: '重发成品', rerender: '换主题重绘' };
-      const state = { ready: false, disposed: false, actionBusy: false, overviewBusy: false, listLoading: false, pending: 0, page: 1, pages: 1, listToken: 0, modalToken: 0, imageToken: 0, modalRow: null, imageBusy: false, overviewStamp: null, reportsDirty: false, timer: null };
+      const KIND_NAMES = { report: '生成', trigger: '生成', generate: '生成', rerun: '重发成品', resend: '重发成品', rerender: '换主题重绘', comic: '漫画', draw: '漫画' };
+      const SOURCE_NAMES = { webui: 'WebUI', command: '命令', schedule: '定时', auto: '日报联动' };
+      const state = { ready: false, disposed: false, actionBusy: false, overviewBusy: false, listLoading: false, pending: 0, page: 1, pages: 1, listToken: 0, modalToken: 0, imageToken: 0, modalRow: null, imageBusy: false, overviewStamp: null, reportsDirty: false, timer: null, busyGroups: new Set() };
       let bridge;
       let queue = Promise.resolve();
       let filters = { group_id: '', date_from: '', date_to: '', search: '', report_type: '', sort_order: 'desc' };
@@ -197,8 +198,12 @@
         const locked = !state.ready || state.actionBusy;
         for (const id of ['generate-group', 'generate-day', 'generate-theme', 'filter-group', 'filter-search', 'filter-type', 'filter-sort', 'date-from', 'date-to', 'apply-filter', 'refresh', 'overview-link']) $(id).disabled = locked;
         $('rerender-theme').disabled = locked || $('rerender').dataset.invalid === 'true';
-        for (const button of document.querySelectorAll('[data-mutation]')) button.disabled = locked || button.dataset.invalid === 'true';
-        $('generate').disabled = locked || !validGroup($('generate-group').value);
+        for (const button of document.querySelectorAll('[data-mutation]')) {
+          const busy = button.dataset.action !== 'cancel' && state.busyGroups.has(button.dataset.group);
+          button.disabled = locked || button.dataset.invalid === 'true' || busy;
+          button.title = busy ? '该群有进行中的任务，请等待完成或先取消' : '';
+        }
+        $('generate').disabled = locked || !validGroup($('generate-group').value) || state.busyGroups.has($('generate-group').value);
         $('previous').disabled = locked || state.page <= 1;
         $('next').disabled = locked || state.page >= state.pages;
         $('page-label').textContent = `第 ${state.page} / ${state.pages} 页`;
@@ -234,6 +239,8 @@
         button.type = 'button';
         button.dataset.mutation = 'true';
         button.dataset.invalid = String(invalid);
+        button.dataset.group = args.group_id || '';
+        button.dataset.action = name;
         button.disabled = invalid || state.actionBusy || !state.ready;
         button.addEventListener('click', () => { void performAction(name, args, label); });
         return button;
@@ -270,7 +277,7 @@
             if (deleted) closeModal();
           } else {
             const accepted = result.accepted === true;
-            notice(`${accepted ? '已接受' : '未接受'}：${text(result.message || result.status)}${accepted ? ' 请查看 WebUI 任务状态；接受不代表已完成。' : ''}`, !accepted);
+            notice(`${accepted ? '已接受' : '未接受'}：${text(result.message || result.status)}${accepted ? ' 请查看任务状态；接受不代表已完成。' : ''}`, !accepted);
             if (name === 'rerender' && accepted) { replaced = true; closeModal(); }
           }
         } catch (error) {
@@ -300,19 +307,24 @@
         }
         const names = new Map([...reportGroups, ...overviewGroups].filter(object).map(group => [group.group_id, group.group_name]));
         const rows = [];
+        const busy = new Set();
         for (const operation of latest.values()) {
           const row = element('div', undefined, 'task');
           const copy = element('div', undefined, 'task-copy');
-          copy.append(element('strong', `${text(names.get(operation.group_id) || operation.group_id, 100)} · ${text(operation.day)} · ${text(KIND_NAMES[operation.kind] || operation.kind)}`));
+          const sourceLabel = SOURCE_NAMES[operation.source] || operation.source;
+          copy.append(element('strong', `${text(names.get(operation.group_id) || operation.group_id, 100)} · ${text(operation.day)} · ${text(KIND_NAMES[operation.kind] || operation.kind)}${sourceLabel ? ' · ' + text(sourceLabel, 20) : ''}`));
           copy.append(element('p', `${text(STATUS_NAMES[operation.status] || operation.status)} · ${text(operation.stage)} · 开始 ${text(operation.started_at)}${operation.finished_at ? ' · 结束 ' + text(operation.finished_at) : ''}`, 'muted'));
           if (operation.error) copy.append(element('p', text(operation.error, 1600), 'task-error'));
           row.append(copy);
           if (operation.status && !TERMINAL.has(operation.status) && operation.status !== 'idle') {
+            busy.add(operation.group_id);
             row.append(mutationButton('取消该群任务', 'cancel', { group_id: operation.group_id }));
           }
           rows.push(row);
         }
-        $('tasks').replaceChildren(...(rows.length ? rows : [element('p', '暂无 WebUI 任务记录；命令和定时任务不在此显示。', 'muted')]));
+        state.busyGroups = busy;
+        $('tasks').replaceChildren(...(rows.length ? rows : [element('p', '暂无任务记录（含 WebUI、命令与定时任务）。', 'muted')]));
+        syncControls();
       }
 
       async function loadOverview() {
@@ -326,8 +338,8 @@
           renderGroups();
           themeEntries = Array.isArray(result.themes) ? result.themes : [];
           replaceOptions($('generate-theme'), themeEntries, '默认主题', 'key', 'label');
-          $('active-count').textContent = `WebUI 活跃任务：${text(result.active_count)}`;
-          $('task-status').textContent = `仅 WebUI：${text(result.status)} · 更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
+          $('active-count').textContent = `活跃任务：${text(result.active_count)}`;
+          $('task-status').textContent = `${text(result.status)} · 更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
           $('task-progress').value = typeof result.progress === 'number' && Number.isFinite(result.progress) ? Math.max(0, Math.min(100, result.progress)) : 0;
           const operations = Array.isArray(result.operations) ? result.operations : [];
           renderOperations(operations);

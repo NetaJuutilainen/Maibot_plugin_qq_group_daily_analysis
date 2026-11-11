@@ -19,6 +19,11 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from maibot_sdk import API, Command, Field, HookHandler, MaiBotPlugin, PluginConfigBase
 from maibot_sdk.types import HookMode
 
+from .comic import (
+    COMIC_STYLES, DRAWPIC_PLUGIN_ID, RECOVERABLE_STATUSES, ComicRequestBook, DrawpicClient,
+    DrawpicError, build_draw_prompt, new_request_id, normalize_storyboard, storyboard_prompt,
+)
+from .job_manager import JobManager
 from .report_store import ReportStore
 
 FONT_MIRROR = "https://tc.ciallo.ccwu.cc"
@@ -26,6 +31,7 @@ DAILY_SAMPLE_MAX = 1000
 DAILY_SAMPLE_TEXT_MAX = 300
 QUALITY_DIMENSIONS = ["活跃度", "话题丰富度", "友好氛围", "信息量"]
 QUALITY_COLORS = ["#4a9ff5", "#f5a34a", "#5ad07a", "#b07af5"]
+_COMIC_REF_RE = re.compile(r"[0-9a-f]{16}\.(?:png|jpg|webp)")
 
 _LOLI_FONTS = "https://fonts.loli.net"
 
@@ -575,12 +581,32 @@ class PromptsConfig(PluginConfigBase):
     )
 
 
+class ComicSectionConfig(PluginConfigBase):
+    """群聊漫画（P3）：经麦麦绘图插件 drawpic 2.x 公开协议把日报画成四格漫画/单幅海报。"""
+
+    __ui_label__ = "群聊漫画"
+    __ui_icon__ = "brush"
+    __ui_order__ = 6
+
+    enabled: bool = Field(default=False, description="启用群聊漫画（需安装并启用麦麦绘图插件 drawpic 2.x，且其联动开关允许插件调用）")
+    auto_after_daily: bool = Field(default=False, description="日报发送成功后自动追加漫画（仅对下方联动群列表内的群生效；列表留空则不自动）")
+    style: str = Field(default="four_panel", description="默认漫画风格：four_panel=四格漫画 / poster=单幅海报")
+    drawpic_style: str = Field(default="", description="传给麦麦绘图的风格预设名（留空=绘图插件当前默认风格）")
+    model: str = Field(default="", description="指定绘图模型完整名「实例名 / 模型名」（留空=绘图插件默认模型）")
+    max_wait_seconds: int = Field(default=300, description="单次等待绘图完成的最长秒数（超时保留进度，可在漫画廊恢复）", ge=60, le=3600)
+    use_reference_images: bool = Field(default=False, description="绘图时附带参考图（在漫画廊上传，最多 4 张，用于固定角色形象与画风）")
+    comic_caption: str = Field(default="🎨 今日群聊漫画出炉～", description="漫画图片前的提示文字（留空则只发图）")
+    groups: str = Field(default="", description="自动联动群列表，每行一个群号；留空=不自动联动", json_schema_extra={"rows": 4})
+    llm_model_task: str = Field(default="", description="分镜脚本用模型任务（留空跟随分析设置的默认任务）")
+
+
 class DailyAnalysisConfig(PluginConfigBase):
     plugin: PluginSectionConfig = Field(default_factory=PluginSectionConfig)
     report: ReportSectionConfig = Field(default_factory=ReportSectionConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
     album: AlbumSectionConfig = Field(default_factory=AlbumSectionConfig)
+    comic: ComicSectionConfig = Field(default_factory=ComicSectionConfig)
 
 
 class GroupDailyAnalysisPlugin(MaiBotPlugin):
@@ -643,8 +669,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     async def on_load(self) -> None:
         self._report_store = ReportStore(self.ctx.paths.data_dir)
-        self._webui_tasks: dict[str, asyncio.Task] = {}
-        self._webui_operations: dict[str, dict] = {}
+        self._jobs = JobManager(self._spawn, self.ctx.logger)
+        self._comic_book = ComicRequestBook(Path(self.ctx.paths.data_dir) / "comic_requests.json")
+        self._drawpic_probe = None
         self._stats = self._load_stats()
         self._stats_loaded = True
         try:
@@ -729,7 +756,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         self.ctx.logger.info("群聊每日分析插件已卸载")
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
-        pass
+        # 配置变更后重新探测绘图插件可用性（探测结果带 TTL 缓存）
+        self._drawpic_probe = None
 
     # ------------------------------------------------------------------ 统计收集
 
@@ -953,6 +981,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         """群相册设置（独立配置节，见 AlbumSectionConfig）。"""
         return cast(DailyAnalysisConfig, self.config).album
 
+    def _comic_cfg(self) -> ComicSectionConfig:
+        return cast(DailyAnalysisConfig, self.config).comic
+
     def _cfg(self) -> DailyAnalysisConfig:
         return cast(DailyAnalysisConfig, self.config)
 
@@ -1051,6 +1082,23 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "album_strict_mode": {"label": "严格模式", "ui_type": "switch", "hint": "指定相册名但找不到时不上传，避免误传到默认相册"},
             "napcat_api_url": {"label": "协议端 HTTP API 地址", "ui_type": "text", "hint": "NapCat / SnowLuma 通用，例如 http://127.0.0.1:3002（SnowLuma 默认 3002）"},
             "napcat_api_token": {"label": "协议端访问令牌", "ui_type": "password", "hint": "留空表示该 HTTP 服务无需鉴权；NapCat 填 network.httpServers[].token，SnowLuma 填 networks.httpServers[].accessToken"},
+            },
+        },
+        "comic": {
+            "title": "群聊漫画",
+            "icon": "brush",
+            "order": 5,
+            "fields": {
+            "enabled": {"label": "启用群聊漫画", "ui_type": "switch", "hint": "需安装并启用麦麦绘图插件（drawpic 2.x），并在其通用配置中允许插件联动"},
+            "auto_after_daily": {"label": "日报后自动画漫画", "ui_type": "switch", "hint": "仅对下方联动群列表内的群生效；列表留空则不自动"},
+            "style": {"label": "默认漫画风格", "ui_type": "select", "choices": ["four_panel", "poster"], "hint": "four_panel=四格漫画 / poster=单幅海报"},
+            "drawpic_style": {"label": "绘图风格预设名", "ui_type": "text", "hint": "麦麦绘图工作台里的预设名；留空用其当前默认风格"},
+            "model": {"label": "绘图模型完整名", "ui_type": "text", "hint": "格式「实例名 / 模型名」；留空用绘图插件默认模型"},
+            "max_wait_seconds": {"label": "等待绘图上限（秒）", "ui_type": "number", "min": 60, "max": 3600, "hint": "超时不丢进度，可在漫画廊点「恢复进度」继续"},
+            "use_reference_images": {"label": "附带参考图", "ui_type": "switch", "hint": "在漫画廊上传角色/画风参考图，最多 4 张；绘图时一并传给麦麦绘图"},
+            "comic_caption": {"label": "漫画提示文字", "ui_type": "text", "hint": "漫画图片前附带；留空则只发图"},
+            "groups": {"label": "自动联动群列表", "ui_type": "textarea", "rows": 4, "hint": "每行一个群号；留空=不自动联动"},
+            "llm_model_task": {"label": "分镜模型任务", "ui_type": "select", "choices": [], "hint": "留空跟随分析设置的默认任务"},
             },
         },
     }
@@ -2810,44 +2858,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             raise ValueError("找不到该群的当前会话，请先让机器人收到群消息")
         return max(choices, key=lambda pair: self._stream_freshness(pair[1]))
 
-    def _start_webui_operation(self, group_id, day, kind, work) -> dict:
-        task = self._webui_tasks.get(group_id)
-        if task is not None and not task.done():
-            return {"accepted": False, "status": "busy", "message": "该群已有 WebUI 操作正在进行，请勿重复提交"}
-        state = {"group_id": group_id, "day": day, "kind": kind, "status": "running",
-                 "stage": "已受理", "error": "", "started_at": datetime.now().isoformat(timespec="seconds"),
-                 "finished_at": ""}
-        self._webui_operations[group_id] = state
-
-        async def run():
-            outcome = await work(state)
-            if outcome != "ok":
-                state.update(status="failed", stage="未完成",
-                             error="消息不足，未生成日报" if outcome == "insufficient" else "发送失败，请查看插件日志")
-            else:
-                state.update(status="succeeded", stage="已完成")
-
-        def finished(completed):
-            if completed.cancelled():
-                state.update(status="cancelled", stage="已取消")
-            elif completed.exception() is not None:
-                state.update(status="failed", stage="失败", error="操作失败，请查看插件日志；不要连续重复提交")
-                self.ctx.logger.warning("[weekly] WebUI 操作失败: %s", type(completed.exception()).__name__)
-            state["finished_at"] = datetime.now().isoformat(timespec="seconds")
-            if self._webui_tasks.get(group_id) is completed:
-                self._webui_tasks.pop(group_id, None)
-
-        task = self._spawn(run())
-        self._webui_tasks[group_id] = task
-        task.add_done_callback(finished)
-        return {"accepted": True, "status": "running", "message": "已受理，完成后发送到所选群"}
-
-    @API("overview", version="1")
-    async def webui_overview(self) -> dict:
-        today = date.today().isoformat()
-        recent = await asyncio.to_thread(self._report_store.list_reports)
-        daily = await asyncio.to_thread(self._report_store.list_reports, date_from=today, date_to=today)
-        best = {}
+    def _best_chats(self) -> dict[str, dict]:
+        """每个群取最新鲜的一套 stream（白名单过滤后），供 WebUI 群目录复用。"""
+        best: dict[str, dict] = {}
         whitelist = self._whitelist_ids()
         for sid, chat in self._stats.get("chats", {}).items():
             gid = str(chat.get("group_id") or "")
@@ -2855,20 +2868,28 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 continue
             if gid not in best or self._stream_freshness(chat) > self._stream_freshness(best[gid]):
                 best[gid] = chat
+        return best
+
+    @API("overview", version="1")
+    async def webui_overview(self) -> dict:
+        today = date.today().isoformat()
+        recent = await asyncio.to_thread(self._report_store.list_reports)
+        daily = await asyncio.to_thread(self._report_store.list_reports, date_from=today, date_to=today)
+        best = self._best_chats()
         week = []
         for back in range(6, -1, -1):
             day = (date.today() - timedelta(days=back)).isoformat()
             week.append({"day": day, "message_count": sum(
                 int((chat.get("days", {}).get(day) or {}).get("total", 0)) for chat in best.values())})
-        operations = list(self._webui_operations.values())
-        active = sum(state["status"] in ("running", "cancelling") for state in operations)
-        operations.sort(key=lambda state: state["started_at"], reverse=True)
+        operations = self._jobs.snapshot()
+        active = self._jobs.active_count()
         return {
             "today_count": daily["total"],
             "last_generated": max((r["created_at"] for r in recent["items"]), default="尚无报告"),
             "message_count": week[-1]["message_count"], "active_count": active,
             "progress": 0 if active or not operations else 100,
-            "status": f"WebUI 操作进行中：{active}；本页暂不跟踪命令与定时任务的进度",
+            "status": f"后台任务进行中：{active}（含 WebUI、命令与定时任务）" if active
+                      else "空闲：没有进行中的后台任务（含 WebUI、命令与定时任务）",
             "recent": recent["items"][:10], "week": week, "operations": operations[:100],
             "groups": [{"group_id": gid, "group_name": str(chat.get("name") or gid)[:200]}
                        for gid, chat in sorted(best.items())][:100],
@@ -2918,7 +2939,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 stream_id, day, theme,
                 mark_sent=day == date.today().isoformat() and self._report_cfg().manual_marks_daily_sent)
 
-        return self._start_webui_operation(group_id, day, "report", generate)
+        return self._jobs.submit("report", group_id, day, generate)
 
     @API("rerun", version="1")
     async def webui_rerun(self, group_id: str, day: str, revision: str = "") -> dict:
@@ -2940,7 +2961,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             ok = await self._send_daily_html(stream_id, {"chat_name": meta["group_name"]}, blob.decode("utf-8"), day)
             return "ok" if ok else "failed"
 
-        return self._start_webui_operation(group_id, day, "resend", resend)
+        return self._jobs.submit("resend", group_id, day, resend)
 
     @API("rerender", version="1")
     async def webui_rerender(self, group_id: str, day: str, theme: str, revision: str = "") -> dict:
@@ -2979,25 +3000,554 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             await asyncio.to_thread(self._report_store.save, group_id, day, image, html_text, metadata, context)
             return "ok"
 
-        return self._start_webui_operation(group_id, day, "rerender", rerender)
+        return self._jobs.submit("rerender", group_id, day, rerender)
 
     @API("delete", version="1")
     async def webui_delete(self, group_id: str, day: str, revision: str = "") -> dict:
         if not revision:
             raise ValueError("删除报告需要版本标识，请刷新列表")
-        task = self._webui_tasks.get(group_id)
-        if task is not None and not task.done():
+        if self._jobs.active_for(group_id) is not None:
             raise ValueError("该群正在生成或重发报告，请完成或取消后再删除")
         return await asyncio.to_thread(self._report_store.delete, group_id, day, revision)
 
     @API("cancel", version="1")
     async def webui_cancel(self, group_id: str) -> dict:
-        task = self._webui_tasks.get(group_id)
-        if task is None or task.done():
-            return {"accepted": False, "status": "idle", "message": "该群没有可取消的 WebUI 操作"}
-        self._webui_operations[group_id].update(status="cancelling", stage="正在取消")
-        task.cancel()
-        return {"accepted": True, "status": "cancelling", "message": "已请求取消；已提交的模型请求、存档和发送无法撤回"}
+        return self._jobs.cancel(group_id)
+
+    # ------------------------------------------------------------------ 群聊漫画（P3，麦麦绘图协作）
+
+    async def _drawpic_ready(self) -> bool:
+        """探测麦麦绘图 v2 接口是否可用（300s TTL 缓存；失败降级为不可用，不阻塞其他功能）。"""
+        now = time.monotonic()
+        cached = getattr(self, "_drawpic_probe", None)
+        if cached is not None and now - cached[0] < 300:
+            return cached[1]
+        ready = False
+        try:
+            submit = await self.ctx.api.get(f"{DRAWPIC_PLUGIN_ID}.drawpic_submit_v2", version="2")
+            lookup = await self.ctx.api.get(f"{DRAWPIC_PLUGIN_ID}.drawpic_request_v2", version="2")
+            ready = submit is not None and lookup is not None
+        except Exception:
+            ready = False
+        self._drawpic_probe = (now, ready)
+        return ready
+
+    def _comic_refs_dir(self) -> Path:
+        return Path(self.ctx.paths.data_dir) / "comic_refs"
+
+    def _comic_refs(self) -> list[dict]:
+        directory = self._comic_refs_dir()
+        if not directory.is_dir():
+            return []
+        rows = []
+        for item in sorted(directory.iterdir()):
+            if _COMIC_REF_RE.fullmatch(item.name) and item.is_file():
+                rows.append({"ref_id": item.name, "size": item.stat().st_size})
+        return rows[:4]
+
+    def _load_ref_images(self) -> tuple[list[str], list[str]]:
+        """读取参考图为 base64 列表（每张≤8MiB、总≤40MiB，与 drawpic 源图限制一致）。"""
+        ref_ids: list[str] = []
+        images: list[str] = []
+        total = 0
+        for row in self._comic_refs():
+            size = row["size"]
+            if size > 8 * 1024 * 1024 or total + size > 40 * 1024 * 1024:
+                continue
+            try:
+                raw = (self._comic_refs_dir() / row["ref_id"]).read_bytes()
+            except OSError:
+                continue
+            ref_ids.append(row["ref_id"])
+            images.append(base64.b64encode(raw).decode("ascii"))
+            total += size
+        return ref_ids, images
+
+    def _store_ref_upload(self, path: Path) -> dict:
+        from PIL import Image
+        if not path.is_file():
+            raise ValueError("上传文件不存在或已过期")
+        raw = path.read_bytes()
+        if not raw or len(raw) > 8 * 1024 * 1024:
+            raise ValueError("参考图需在 8 MiB 以内")
+        with Image.open(io.BytesIO(raw)) as image:
+            fmt = image.format
+            if fmt not in ("PNG", "JPEG", "WEBP") or getattr(image, "is_animated", False):
+                raise ValueError("参考图仅支持静态 PNG / JPEG / WebP")
+            if image.width * image.height > 40_000_000:
+                raise ValueError("参考图像素过大（四千万以内）")
+            image.load()
+        ref_id = hashlib.sha256(raw).hexdigest()[:16] + {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}[fmt]
+        directory = self._comic_refs_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        existing = [item.name for item in directory.iterdir() if _COMIC_REF_RE.fullmatch(item.name)]
+        if ref_id not in existing and len(existing) >= 4:
+            raise ValueError("参考图最多 4 张，请先删除不需要的")
+        os.replace(path, directory / ref_id)
+        return {"ref_id": ref_id, "size": len(raw)}
+
+    def _comic_ref_thumb(self, ref_id: str) -> dict:
+        from PIL import Image
+        if not isinstance(ref_id, str) or not _COMIC_REF_RE.fullmatch(ref_id):
+            raise ValueError("参考图标识无效")
+        path = self._comic_refs_dir() / ref_id
+        if not path.is_file() or path.stat().st_size > 8 * 1024 * 1024:
+            raise ValueError("参考图不存在或过大")
+        with Image.open(path) as image:
+            thumb = image.convert("RGB")
+            thumb.thumbnail((320, 320))
+            output = io.BytesIO()
+            thumb.save(output, format="JPEG", quality=60)
+        return {"data_uri": "data:image/jpeg;base64," + base64.b64encode(output.getvalue()).decode("ascii")}
+
+    @API("comic_overview", version="1")
+    async def webui_comic_overview(self) -> dict:
+        ccfg = self._comic_cfg()
+        today = date.today().isoformat()
+        listing = await asyncio.to_thread(self._report_store.list_comics)
+        daily = await asyncio.to_thread(self._report_store.list_comics, date_from=today, date_to=today)
+        refs = await asyncio.to_thread(self._comic_refs)
+        recoverable = [entry for entry in await asyncio.to_thread(self._comic_book.recoverable)
+                       if not entry.get("sent")]
+        operations = [job for job in self._jobs.snapshot() if job["kind"] == "comic"]
+        active = self._jobs.active_count()
+        best = self._best_chats()
+        return {
+            "enabled": bool(ccfg.enabled),
+            "drawpic_available": await self._drawpic_ready() if ccfg.enabled else False,
+            "styles": [{"key": key, "label": meta["label"]} for key, meta in COMIC_STYLES.items()],
+            "default_style": ccfg.style if ccfg.style in COMIC_STYLES else "four_panel",
+            "use_reference_images": bool(ccfg.use_reference_images),
+            "total": listing["total"], "today_count": daily["total"],
+            "groups": [{"group_id": gid, "group_name": str(chat.get("name") or gid)[:200]}
+                       for gid, chat in sorted(best.items())][:100],
+            "refs": refs,
+            "recoverable": [{key: entry.get(key) for key in
+                             ("request_id", "group_id", "group_name", "day", "style", "status", "created_at", "error")}
+                            for entry in recoverable[:20]],
+            "operations": operations[:100],
+            "active_count": active,
+            "status": f"后台任务进行中：{active}（含 WebUI、命令与定时任务）" if active
+                      else "空闲：没有进行中的后台任务",
+        }
+
+    @API("comics", version="1")
+    async def webui_comics(self, group_id: str = "", date_from: str = "", date_to: str = "", page: int = 1,
+                           search: str = "", sort_order: str = "desc") -> dict:
+        return await asyncio.to_thread(self._report_store.list_comics, group_id, date_from, date_to, page,
+                                       12, search, sort_order)
+
+    @API("comic_detail", version="1")
+    async def webui_comic_detail(self, group_id: str, day: str) -> dict:
+        return await asyncio.to_thread(self._report_store.comic_detail, group_id, day)
+
+    @API("comic_thumb", version="1")
+    async def webui_comic_thumb(self, group_id: str, day: str, revision: str = "") -> dict:
+        return await asyncio.to_thread(self._report_store.comic_thumbnail, group_id, day, revision)
+
+    @API("comic_chunk", version="1")
+    async def webui_comic_chunk(self, group_id: str, day: str, offset: int = 0, revision: str = "") -> dict:
+        return await asyncio.to_thread(self._report_store.comic_chunk, group_id, day, offset, revision)
+
+    @API("comic_ref_thumb", version="1")
+    async def webui_comic_ref_thumb(self, ref_id: str) -> dict:
+        return await asyncio.to_thread(self._comic_ref_thumb, ref_id)
+
+    @API("draw", version="1")
+    async def webui_draw(self, group_id: str, day: str = "", style: str = "") -> dict:
+        ccfg = self._comic_cfg()
+        if not ccfg.enabled:
+            return {"accepted": False, "status": "rejected", "message": "漫画功能未启用，请先在插件设置的「群聊漫画」中打开"}
+        try:
+            stream_id, _ = self._webui_group(group_id)
+        except ValueError as exc:
+            return {"accepted": False, "status": "rejected", "message": str(exc)}
+        day = day or date.today().isoformat()
+        try:
+            if date.fromisoformat(day).isoformat() != day or day > date.today().isoformat():
+                raise ValueError
+        except ValueError:
+            return {"accepted": False, "status": "rejected", "message": "日期需为 YYYY-MM-DD，且不能晚于今天"}
+        style = style or (ccfg.style if ccfg.style in COMIC_STYLES else "four_panel")
+        if style not in COMIC_STYLES:
+            return {"accepted": False, "status": "rejected", "message": "未知漫画风格"}
+        try:
+            await asyncio.to_thread(self._report_store.detail, group_id, day)
+        except (OSError, ValueError):
+            return {"accepted": False, "status": "rejected", "message": "该日期还没有日报存档，请先生成当天日报再画漫画"}
+        if not await self._drawpic_ready():
+            return {"accepted": False, "status": "rejected",
+                    "message": "未检测到麦麦绘图插件（drawpic v2）接口，请确认其已安装、启用并允许插件联动"}
+
+        async def work(job):
+            return await self._comic_pipeline(job, stream_id, group_id, day, style)
+
+        return self._jobs.submit("comic", group_id, day, work)
+
+    @API("comic_resume", version="1")
+    async def webui_comic_resume(self, group_id: str, day: str) -> dict:
+        if not self._comic_cfg().enabled:
+            return {"accepted": False, "status": "rejected", "message": "漫画功能未启用"}
+        try:
+            stream_id, _ = self._webui_group(group_id)
+            if date.fromisoformat(day).isoformat() != day:
+                raise ValueError("日期需为 YYYY-MM-DD")
+        except ValueError as exc:
+            return {"accepted": False, "status": "rejected", "message": str(exc)}
+        entry = self._comic_book.latest(group_id, day)
+        if entry is None or entry.get("status") not in RECOVERABLE_STATUSES or entry.get("sent"):
+            return {"accepted": False, "status": "rejected", "message": "该群当天没有可恢复的漫画请求"}
+        try:
+            meta = await asyncio.to_thread(self._report_store.comic_detail, group_id, day)
+        except (OSError, ValueError):
+            meta = None
+        if meta is not None and not meta["sent"]:
+            # 已成图存档只是没发出去：只发存档，不触碰远端
+            request_id = str(entry.get("request_id") or "")
+
+            async def resend(job):
+                return await self._send_archived_comic(job, stream_id, group_id, day, meta["revision"], request_id)
+
+            return self._jobs.submit("comic", group_id, day, resend)
+        if not await self._drawpic_ready():
+            return {"accepted": False, "status": "rejected", "message": "未检测到麦麦绘图插件接口，无法查证远端进度"}
+
+        async def work(job):
+            return await self._comic_resume_work(job, stream_id, group_id, day, entry)
+
+        return self._jobs.submit("comic", group_id, day, work)
+
+    @API("comic_resend", version="1")
+    async def webui_comic_resend(self, group_id: str, day: str, revision: str = "") -> dict:
+        try:
+            stream_id, _ = self._webui_group(group_id)
+            meta = await asyncio.to_thread(self._report_store.comic_detail, group_id, day)
+            if not revision or revision != meta["revision"]:
+                raise ValueError("漫画已更新，请刷新后重发")
+        except (OSError, TypeError, ValueError):
+            return {"accepted": False, "status": "rejected", "message": "漫画已更新、已删除或原群会话不可用，请刷新列表"}
+
+        async def work(job):
+            return await self._send_archived_comic(job, stream_id, group_id, day, revision,
+                                                   str(meta.get("request_id") or ""))
+
+        return self._jobs.submit("comic", group_id, day, work)
+
+    @API("delete_comic", version="1")
+    async def webui_delete_comic(self, group_id: str, day: str, revision: str = "") -> dict:
+        if not revision:
+            raise ValueError("删除漫画需要版本标识，请刷新列表")
+        if self._jobs.active_for(group_id) is not None:
+            raise ValueError("该群有任务正在进行，请完成或取消后再删除")
+        return await asyncio.to_thread(self._report_store.delete_comic, group_id, day, revision)
+
+    @API("upload_ref", version="1")
+    async def webui_upload_ref(self, upload_id: str) -> dict:
+        if not self._comic_cfg().enabled:
+            raise ValueError("漫画功能未启用")
+        claimed = await self.ctx.webui.claim_upload(upload_id)
+        return await asyncio.to_thread(self._store_ref_upload, Path(str(claimed.get("path") or "")))
+
+    @API("delete_ref", version="1")
+    async def webui_delete_ref(self, ref_id: str) -> dict:
+        if not isinstance(ref_id, str) or not _COMIC_REF_RE.fullmatch(ref_id):
+            raise ValueError("参考图标识无效")
+
+        def remove():
+            path = self._comic_refs_dir() / ref_id
+            if path.is_file():
+                path.unlink()
+                return {"deleted": True}
+            return {"deleted": False}
+
+        return await asyncio.to_thread(remove)
+
+    @staticmethod
+    def _resolve_analysis_names(analysis: dict, user_names: dict) -> dict:
+        """把分析结果里的 [uid] 占位还原成昵称（漫画提示词不携带 QQ 号）。"""
+        pattern = re.compile(r"\[([A-Za-z0-9_-]{4,64})\]")
+
+        def sub(text):
+            return pattern.sub(lambda m: str(user_names.get(m.group(1), m.group(0))), str(text))
+
+        resolved: dict[str, Any] = {"topics": [], "titles": [], "quotes": [], "quality": analysis.get("quality")}
+        for topic in analysis.get("topics") or []:
+            if isinstance(topic, dict):
+                item = dict(topic)
+                item["detail"] = sub(item.get("detail") or "")
+                resolved["topics"].append(item)
+        for quote in analysis.get("quotes") or []:
+            if isinstance(quote, dict):
+                item = dict(quote)
+                for key in ("sender", "content", "reason"):
+                    item[key] = sub(item.get(key) or "")
+                resolved["quotes"].append(item)
+        resolved["titles"] = [dict(t) for t in analysis.get("titles") or [] if isinstance(t, dict)]
+        return resolved
+
+    async def _comic_storyboard(self, analysis: dict, group_name: str, day: str, style: str) -> dict:
+        ccfg = self._comic_cfg()
+        try:
+            data = await self._call_llm_json(storyboard_prompt(analysis, group_name, day, style),
+                                             self._cfg().analysis, task=(ccfg.llm_model_task or "").strip())
+        except Exception as exc:
+            self.ctx.logger.warning("[comic] 分镜 LLM 调用异常，使用保底分镜: %s", type(exc).__name__)
+            data = None
+        if data is None:
+            self.ctx.logger.info("[comic] 分镜使用话题+金句保底拼接")
+        return normalize_storyboard(data, style, analysis, group_name)
+
+    async def _comic_pipeline(self, job, stream_id: str, group_id: str, day: str, style: str) -> str:
+        ccfg = self._comic_cfg()
+        client = DrawpicClient(self.ctx.api)
+        state = {"request_id": "", "task_id": ""}
+        try:
+            job["stage"] = "读取日报分析结果"
+            meta = await asyncio.to_thread(self._report_store.detail, group_id, day)
+            analysis = meta.get("analysis") or {}
+            group_name = str(meta.get("group_name") or group_id)
+            if meta.get("has_context"):
+                try:
+                    context = await asyncio.to_thread(self._report_store.read_context, group_id, day)
+                    analysis = self._resolve_analysis_names(analysis, context.get("user_names") or {})
+                except (OSError, ValueError):
+                    pass
+            job["stage"] = "生成分镜脚本"
+            storyboard = await self._comic_storyboard(analysis, group_name, day, style)
+            ref_ids: list[str] = []
+            source_images: list[str] = []
+            if ccfg.use_reference_images:
+                job["stage"] = "读取参考图"
+                ref_ids, source_images = await asyncio.to_thread(self._load_ref_images)
+            prompt = build_draw_prompt(storyboard, style, group_name, day, with_refs=bool(source_images))
+            job["stage"] = "提交绘图任务"
+            # 幂等纪律：请求键先落盘再提交；回执未知保留原键，绝不换键重画
+            request_id = new_request_id()
+            state["request_id"] = request_id
+            await asyncio.to_thread(self._comic_book.record, request_id, group_id, day, style, prompt,
+                                    group_name, ccfg.model.strip(), ccfg.drawpic_style.strip(), "draw",
+                                    ref_ids, storyboard)
+            try:
+                result = await client.submit(prompt, request_id, model=ccfg.model.strip(),
+                                             style=ccfg.drawpic_style.strip(), source_images=source_images or None)
+            except DrawpicError as exc:
+                if exc.code == "RPC_FAILED":
+                    await asyncio.to_thread(self._comic_book.update, request_id, status="unknown",
+                                            error="提交回执未知，可恢复进度")
+                    job["error"] = "绘图接口无回执；请求键已保留，请到漫画廊「恢复进度」查证，不要直接重画"
+                else:
+                    await asyncio.to_thread(self._comic_book.update, request_id, status="not_accepted",
+                                            error=f"{exc.code}: {exc.message}"[:300])
+                    job["error"] = f"绘图任务未受理（{exc.code}）：{exc.message}"[:300]
+                return "failed"
+            state["task_id"] = str(result.get("task_id") or "")
+            await asyncio.to_thread(self._comic_book.update, request_id, task_id=state["task_id"], status="running")
+            return await self._comic_wait_and_save(job, client, state, stream_id, group_id, day, style, meta)
+        except asyncio.CancelledError:
+            await self._comic_cancel_cleanup(client, state)
+            raise
+
+    async def _comic_resume_work(self, job, stream_id: str, group_id: str, day: str, entry: dict) -> str:
+        """恢复只走只读查询：有 task_id 查 task，没有就按原请求键 request 找回；任何情况不重新 submit。"""
+        client = DrawpicClient(self.ctx.api)
+        request_id = str(entry.get("request_id") or "")
+        state = {"request_id": request_id, "task_id": str(entry.get("task_id") or "")}
+        try:
+            if not state["task_id"]:
+                job["stage"] = "按请求键查证原任务（不重新提交）"
+                try:
+                    found = await client.request(request_id)
+                except DrawpicError as exc:
+                    if exc.code == "REQUEST_NOT_FOUND":
+                        await asyncio.to_thread(self._comic_book.update, request_id, status="failed",
+                                                error="远端无原请求记录")
+                        job["error"] = "远端找不到原请求记录（可能尚未受理或已超出保留范围），请核对后重新生成"
+                    else:
+                        await asyncio.to_thread(self._comic_book.update, request_id, status="unknown",
+                                                error=f"查证失败（{exc.code}）")
+                        job["error"] = "查证原请求失败；请求键已保留，请稍后再试「恢复进度」"
+                    return "failed"
+                state["task_id"] = str(found.get("task_id") or "")
+                if not state["task_id"]:
+                    await asyncio.to_thread(self._comic_book.update, request_id, status="unknown",
+                                            error="原请求尚无任务 ID")
+                    job["error"] = "原请求尚未取得任务 ID（可能仍在受理），请稍后再恢复"
+                    return "failed"
+                await asyncio.to_thread(self._comic_book.update, request_id, task_id=state["task_id"])
+            report_meta = await asyncio.to_thread(self._report_store.detail, group_id, day)
+            style = str(entry.get("style") or "four_panel")
+            if style not in COMIC_STYLES:
+                style = "four_panel"
+            return await self._comic_wait_and_save(job, client, state, stream_id, group_id, day, style, report_meta)
+        except asyncio.CancelledError:
+            await self._comic_cancel_cleanup(client, state)
+            raise
+
+    async def _comic_wait_and_save(self, job, client: DrawpicClient, state: dict, stream_id: str,
+                                   group_id: str, day: str, style: str, report_meta: dict) -> str:
+        ccfg = self._comic_cfg()
+        request_id, task_id = state["request_id"], state["task_id"]
+        try:
+            budget = max(60, min(3600, int(ccfg.max_wait_seconds or 300)))
+        except (TypeError, ValueError):
+            budget = 300
+        deadline = time.monotonic() + budget
+        while True:
+            job["stage"] = "等待绘图完成"
+            try:
+                task = await client.task(task_id)
+            except DrawpicError as exc:
+                if exc.code == "TASK_NOT_FOUND":
+                    await asyncio.to_thread(self._comic_book.update, request_id, status="failed",
+                                            error="远端任务记录不存在")
+                    job["error"] = "远端找不到该绘图任务（可能已被清理），请重新生成漫画"
+                    return "failed"
+                if exc.code == "RPC_FAILED" and time.monotonic() < deadline:
+                    await asyncio.sleep(4)
+                    continue
+                await asyncio.to_thread(self._comic_book.update, request_id, status="unknown",
+                                        error=f"进度查询失败（{exc.code}）")
+                job["error"] = "绘图进度查询失败；请求键已保留，可到漫画廊「恢复进度」继续查证"
+                return "failed"
+            status = str(task.get("status") or "")
+            if status in ("failed", "rejected", "cancelled"):
+                error = task.get("error") if isinstance(task.get("error"), dict) else {}
+                message = str(error.get("message") or task.get("message") or "")[:200]
+                book_status = {"failed": "failed", "rejected": "rejected", "cancelled": "cancelled"}[status]
+                await asyncio.to_thread(self._comic_book.update, request_id, status=book_status,
+                                        error=message or status)
+                label = {"failed": "失败", "rejected": "被审核拒绝", "cancelled": "已取消"}[status]
+                job["error"] = f"绘图任务{label}" + (f"：{message}" if message else "")
+                return "failed"
+            if status == "unconfirmed":
+                await asyncio.to_thread(self._comic_book.update, request_id, status="unconfirmed",
+                                        error="远端状态待确认")
+                job["error"] = "远端任务状态待确认；请求键已保留，请稍后到漫画廊「恢复进度」，不要直接重画"
+                return "failed"
+            if status == "completed":
+                break
+            if state.get("book_status") != status:
+                state["book_status"] = status
+                await asyncio.to_thread(self._comic_book.update, request_id, status=status or "running")
+            if time.monotonic() >= deadline:
+                job["error"] = "等待绘图超时；进度已保留，可到漫画廊「恢复进度」继续等待"
+                return "failed"
+            retry_ms = task.get("retry_after_ms")
+            delay = 4.0
+            if type(retry_ms) is int and retry_ms > 0:
+                delay = max(3.0, min(10.0, retry_ms / 1000))
+            await asyncio.sleep(delay)
+        job["stage"] = "读取成图"
+        try:
+            blob = await client.read_image(task_id)
+        except DrawpicError as exc:
+            await asyncio.to_thread(self._comic_book.update, request_id, status="completed",
+                                    error=f"取图失败（{exc.code}）")
+            job["error"] = f"绘图已完成但取图失败（{exc.code}）；可到漫画廊「恢复进度」重试读取"
+            return "failed"
+        job["stage"] = "存档漫画"
+        entry = self._comic_book.get(request_id) or {}
+        try:
+            comic_meta = await asyncio.to_thread(
+                self._report_store.save_comic, group_id, day, base64.b64encode(blob).decode("ascii"),
+                {"group_name": report_meta.get("group_name") or group_id, "style": style,
+                 "request_id": request_id, "task_id": task_id,
+                 "prompt": entry.get("prompt") or "", "storyboard": entry.get("storyboard") or {},
+                 "message_count": report_meta.get("message_count", 0), "version": "1.5.0"})
+        except (OSError, ValueError):
+            await asyncio.to_thread(self._comic_book.update, request_id, status="completed", error="本地存档失败")
+            job["error"] = "漫画已生成但本地存档失败，请检查磁盘空间后到漫画廊「恢复进度」"
+            return "failed"
+        await asyncio.to_thread(self._comic_book.update, request_id, status="completed", error="")
+        job["stage"] = "发送漫画"
+        if await self._send_comic_image(stream_id, blob):
+            await asyncio.to_thread(self._report_store.mark_comic_sent, group_id, day, comic_meta["revision"])
+            await asyncio.to_thread(self._comic_book.update, request_id, sent=True)
+            return "ok"
+        await asyncio.to_thread(self._comic_book.update, request_id, error="已存档，发送失败")
+        job["error"] = "漫画已存档，但发送到群失败；可在漫画廊重发"
+        return "failed"
+
+    async def _comic_cancel_cleanup(self, client: DrawpicClient, state: dict) -> None:
+        """取消时尽力通知远端并落账本；已成图的条目不改状态（存档仍可重发）。"""
+        if state.get("task_id"):
+            try:
+                await client.cancel(state["task_id"])
+            except Exception:
+                pass
+        request_id = state.get("request_id") or ""
+        entry = self._comic_book.get(request_id) if request_id else None
+        if entry is not None and entry.get("status") != "completed":
+            try:
+                await asyncio.to_thread(self._comic_book.update, request_id, status="cancelled")
+            except Exception:
+                pass
+
+    async def _send_comic_image(self, stream_id: str, blob: bytes) -> bool:
+        ccfg = self._comic_cfg()
+        try:
+            caption = (ccfg.comic_caption or "").strip()
+            if caption:
+                await self.ctx.send.text(caption, stream_id)
+            result = await self.ctx.send.image(base64.b64encode(blob).decode("ascii"), stream_id)
+            return not (result is False or (isinstance(result, dict) and result.get("success") is False))
+        except Exception as exc:
+            self.ctx.logger.warning("[comic] 漫画发送失败: %s", type(exc).__name__)
+            return False
+
+    async def _send_archived_comic(self, job, stream_id: str, group_id: str, day: str,
+                                   revision: str, request_id: str) -> str:
+        job["stage"] = "重发漫画存档（不重新绘图）"
+        blob = await asyncio.to_thread(self._report_store.read_comic_bytes, group_id, day, revision)
+        if await self._send_comic_image(stream_id, blob):
+            await asyncio.to_thread(self._report_store.mark_comic_sent, group_id, day, revision)
+            if request_id:
+                await asyncio.to_thread(self._comic_book.update, request_id, sent=True)
+            return "ok"
+        job["error"] = "漫画发送失败，请稍后重试"
+        return "failed"
+
+    async def _maybe_auto_comic(self, stream_id: str, day: str) -> None:
+        """日报发送成功后的漫画联动入口；任何异常都不影响日报结果。"""
+        try:
+            ccfg = self._comic_cfg()
+            if not (ccfg.enabled and ccfg.auto_after_daily):
+                return
+            chat = self._stats.get("chats", {}).get(stream_id) or {}
+            group_id = str(chat.get("group_id") or "")
+            if not group_id:
+                return
+            groups = {line.strip() for line in (ccfg.groups or "").splitlines() if line.strip()}
+            if not groups or group_id not in groups:
+                return
+            try:
+                await asyncio.to_thread(self._report_store.detail, group_id, day)
+            except (OSError, ValueError):
+                return
+            style = ccfg.style if ccfg.style in COMIC_STYLES else "four_panel"
+
+            async def auto():
+                # 日报 job 还占着同群互斥位，等它释放（最多 30s）
+                for _ in range(30):
+                    if self._jobs.active_for(group_id) is None:
+                        break
+                    await asyncio.sleep(1)
+                if self._jobs.active_for(group_id) is not None:
+                    return
+                if not await self._drawpic_ready():
+                    self.ctx.logger.info("[comic] 群 %s 自动漫画跳过：未检测到绘图插件接口", group_id)
+                    return
+
+                async def work(job):
+                    return await self._comic_pipeline(job, stream_id, group_id, day, style)
+
+                result = self._jobs.submit("comic", group_id, day, work, source="auto")
+                if not result["accepted"]:
+                    self.ctx.logger.info("[comic] 群 %s 自动漫画跳过：%s", group_id, result["message"])
+
+            self._spawn(auto())
+        except Exception as exc:
+            self.ctx.logger.warning("[comic] 自动漫画联动检查失败: %s", type(exc).__name__)
 
     async def _render_report_image(self, html_text: str, html_lite: str, acfg) -> tuple[str, str]:
         """渲染成品图；返回 (image, 实际出图所用 HTML)。精简档出图时 HTML 同步换成精简档。"""
@@ -3170,6 +3720,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 if mark_sent and isinstance(_chat0, dict):
                     _chat0["last_daily"] = day
                     self._dirty = True
+                await self._maybe_auto_comic(stream_id, day)
                 return "ok"
             self.ctx.logger.warning("[weekly] HTML 直发失败，回落到图片渲染")
         # 在线渲染耗时（字体下载+素材）会超过 RPC 默认 30s 超时，
@@ -3195,6 +3746,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 await self._upload_report_to_album(stream_id, _gid, image)
             except Exception as _exc:
                 self.ctx.logger.warning("[weekly] 群相册上传异常: %s", _exc)
+            await self._maybe_auto_comic(stream_id, day)
             return "ok"
         except Exception as exc:
             brief = str(exc)[:100] or type(exc).__name__
@@ -3307,10 +3859,23 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         for gid, (stream_id, chat) in best.items():
             if chat.get("last_daily") == today:
                 continue
+            if self._jobs.active_for(gid) is not None:
+                self.ctx.logger.info("[weekly] 群 %s 已有任务在进行，本轮定时日报跳过", gid)
+                continue
             try:
                 theme = self._theme_for_group(gid)
-                await self._rebuild_day_from_db(stream_id, today)
-                if await self._generate_daily_and_send(stream_id, today, theme) == "ok":
+
+                async def generate(job, _sid=stream_id, _theme=theme):
+                    job["stage"] = "重建过去 24 小时统计"
+                    await self._rebuild_day_from_db(_sid, today)
+                    job["stage"] = "分析、渲染并发送"
+                    return await self._generate_daily_and_send(_sid, today, _theme)
+
+                result = self._jobs.submit("report", gid, today, generate, source="schedule")
+                if not result["accepted"]:
+                    continue
+                job = await self._jobs.wait(result["job_id"])
+                if job is not None and job["status"] == "succeeded":
                     chat["last_daily"] = today
                     self._dirty = True
                     if self._cfg().analysis.stagger_seconds:
@@ -3427,9 +3992,63 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             _gid = str((_msg.get("message_info", {}).get("group_info") or {}).get("group_id") or "")
         theme = self._theme_for_group(_gid, theme_arg)
         mark_sent = bool(getattr(self._report_cfg(), "manual_marks_daily_sent", True))
+
+        async def generate(job):
+            return await self._generate_daily_and_send(stream_id, day, theme, mark_sent=mark_sent)
+
+        result = self._jobs.submit("report", _gid or stream_id, day, generate, source="command")
+        if not result["accepted"]:
+            await self.ctx.send.text(result["message"], stream_id)
+            return True, "任务忙碌", True
         await self.ctx.send.text(f"收到！正在生成今日日报（主题：{THEME_REGISTRY[theme]['label']}，预计 2~6 分钟，完成后自动发送）……", stream_id)
-        self._spawn(self._generate_daily_and_send(stream_id, day, theme, mark_sent=mark_sent))
         return True, "日报生成中", True
+
+    @Command("comic", description="把本群今日日报画成漫画（需先有当天日报存档，且已启用群聊漫画）", pattern=r"(?<!\S)/?漫画\s*$")
+    async def cmd_comic(self, **kwargs: Any) -> tuple[bool, str, bool]:
+        stream_id = str(kwargs.get("stream_id") or "")
+        if not stream_id:
+            return False, "找不到当前会话，请在群聊中使用", True
+
+        admins = self._admin_ids()
+        if admins is not None:
+            uid = str(kwargs.get("user_id") or "")
+            if uid not in admins:
+                await self.ctx.send.text("本命令仅管理员可用（管理员名单在插件设置的命令管理员里配置）", stream_id)
+                return True, "非管理员", True
+
+        gid = ""
+        message = kwargs.get("message", {})
+        if isinstance(message, dict):
+            gid = str((message.get("message_info", {}).get("group_info") or {}).get("group_id") or "")
+        whitelist = self._whitelist_ids()
+        if whitelist is not None and gid not in whitelist:
+            await self.ctx.send.text("本群不在白名单中（可在插件设置的群白名单里添加，每行一个群号）", stream_id)
+            return True, "不在白名单", True
+
+        ccfg = self._comic_cfg()
+        if not ccfg.enabled:
+            await self.ctx.send.text("漫画功能还没启用哦（插件设置 → 群聊漫画）", stream_id)
+            return True, "漫画未启用", True
+        day = date.today().isoformat()
+        try:
+            await asyncio.to_thread(self._report_store.detail, gid, day)
+        except (OSError, ValueError):
+            await self.ctx.send.text("今天还没有日报存档，请先发送 /日报 生成日报，再来画漫画～", stream_id)
+            return True, "缺少日报存档", True
+        if not await self._drawpic_ready():
+            await self.ctx.send.text("没检测到麦麦绘图插件的接口，请确认它已安装、启用并允许插件联动", stream_id)
+            return True, "绘图插件不可用", True
+        style = ccfg.style if ccfg.style in COMIC_STYLES else "four_panel"
+
+        async def work(job):
+            return await self._comic_pipeline(job, stream_id, gid, day, style)
+
+        result = self._jobs.submit("comic", gid or stream_id, day, work, source="command")
+        if not result["accepted"]:
+            await self.ctx.send.text(result["message"], stream_id)
+            return True, "任务忙碌", True
+        await self.ctx.send.text("收到！正在把今日日报画成漫画（预计 1~5 分钟，完成后自动发送）……", stream_id)
+        return True, "漫画生成中", True
 
 def create_plugin() -> GroupDailyAnalysisPlugin:
     return GroupDailyAnalysisPlugin()

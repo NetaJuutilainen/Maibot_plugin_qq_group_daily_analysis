@@ -1,0 +1,817 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>群聊分析 · 漫画廊</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f5f7fa; --panel: #fff; --ink: #202b3c; --muted: #637084; --line: #dce3ec; --accent: #315eb5; --soft: #edf3ff; --danger: #b63838; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #141a23; --panel: #1c2430; --ink: #e6ebf3; --muted: #a4b1c4; --line: #364254; --accent: #9abaff; --soft: #25334c; --danger: #ffaaaa; } }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 system-ui, -apple-system, "Microsoft YaHei", sans-serif; }
+    main { max-width: 1280px; margin: auto; padding: 24px; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 25px; letter-spacing: .03em; }
+    h2 { font-size: 17px; }
+    h3 { font-size: 15px; overflow-wrap: anywhere; }
+    button, input, select { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 8px 12px; }
+    button { cursor: pointer; min-height: 38px; }
+    button:hover:not(:disabled) { border-color: var(--accent); background: var(--soft); }
+    button:disabled { cursor: not-allowed; opacity: .48; }
+    button.primary { color: var(--panel); background: var(--accent); border-color: var(--accent); }
+    button.primary:hover:not(:disabled) { filter: brightness(.94); background: var(--accent); }
+    button.danger { color: var(--danger); }
+    :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
+    input, select { min-width: 0; width: 100%; color: var(--ink); }
+    .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+    .header { margin-bottom: 20px; }
+    .muted, .hint { color: var(--muted); font-size: 13px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+    .fields { display: grid; grid-template-columns: 1.5fr 1fr 1fr auto; align-items: end; gap: 12px; margin: 14px 0; }
+    .notice { border-left: 3px solid var(--accent); background: var(--soft); padding: 10px 14px; border-radius: 5px; margin-bottom: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .notice.error { border-left-color: var(--danger); color: var(--danger); }
+    .badge { color: var(--accent); background: var(--soft); padding: 3px 9px; border-radius: 5px; font-size: 12px; }
+    .catalog { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
+    .report { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+    .thumbnail { width: 100%; height: 180px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; overflow: hidden; background: var(--soft); color: var(--muted); }
+    .thumbnail img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .report-body { padding: 14px; }
+    .report-meta { color: var(--muted); margin: 5px 0 12px; font-size: 12px; overflow-wrap: anywhere; }
+    .buttons { display: flex; flex-wrap: wrap; gap: 7px; }
+    .buttons button { font-size: 12px; padding: 5px 10px; }
+    .empty { grid-column: 1 / -1; padding: 36px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; }
+    .pager { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 20px 0; }
+    .task { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 10px 0; }
+    .task-copy { min-width: 0; overflow-wrap: anywhere; }
+    .task-error { color: var(--danger); white-space: pre-wrap; }
+    .tasks { max-height: 300px; overflow-y: auto; margin-top: 12px; }
+    .refs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+    .ref { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
+    .ref img { display: block; width: 100%; height: 110px; object-fit: contain; background: var(--soft); }
+    .ref-body { padding: 8px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+    .overlay { position: fixed; inset: 0; background: #0009; display: flex; justify-content: center; align-items: center; padding: 20px; z-index: 10; }
+    .modal { width: min(1100px, 100%); max-height: 94vh; overflow: auto; border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 20px; }
+    .modal-head { position: sticky; top: -20px; z-index: 1; background: var(--panel); padding: 10px 0; }
+    .modal h2 { overflow-wrap: anywhere; }
+    .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 16px 0; }
+    .stat { background: var(--bg); padding: 10px; border-radius: 6px; overflow-wrap: anywhere; }
+    .stat dt { color: var(--muted); font-size: 12px; }
+    .stat dd { margin: 4px 0 0; }
+    details { margin: 14px 0; }
+    summary { cursor: pointer; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 250px; overflow: auto; font: inherit; background: var(--bg); padding: 12px; border-radius: 6px; }
+    .image-view { overflow: auto; max-height: 65vh; background: var(--bg); margin-top: 12px; }
+    .image-view img { display: block; max-width: 100%; height: auto; margin: auto; }
+    .image-view.natural-size img { max-width: none; margin: 0; }
+    @media (max-width: 900px) { .catalog { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fields { grid-template-columns: 1fr 1fr; } .refs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 580px) { main { padding: 14px; } .catalog, .fields { grid-template-columns: 1fr; } .stats { grid-template-columns: 1fr 1fr; } .overlay { padding: 8px; } .modal { padding: 14px; } .task { align-items: flex-start; } }
+  </style>
+</head>
+<body>
+  <main id="main">
+    <header class="header">
+      <div><h1>漫画廊</h1><p class="muted">群聊分析 · 把日报画成四格漫画 / 单幅海报（经麦麦绘图协作）</p></div>
+      <div class="buttons"><span id="connection" class="badge">正在连接宿主</span><button id="library-link" type="button" disabled>报告库</button><button id="overview-link" type="button" disabled>分析总览</button></div>
+    </header>
+    <div id="notice" class="notice" role="status" aria-live="polite">正在等待 MaiBot 页面桥就绪…</div>
+
+    <section class="panel" aria-labelledby="draw-title">
+      <div class="section-heading"><h2 id="draw-title">画漫画</h2><span id="feature-state" class="badge">等待状态</span></div>
+      <div class="fields">
+        <label>发送到群<select id="draw-group" disabled><option value="">请选择群聊</option></select></label>
+        <label>日报日期<input id="draw-day" type="date" disabled></label>
+        <label>漫画风格<select id="draw-style" disabled><option value="four_panel">四格漫画</option><option value="poster">单幅海报</option></select></label>
+        <button id="draw" class="primary" type="button" data-mutation data-action="draw" disabled>开始画漫画</button>
+      </div>
+      <p class="hint">需要该日已有日报存档（先在报告库或 /日报 生成）；日期留空为今天。绘图消耗麦麦绘图的额度，成图自动发往所选群；同群同时只跑一个任务。</p>
+    </section>
+
+    <section class="panel" aria-labelledby="recover-title">
+      <div class="section-heading"><h2 id="recover-title">可恢复的绘图请求</h2><span class="muted">超时 / 回执未知 / 未发送</span></div>
+      <p class="hint">恢复只查证原任务进度并读取成图，不会重新提交绘图、不换请求键；已存档未发送的只补发。确定不要的请求可不管它，账本自动裁剪。</p>
+      <div id="recoverable" class="tasks"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="tasks-title">
+      <div class="section-heading"><h2 id="tasks-title">漫画任务状态</h2><span id="active-count" class="muted">等待状态</span></div>
+      <p class="hint">显示 WebUI、命令与日报联动启动的漫画任务；每群仅保留最近状态。每5秒轮询，忙碌时跳过；取消不会撤回已发出的图片。</p>
+      <p id="task-status" class="muted" role="status">尚未读取</p>
+      <div id="tasks" class="tasks"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="refs-title">
+      <div class="section-heading"><h2 id="refs-title">参考图（角色形象 / 画风）</h2><button id="upload-ref" type="button" disabled>上传参考图</button></div>
+      <p id="refs-hint" class="hint">最多 4 张，每张 8 MiB 以内的静态 PNG / JPEG / WebP。是否附带参考图由插件设置「群聊漫画 → 附带参考图」决定。</p>
+      <input id="ref-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+      <div id="refs" class="refs"></div>
+    </section>
+
+    <section aria-labelledby="gallery-title">
+      <div class="section-heading"><h2 id="gallery-title">漫画存档</h2><button id="refresh" type="button" disabled>刷新列表</button></div>
+      <div id="filters" class="fields" role="search" aria-label="漫画筛选">
+        <label>搜索<input id="filter-search" type="search" maxlength="100" placeholder="群名 / 群号 / 日期 / 风格" disabled></label>
+        <label>筛选群聊<select id="filter-group" disabled><option value="">全部群聊</option></select></label>
+        <label>起始日期<input id="date-from" type="date" disabled></label>
+        <label>结束日期<input id="date-to" type="date" disabled></label>
+        <label>排序<select id="filter-sort" disabled><option value="desc">从新到旧</option><option value="asc">从旧到新</option></select></label>
+        <button id="apply-filter" type="button" disabled>应用筛选</button>
+      </div>
+      <div class="row"><p id="list-summary" class="muted">每页12份漫画</p><p id="gallery-hint" class="hint" aria-live="polite"></p></div>
+      <div id="comics" class="catalog" aria-busy="true"><p class="empty">正在连接…</p></div>
+      <nav class="pager" aria-label="漫画分页"><button id="previous" type="button" disabled>上一页</button><span id="page-label">第 1 页</span><button id="next" type="button" disabled>下一页</button></nav>
+      <p class="hint">漫画与日报同住一份日存档；在报告库删除整日报告时，当日漫画会一并删除。原图可预览；宿主沙箱未开放下载权限，下载暂缓。</p>
+    </section>
+  </main>
+
+  <div id="overlay" class="overlay" hidden>
+    <section id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="modal-state">
+      <header class="row modal-head"><h2 id="modal-title" tabindex="-1">漫画详情</h2><button id="close-modal" type="button" aria-label="关闭漫画详情">关闭</button></header>
+      <p id="modal-state" class="muted" role="status" aria-live="polite">正在读取…</p>
+      <dl id="detail-stats" class="stats"></dl>
+      <details id="storyboard-section" hidden><summary>分镜脚本（纯文本）</summary><pre id="storyboard-text"></pre></details>
+      <details id="prompt-section" hidden><summary>绘图提示词（纯文本）</summary><pre id="prompt-text"></pre></details>
+      <div id="detail-actions" class="buttons"></div>
+      <div class="buttons" style="margin-top:14px">
+        <button id="load-image" type="button" disabled>查看完整原图</button>
+        <button id="image-size" type="button" disabled>原始尺寸</button>
+        <button type="button" disabled aria-describedby="download-note" title="宿主 iframe 未开放 allow-downloads，下载暂缓">下载原图（暂不可用）</button>
+      </div>
+      <p id="download-note" class="hint">宿主沙箱仅允许脚本，未开放下载权限；本页不模拟下载。可查看完整 PNG 原图，或将漫画重发到原群。</p>
+      <div id="image-view" class="image-view"><img id="full-image" alt="漫画完整原图" hidden></div>
+    </section>
+  </div>
+
+  <script>
+    'use strict';
+    (() => {
+      const $ = id => document.getElementById(id);
+      const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
+      const MAX_BASE64_CHUNK = 384 * 1024;
+      const MAX_PIXELS = 40000000;
+      const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+      const REF_ID = /^[0-9a-f]{16}\.(?:png|jpg|webp)$/;
+      const TERMINAL = new Set(['completed', 'succeeded', 'success', 'done', 'failed', 'error', 'cancelled', 'canceled', 'rejected']);
+      const STATUS_NAMES = { queued: '排队中', pending: '等待中', accepted: '已接受', running: '运行中', cancelling: '正在取消', cancelled: '已取消', canceled: '已取消', completed: '已完成', succeeded: '已完成', success: '已完成', done: '已完成', failed: '失败', error: '失败', rejected: '已拒绝', idle: '空闲' };
+      const BOOK_STATUS_NAMES = { submitting: '提交中', unknown: '回执未知', pending: '等待绘图', running: '绘图中', unconfirmed: '远端待确认', completed: '已完成未发送', failed: '失败', rejected: '被拒绝', cancelled: '已取消', not_accepted: '未受理' };
+      const KIND_NAMES = { comic: '漫画', draw: '漫画' };
+      const SOURCE_NAMES = { webui: 'WebUI', command: '命令', schedule: '定时', auto: '日报联动' };
+      const state = { ready: false, disposed: false, actionBusy: false, overviewBusy: false, listLoading: false, uploadBusy: false, pending: 0, page: 1, pages: 1, listToken: 0, modalToken: 0, imageToken: 0, modalRow: null, imageBusy: false, overviewStamp: null, comicsDirty: false, timer: null, busyGroups: new Set(), enabled: false, drawpicAvailable: false, useRefs: false, refCount: 0 };
+      let bridge;
+      let queue = Promise.resolve();
+      let filters = { group_id: '', date_from: '', date_to: '', search: '', sort_order: 'desc' };
+      let comicGroups = [];
+      let overviewGroups = [];
+      let styleEntries = [{ key: 'four_panel', label: '四格漫画' }, { key: 'poster', label: '单幅海报' }];
+      let returnFocus = null;
+      const blobURLs = new Set();
+      class StaleRequest extends Error {}
+
+      const text = (value, limit = 1000) => {
+        if (value === null || value === undefined || value === '') return '—';
+        const result = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        return result.length > limit ? result.slice(0, limit) + '…' : result;
+      };
+      const element = (tag, value, className) => {
+        const node = document.createElement(tag);
+        if (value !== undefined) node.textContent = text(value);
+        if (className) node.className = className;
+        return node;
+      };
+      const notice = (message, error = false) => {
+        if (state.disposed) return;
+        $('notice').textContent = message;
+        $('notice').classList.toggle('error', error);
+      };
+      const object = value => value && typeof value === 'object' && !Array.isArray(value);
+      const validGroup = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+      const validRevision = value => typeof value === 'string' && value.length > 0 && value.length <= 128;
+      const validDay = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+      const currentModal = token => !state.disposed && token === state.modalToken && !$('overlay').hidden;
+      const comicArgs = row => ({ group_id: row.group_id, day: row.day, revision: row.revision });
+      const styleLabel = key => {
+        const entry = styleEntries.find(item => object(item) && item.key === key);
+        return entry ? entry.label : key;
+      };
+
+      // 与报告库同款串行队列：同页并发上限 2，所有桥调用（含上传）排队串行。
+      function call(kind, name, args = {}, relevant = () => true) {
+        const frozenArgs = { ...args };
+        state.pending += 1;
+        const request = queue.then(async () => {
+          if (state.disposed || !relevant()) throw new StaleRequest();
+          await bridge.ready;
+          if (state.disposed || !relevant()) throw new StaleRequest();
+          return bridge[kind](name, frozenArgs);
+        });
+        queue = request.then(() => undefined, () => undefined);
+        return request.finally(() => { state.pending -= 1; });
+      }
+
+      function uploadFile(file, relevant = () => true) {
+        state.pending += 1;
+        const request = queue.then(async () => {
+          if (state.disposed || !relevant()) throw new StaleRequest();
+          await bridge.ready;
+          if (state.disposed || !relevant()) throw new StaleRequest();
+          // upload_id 由宿主签发并注入绑定的 upload_ref action，页面不传。
+          return bridge.upload('ref', file, {});
+        });
+        queue = request.then(() => undefined, () => undefined);
+        return request.finally(() => { state.pending -= 1; });
+      }
+
+      function syncControls() {
+        const locked = !state.ready || state.actionBusy;
+        for (const id of ['draw-group', 'draw-day', 'draw-style', 'filter-group', 'filter-search', 'filter-sort', 'date-from', 'date-to', 'apply-filter', 'refresh', 'library-link', 'overview-link']) $(id).disabled = locked;
+        for (const button of document.querySelectorAll('[data-mutation]')) {
+          const busy = button.dataset.action !== 'cancel' && state.busyGroups.has(button.dataset.group);
+          button.disabled = locked || button.dataset.invalid === 'true' || busy;
+          button.title = busy ? '该群有进行中的任务，请等待完成或先取消' : '';
+        }
+        $('draw').disabled = locked || !state.enabled || !state.drawpicAvailable || !validGroup($('draw-group').value) || state.busyGroups.has($('draw-group').value);
+        $('upload-ref').disabled = locked || !state.enabled || state.uploadBusy || state.refCount >= 4;
+        $('previous').disabled = locked || state.page <= 1;
+        $('next').disabled = locked || state.page >= state.pages;
+        $('page-label').textContent = `第 ${state.page} / ${state.pages} 页`;
+      }
+
+      function replaceOptions(select, entries, placeholder, valueKey, labelKey) {
+        const selected = select.value;
+        const options = placeholder === null ? [] : [new Option(placeholder, '')];
+        const seen = new Set();
+        for (const entry of entries) {
+          if (!object(entry)) continue;
+          const value = entry[valueKey];
+          if (typeof value !== 'string' || !value || value.length > (valueKey === 'group_id' ? 128 : 64) || seen.has(value)) continue;
+          seen.add(value);
+          const label = labelKey === 'group_name' ? `${text(entry[labelKey], 100)} (${value})` : text(entry[labelKey], 100);
+          options.push(new Option(label, value));
+        }
+        if (selected && !seen.has(selected)) options.push(new Option(selected, selected));
+        select.replaceChildren(...options);
+        select.value = selected;
+      }
+
+      function renderGroups() {
+        const groups = [...overviewGroups, ...comicGroups];
+        replaceOptions($('filter-group'), groups, '全部群聊', 'group_id', 'group_name');
+        replaceOptions($('draw-group'), groups, '请选择群聊', 'group_id', 'group_name');
+        syncControls();
+      }
+
+      function mutationButton(label, name, args, invalid = false) {
+        const button = element('button', label, name === 'delete_comic' || name === 'delete_ref' ? 'danger' : '');
+        button.type = 'button';
+        button.dataset.mutation = 'true';
+        button.dataset.invalid = String(invalid);
+        button.dataset.group = args.group_id || '';
+        button.dataset.action = name;
+        button.disabled = invalid || state.actionBusy || !state.ready;
+        button.addEventListener('click', () => { void performAction(name, args, label); });
+        return button;
+      }
+
+      function comicActions(row) {
+        const actions = element('div', undefined, 'buttons');
+        const invalid = !validRevision(row.revision);
+        actions.append(
+          mutationButton('重发到原群', 'comic_resend', comicArgs(row), invalid),
+          mutationButton('删除漫画', 'delete_comic', comicArgs(row), invalid)
+        );
+        return actions;
+      }
+
+      async function performAction(name, args, label) {
+        if (!state.ready || state.disposed || state.actionBusy) return;
+        if (name !== 'delete_ref' && !validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
+        if ((name === 'comic_resend' || name === 'delete_comic') && !validRevision(args.revision)) { notice('存档版本缺失，请刷新列表后重试。', true); return; }
+        if (name === 'delete_ref' && (typeof args.ref_id !== 'string' || !REF_ID.test(args.ref_id))) { notice('参考图标识无效。', true); return; }
+        state.actionBusy = true;
+        syncControls();
+        notice(`${label}：请在宿主确认框中确认（如有），正在等待结果…`);
+        let deleted = false;
+        try {
+          const result = await call('action', name, args);
+          if (state.disposed) return;
+          if (!object(result)) throw new Error('操作响应格式不正确');
+          if (name === 'delete_comic' || name === 'delete_ref') {
+            deleted = result.deleted === true;
+            notice(deleted ? (name === 'delete_comic' ? '已删除所选漫画存档，当日日报保留。' : '已删除参考图。') : '未删除，可能已更新或不存在；请刷新后重试。', !deleted);
+            if (deleted && name === 'delete_comic') closeModal();
+          } else {
+            const accepted = result.accepted === true;
+            notice(`${accepted ? '已接受' : '未接受'}：${text(result.message || result.status)}${accepted ? ' 请查看任务状态；接受不代表已完成。' : ''}`, !accepted);
+          }
+        } catch (error) {
+          if (!(error instanceof StaleRequest)) notice(`${label}未完成或确认已取消：${text(error.message)}。若请求已发送，请先刷新状态再重试，避免重复操作。`, true);
+        } finally {
+          state.actionBusy = false;
+          if (!state.disposed) {
+            syncControls();
+            if (deleted && name === 'delete_comic') void loadComics(state.page);
+            void loadOverview();
+          }
+        }
+      }
+
+      function operationTime(operation) {
+        const value = operation.started_at;
+        const numeric = typeof value === 'number' ? value : Date.parse(value);
+        return Number.isFinite(numeric) ? numeric : 0;
+      }
+
+      function renderOperations(operations) {
+        const latest = new Map();
+        for (const operation of operations) {
+          if (!object(operation) || !validGroup(operation.group_id)) continue;
+          const previous = latest.get(operation.group_id);
+          if (!previous || operationTime(operation) >= operationTime(previous)) latest.set(operation.group_id, operation);
+        }
+        const names = new Map([...comicGroups, ...overviewGroups].filter(object).map(group => [group.group_id, group.group_name]));
+        const rows = [];
+        const busy = new Set();
+        for (const operation of latest.values()) {
+          const row = element('div', undefined, 'task');
+          const copy = element('div', undefined, 'task-copy');
+          const sourceLabel = SOURCE_NAMES[operation.source] || operation.source;
+          copy.append(element('strong', `${text(names.get(operation.group_id) || operation.group_id, 100)} · ${text(operation.day)} · ${text(KIND_NAMES[operation.kind] || operation.kind)}${sourceLabel ? ' · ' + text(sourceLabel, 20) : ''}`));
+          copy.append(element('p', `${text(STATUS_NAMES[operation.status] || operation.status)} · ${text(operation.stage)} · 开始 ${text(operation.started_at)}${operation.finished_at ? ' · 结束 ' + text(operation.finished_at) : ''}`, 'muted'));
+          if (operation.error) copy.append(element('p', text(operation.error, 1600), 'task-error'));
+          row.append(copy);
+          if (operation.status && !TERMINAL.has(operation.status) && operation.status !== 'idle') {
+            busy.add(operation.group_id);
+            row.append(mutationButton('取消该群任务', 'cancel', { group_id: operation.group_id }));
+          }
+          rows.push(row);
+        }
+        state.busyGroups = busy;
+        $('tasks').replaceChildren(...(rows.length ? rows : [element('p', '暂无漫画任务记录。', 'muted')]));
+        syncControls();
+      }
+
+      function renderRecoverable(entries) {
+        const rows = [];
+        for (const entry of entries) {
+          if (!object(entry) || !validGroup(entry.group_id) || !validDay(entry.day)) continue;
+          const row = element('div', undefined, 'task');
+          const copy = element('div', undefined, 'task-copy');
+          copy.append(element('strong', `${text(entry.group_name || entry.group_id, 100)} · ${entry.day} · ${text(styleLabel(entry.style), 40)} · ${text(BOOK_STATUS_NAMES[entry.status] || entry.status, 40)}`));
+          copy.append(element('p', `请求键 ${text(entry.request_id, 90)} · 记录于 ${text(entry.created_at)}`, 'muted'));
+          if (entry.error) copy.append(element('p', text(entry.error, 600), 'task-error'));
+          row.append(copy);
+          row.append(mutationButton('恢复进度', 'comic_resume', { group_id: entry.group_id, day: entry.day }, !state.enabled || !state.drawpicAvailable));
+          rows.push(row);
+        }
+        $('recoverable').replaceChildren(...(rows.length ? rows : [element('p', '没有待恢复的请求。', 'muted')]));
+      }
+
+      async function renderRefs(refs) {
+        state.refCount = refs.length;
+        const cards = [];
+        const pending = [];
+        for (const ref of refs) {
+          if (!object(ref) || typeof ref.ref_id !== 'string' || !REF_ID.test(ref.ref_id)) continue;
+          const card = element('div', undefined, 'ref');
+          const preview = element('img');
+          preview.alt = `参考图 ${ref.ref_id}`;
+          preview.decoding = 'async';
+          const body = element('div', undefined, 'ref-body');
+          body.append(element('p', `${text(ref.ref_id, 40)} · ${(Number(ref.size) / 1024).toFixed(0)} KiB`));
+          const actions = element('div', undefined, 'buttons');
+          actions.append(mutationButton('删除', 'delete_ref', { ref_id: ref.ref_id }));
+          body.append(actions);
+          card.append(preview, body);
+          cards.push(card);
+          pending.push({ ref, preview });
+        }
+        $('refs').replaceChildren(...(cards.length ? cards : [element('p', '还没有参考图。', 'muted')]));
+        $('refs-hint').textContent = state.useRefs
+          ? `最多 4 张，每张 8 MiB 以内的静态 PNG / JPEG / WebP。当前 ${refs.length} 张，绘图时会一并附带。`
+          : `最多 4 张，每张 8 MiB 以内的静态 PNG / JPEG / WebP。当前 ${refs.length} 张；插件设置未开启「附带参考图」，绘图时不会附带。`;
+        syncControls();
+        for (const { ref, preview } of pending) {
+          if (state.disposed) break;
+          try {
+            const thumb = await call('query', 'comic_ref_thumb', { ref_id: ref.ref_id });
+            if (state.disposed) break;
+            if (!object(thumb) || typeof thumb.data_uri !== 'string' || !thumb.data_uri.startsWith('data:image/jpeg;base64,')) throw new Error('缩略图格式不匹配');
+            preview.src = thumb.data_uri;
+          } catch (error) {
+            if (error instanceof StaleRequest) break;
+            if (!state.disposed) preview.alt = `参考图 ${ref.ref_id}（缩略图不可用）`;
+          }
+        }
+      }
+
+      async function loadOverview() {
+        if (!state.ready || state.disposed || state.overviewBusy) return;
+        state.overviewBusy = true;
+        try {
+          const result = await call('query', 'comic_overview');
+          if (state.disposed) return;
+          if (!object(result)) throw new Error('状态响应格式不正确');
+          state.enabled = result.enabled === true;
+          state.drawpicAvailable = result.drawpic_available === true;
+          state.useRefs = result.use_reference_images === true;
+          $('feature-state').textContent = state.enabled
+            ? (state.drawpicAvailable ? '漫画已启用 · 绘图接口可用' : '漫画已启用 · 未检测到绘图接口')
+            : '漫画未启用（插件设置 → 群聊漫画）';
+          overviewGroups = Array.isArray(result.groups) ? result.groups : [];
+          renderGroups();
+          if (Array.isArray(result.styles) && result.styles.length) styleEntries = result.styles;
+          const selectedStyle = $('draw-style').value;
+          replaceOptions($('draw-style'), styleEntries, null, 'key', 'label');
+          $('draw-style').value = styleEntries.some(item => object(item) && item.key === selectedStyle) ? selectedStyle
+            : (typeof result.default_style === 'string' && styleEntries.some(item => object(item) && item.key === result.default_style) ? result.default_style : 'four_panel');
+          $('active-count').textContent = `活跃任务：${text(result.active_count)}`;
+          $('task-status').textContent = `${text(result.status)} · 更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
+          renderOperations(Array.isArray(result.operations) ? result.operations : []);
+          renderRecoverable(Array.isArray(result.recoverable) ? result.recoverable : []);
+          const refs = Array.isArray(result.refs) ? result.refs : [];
+          const stamp = JSON.stringify([result.total, result.today_count, refs.map(ref => object(ref) ? ref.ref_id : null),
+            (Array.isArray(result.recoverable) ? result.recoverable : []).map(entry => object(entry) ? [entry.request_id, entry.status] : null),
+            (Array.isArray(result.operations) ? result.operations : []).filter(object).filter(operation => TERMINAL.has(operation.status)).map(operation => [operation.group_id, operation.status, operation.finished_at])]);
+          if (state.overviewStamp !== null && state.overviewStamp !== stamp) {
+            state.comicsDirty = true;
+            $('gallery-hint').textContent = '任务或存档有更新，关闭详情后将自动刷新列表。';
+          }
+          state.overviewStamp = stamp;
+          await renderRefs(refs);
+          if (state.comicsDirty && !state.actionBusy && !state.listLoading && !state.imageBusy && $('overlay').hidden) void loadComics(state.page);
+        } catch (error) {
+          if (!(error instanceof StaleRequest) && !state.disposed) $('task-status').textContent = `状态刷新失败：${text(error.message)}。保留上次状态，下一轮重试。`;
+        } finally { state.overviewBusy = false; }
+      }
+
+      function validateRow(row) {
+        if (!object(row) || !validGroup(row.group_id) || !validDay(row.day)) throw new Error('漫画条目格式不正确');
+        return row;
+      }
+
+      async function loadComics(page = 1) {
+        if (!state.ready || state.disposed) return;
+        const token = ++state.listToken;
+        const relevant = () => token === state.listToken;
+        const args = { ...filters, page: Math.max(1, Math.min(1000000, page)) };
+        state.page = args.page;
+        state.listLoading = true;
+        state.comicsDirty = false;
+        closeModal();
+        $('gallery-hint').textContent = '';
+        $('comics').setAttribute('aria-busy', 'true');
+        $('comics').replaceChildren(element('p', '正在读取漫画存档…', 'empty'));
+        $('list-summary').textContent = '载入中 · 每页12份漫画';
+        syncControls();
+        try {
+          const result = await call('query', 'comics', args, relevant);
+          if (!relevant() || state.disposed) return;
+          if (!object(result) || !Array.isArray(result.items) || result.items.length > 12 || !Number.isSafeInteger(result.page) || result.page < 1 || !Number.isSafeInteger(result.pages) || result.pages < 0 || result.pages > 1000000 || !Number.isSafeInteger(result.total) || result.total < 0) throw new Error('分页响应格式不正确');
+          if (result.pages > 0 && result.page > result.pages) {
+            void loadComics(result.pages);
+            return;
+          }
+          state.page = result.pages === 0 ? 1 : result.page;
+          state.pages = Math.max(1, result.pages);
+          comicGroups = Array.isArray(result.groups) ? result.groups : [];
+          renderGroups();
+          const thumbnails = [];
+          const cards = result.items.map(item => {
+            const row = validateRow(item);
+            const card = element('article', undefined, 'report');
+            const preview = element('button', '缩略图载入中…', 'thumbnail');
+            preview.type = 'button';
+            preview.setAttribute('aria-label', `查看 ${text(row.group_name, 100)} ${row.day} 漫画原图`);
+            preview.addEventListener('click', () => { void openDetail(row, true); });
+            thumbnails.push({ row, preview });
+            const body = element('div', undefined, 'report-body');
+            body.append(element('h3', text(row.group_name || row.group_id, 160)));
+            body.append(element('p', `${row.day} · ${text(styleLabel(row.style), 40)}\n消息 ${text(row.message_count)} · ${row.sent === true ? '已发送' : '未发送'}\n生成于 ${text(row.created_at)}`, 'report-meta'));
+            const actions = comicActions(row);
+            const detail = element('button', '详情');
+            detail.type = 'button';
+            detail.addEventListener('click', () => { void openDetail(row); });
+            actions.prepend(detail);
+            body.append(actions);
+            if (!validRevision(row.revision)) body.append(element('p', '存档版本缺失，预览 / 重发 / 删除需刷新后重试。', 'hint'));
+            card.append(preview, body);
+            return card;
+          });
+          $('comics').replaceChildren(...(cards.length ? cards : [element('p', '当前筛选下没有漫画存档。选择群与日期后点「开始画漫画」。', 'empty')]));
+          $('list-summary').textContent = `共 ${result.total} 份 · 每页12份 · 本页 ${cards.length} 份`;
+          $('comics').setAttribute('aria-busy', 'false');
+          syncControls();
+          for (const { row, preview } of thumbnails) {
+            if (!relevant() || state.disposed) break;
+            try {
+              if (!validRevision(row.revision)) throw new Error('缺少存档版本');
+              const thumbnail = await call('query', 'comic_thumb', comicArgs(row), relevant);
+              if (!relevant() || state.disposed) break;
+              if (!object(thumbnail) || thumbnail.revision !== row.revision || typeof thumbnail.data_uri !== 'string' || !thumbnail.data_uri.startsWith('data:image/jpeg;base64,')) throw new Error('缩略图版本或格式不匹配');
+              const encoded = thumbnail.data_uri.slice('data:image/jpeg;base64,'.length);
+              if (!encoded || encoded.length > 128 * 1024 || !BASE64.test(encoded)) throw new Error('缩略图内容无效');
+              const image = element('img');
+              image.alt = `${text(row.group_name, 100)} ${row.day} 漫画缩略图，点击查看原图`;
+              image.decoding = 'async';
+              image.onerror = () => { if (relevant() && !state.disposed) preview.textContent = '缩略图不可用 · 点击查看原图'; };
+              image.src = thumbnail.data_uri;
+              preview.replaceChildren(image);
+            } catch (error) {
+              if (error instanceof StaleRequest) break;
+              if (relevant() && !state.disposed) preview.textContent = '缩略图不可用 · 点击查看原图';
+            }
+          }
+        } catch (error) {
+          if (!(error instanceof StaleRequest) && relevant() && !state.disposed) {
+            $('comics').replaceChildren(element('p', `读取失败：${text(error.message)}。请点击“刷新列表”重试。`, 'empty'));
+            $('list-summary').textContent = `第 ${state.page} 页未能加载`;
+          }
+        } finally {
+          if (relevant() && !state.disposed) {
+            state.listLoading = false;
+            $('comics').setAttribute('aria-busy', 'false');
+            syncControls();
+          }
+        }
+      }
+
+      function releaseImages() {
+        state.imageToken += 1;
+        const image = $('full-image');
+        image.onload = null;
+        image.onerror = null;
+        image.removeAttribute('src');
+        image.hidden = true;
+        for (const url of blobURLs) URL.revokeObjectURL(url);
+        blobURLs.clear();
+        $('image-size').disabled = true;
+        $('image-size').textContent = '原始尺寸';
+        $('image-view').classList.remove('natural-size');
+      }
+
+      function closeModal() {
+        state.modalToken += 1;
+        state.modalRow = null;
+        state.imageBusy = false;
+        releaseImages();
+        const wasOpen = !$('overlay').hidden;
+        $('overlay').hidden = true;
+        $('main').inert = false;
+        document.body.style.overflow = '';
+        if (wasOpen && !state.disposed) (returnFocus && returnFocus.isConnected ? returnFocus : $('refresh')).focus();
+      }
+
+      function addStat(label, value) {
+        const item = element('div', undefined, 'stat');
+        item.append(element('dt', label), element('dd', text(value, 500)));
+        $('detail-stats').append(item);
+      }
+
+      async function openDetail(row, preview = false) {
+        const opener = document.activeElement;
+        closeModal();
+        returnFocus = opener;
+        const token = state.modalToken;
+        $('overlay').hidden = false;
+        $('main').inert = true;
+        document.body.style.overflow = 'hidden';
+        $('modal-title').textContent = `${text(row.group_name || row.group_id, 160)} · ${row.day} 漫画`;
+        $('modal-state').textContent = '正在读取漫画详情…';
+        $('detail-stats').replaceChildren();
+        $('detail-actions').replaceChildren();
+        $('storyboard-text').textContent = '';
+        $('storyboard-section').hidden = true;
+        $('storyboard-section').open = false;
+        $('prompt-text').textContent = '';
+        $('prompt-section').hidden = true;
+        $('prompt-section').open = false;
+        $('load-image').disabled = true;
+        $('load-image').textContent = '查看完整原图';
+        $('modal-title').focus();
+        try {
+          if (!validRevision(row.revision)) throw new Error('存档版本缺失，请关闭后刷新列表');
+          const detail = await call('query', 'comic_detail', { group_id: row.group_id, day: row.day }, () => currentModal(token));
+          if (!currentModal(token)) return;
+          if (!object(detail) || detail.revision !== row.revision || detail.group_id !== row.group_id || detail.day !== row.day) throw new Error('存档已变化，请关闭后刷新列表，避免混用新旧漫画');
+          state.modalRow = detail;
+          addStat('群聊', `${text(detail.group_name)} (${detail.group_id})`);
+          addStat('日期', detail.day);
+          addStat('风格', styleLabel(detail.style));
+          addStat('消息数', detail.message_count);
+          addStat('发送状态', detail.sent === true ? '已发送到群' : '未发送（可重发）');
+          addStat('生成时间', detail.created_at);
+          addStat('请求键', detail.request_id);
+          addStat('绘图任务 ID', detail.task_id);
+          if (detail.storyboard && typeof detail.storyboard === 'object') {
+            $('storyboard-text').textContent = text(detail.storyboard, 8000);
+            $('storyboard-section').hidden = false;
+          }
+          if (typeof detail.prompt === 'string' && detail.prompt) {
+            $('prompt-text').textContent = text(detail.prompt, 8000);
+            $('prompt-section').hidden = false;
+          }
+          $('detail-actions').append(comicActions(detail));
+          syncControls();
+          $('load-image').disabled = false;
+          $('modal-state').textContent = '详情已加载。原图按块顺序读取，可关闭弹窗停止后续读取。';
+          if (preview) void loadOriginal();
+        } catch (error) {
+          if (!(error instanceof StaleRequest) && currentModal(token)) $('modal-state').textContent = `详情读取失败：${text(error.message)}。请关闭后重试或刷新列表。`;
+        }
+      }
+
+      function decodeChunk(chunk, offset, expectedSize, revision) {
+        if (!object(chunk) || chunk.revision !== revision) throw new Error('漫画版本已变化，请刷新列表后重新打开');
+        if (chunk.mime !== 'image/png') throw new Error('只允许 PNG 原图预览');
+        if (!Number.isSafeInteger(chunk.size) || chunk.size < 24 || chunk.size > MAX_IMAGE_BYTES) throw new Error('原图大小超出预览上限（32 MiB）或文件无效');
+        if (expectedSize !== null && chunk.size !== expectedSize) throw new Error('原图大小在读取过程中变化');
+        if (chunk.offset !== offset || !Number.isSafeInteger(chunk.next_offset) || chunk.next_offset <= offset || chunk.next_offset > chunk.size) throw new Error('图片分块偏移未前进或不连续');
+        if (typeof chunk.done !== 'boolean' || chunk.done !== (chunk.next_offset === chunk.size)) throw new Error('图片分块结束标记不一致');
+        if (typeof chunk.data !== 'string' || !chunk.data || chunk.data.length > MAX_BASE64_CHUNK || !BASE64.test(chunk.data)) throw new Error('图片分块编码无效或超过384 KiB');
+        const decoded = atob(chunk.data);
+        if (decoded.length !== chunk.next_offset - offset) throw new Error('图片分块长度与字节偏移不符');
+        return Uint8Array.from(decoded, character => character.charCodeAt(0));
+      }
+
+      async function validatePNG(blob) {
+        const header = new Uint8Array(await blob.slice(0, 24).arrayBuffer());
+        const signature = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82];
+        if (signature.some((byte, index) => header[index] !== byte)) throw new Error('原图不是有效 PNG 文件');
+        const view = new DataView(header.buffer);
+        const width = view.getUint32(16);
+        const height = view.getUint32(20);
+        if (!width || !height || width > 100000 || height > 100000 || width * height > MAX_PIXELS) throw new Error('原图尺寸超出安全预览上限（4000万像素）');
+      }
+
+      async function loadOriginal() {
+        const row = state.modalRow;
+        if (!row || state.imageBusy || state.disposed) return;
+        releaseImages();
+        const modalToken = state.modalToken;
+        const imageToken = state.imageToken;
+        const relevant = () => currentModal(modalToken) && imageToken === state.imageToken;
+        state.imageBusy = true;
+        $('load-image').disabled = true;
+        $('modal-state').textContent = '正在顺序读取完整原图…';
+        try {
+          const parts = [];
+          let offset = 0;
+          let size = null;
+          let done = false;
+          let count = 0;
+          while (!done) {
+            if (!relevant()) throw new StaleRequest();
+            if (++count > 256) throw new Error('图片分块过多，已停止读取');
+            const chunk = await call('query', 'comic_chunk', { ...comicArgs(row), offset }, relevant);
+            if (!relevant()) throw new StaleRequest();
+            parts.push(decodeChunk(chunk, offset, size, row.revision));
+            size = chunk.size;
+            offset = chunk.next_offset;
+            done = chunk.done;
+            $('modal-state').textContent = `原图读取中 ${Math.floor(offset / size * 100)}% · ${(offset / 1048576).toFixed(1)} / ${(size / 1048576).toFixed(1)} MiB`;
+          }
+          const blob = new Blob(parts, { type: 'image/png' });
+          if (blob.size !== size) throw new Error('原图拼接大小不一致');
+          await validatePNG(blob);
+          if (!relevant()) throw new StaleRequest();
+          const url = URL.createObjectURL(blob);
+          blobURLs.add(url);
+          const image = $('full-image');
+          image.onload = () => {
+            if (!relevant()) return;
+            $('modal-state').textContent = `完整原图 · ${image.naturalWidth} × ${image.naturalHeight} · ${(blob.size / 1048576).toFixed(1)} MiB`;
+            $('image-size').disabled = false;
+          };
+          image.onerror = () => {
+            if (!relevant()) return;
+            releaseImages();
+            $('modal-state').textContent = '原图解码失败，请重新载入或刷新列表后重试。';
+            $('load-image').disabled = false;
+          };
+          image.hidden = false;
+          image.src = url;
+          $('load-image').textContent = '重新载入原图';
+          $('modal-state').textContent = '原图读取完成，正在解码显示…';
+        } catch (error) {
+          if (!(error instanceof StaleRequest) && relevant()) $('modal-state').textContent = `原图读取失败：${text(error.message)}。可重试；若版本已变化，请关闭并刷新列表。`;
+        } finally {
+          if (currentModal(modalToken)) {
+            state.imageBusy = false;
+            $('load-image').disabled = false;
+          }
+        }
+      }
+
+      function applyFilters() {
+        if (!state.ready || state.actionBusy) return;
+        const from = $('date-from').value;
+        const to = $('date-to').value;
+        if (from && to && from > to) { notice('起始日期不能晚于结束日期。', true); return; }
+        filters = { group_id: $('filter-group').value, date_from: from, date_to: to,
+                    search: $('filter-search').value.trim(), sort_order: $('filter-sort').value };
+        void loadComics(1);
+      }
+      $('apply-filter').addEventListener('click', applyFilters);
+      $('filters').addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); applyFilters(); }
+      });
+      $('previous').addEventListener('click', () => { void loadComics(state.page - 1); });
+      $('next').addEventListener('click', () => { void loadComics(state.page + 1); });
+      $('refresh').addEventListener('click', () => { void loadComics(state.page); void loadOverview(); });
+      $('draw-group').addEventListener('change', syncControls);
+      $('draw').addEventListener('click', () => {
+        void performAction('draw', { group_id: $('draw-group').value, day: $('draw-day').value, style: $('draw-style').value }, '画漫画');
+      });
+      $('upload-ref').addEventListener('click', () => {
+        if (!state.ready || state.actionBusy || state.uploadBusy || !state.enabled || state.refCount >= 4) return;
+        $('ref-file').click();
+      });
+      $('ref-file').addEventListener('change', async () => {
+        const file = $('ref-file').files && $('ref-file').files[0];
+        $('ref-file').value = '';
+        if (!file || state.uploadBusy || !state.ready || state.disposed) return;
+        if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { notice('参考图仅支持静态 PNG / JPEG / WebP。', true); return; }
+        if (file.size === 0 || file.size > 8 * 1024 * 1024) { notice('参考图需在 8 MiB 以内。', true); return; }
+        state.uploadBusy = true;
+        syncControls();
+        notice('正在上传参考图（宿主会先压缩到 4096 边长以内）…');
+        try {
+          const result = await uploadFile(file);
+          if (state.disposed) return;
+          if (!object(result) || typeof result.ref_id !== 'string' || !REF_ID.test(result.ref_id)) throw new Error('上传响应格式不正确');
+          notice('参考图已上传。');
+          void loadOverview();
+        } catch (error) {
+          if (!(error instanceof StaleRequest)) notice(`参考图上传未完成：${text(error.message)}。若文件已送达，请先刷新参考图列表再重试。`, true);
+        } finally {
+          state.uploadBusy = false;
+          if (!state.disposed) syncControls();
+        }
+      });
+      $('library-link').addEventListener('click', async () => {
+        try { await call('navigate', 'report-library'); }
+        catch (error) { if (!(error instanceof StaleRequest)) notice(`无法打开报告库：${text(error.message)}`, true); }
+      });
+      $('overview-link').addEventListener('click', async () => {
+        try { await call('navigate', 'overview'); }
+        catch (error) { if (!(error instanceof StaleRequest)) notice(`无法打开总览：${text(error.message)}`, true); }
+      });
+      $('close-modal').addEventListener('click', closeModal);
+      $('overlay').addEventListener('click', event => { if (event.target === $('overlay')) closeModal(); });
+      $('load-image').addEventListener('click', () => { void loadOriginal(); });
+      $('image-size').addEventListener('click', () => {
+        const natural = $('image-view').classList.toggle('natural-size');
+        $('image-size').textContent = natural ? '适应宽度' : '原始尺寸';
+      });
+      document.addEventListener('keydown', event => {
+        if ($('overlay').hidden) return;
+        if (event.key === 'Escape') { event.preventDefault(); closeModal(); }
+        if (event.key === 'Tab') {
+          const focusable = Array.from($('modal').querySelectorAll('button:not(:disabled), summary')).filter(node => node.getClientRects().length);
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (!first) return;
+          if (event.shiftKey && (document.activeElement === first || document.activeElement === $('modal-title'))) { event.preventDefault(); last.focus(); }
+          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        }
+      });
+      function dispose() {
+        if (state.disposed) return;
+        state.disposed = true;
+        state.listToken += 1;
+        state.modalToken += 1;
+        clearInterval(state.timer);
+        releaseImages();
+      }
+      window.addEventListener('pagehide', dispose);
+      window.addEventListener('beforeunload', dispose);
+
+      async function start() {
+        try {
+          bridge = window.maibot;
+          if (!bridge || !bridge.ready) throw new Error('请从 MaiBot WebUI 打开此页面');
+          await bridge.ready;
+          if (state.disposed) return;
+          state.ready = true;
+          $('connection').textContent = '已连接宿主';
+          syncControls();
+          notice('漫画由麦麦绘图插件生成；恢复进度只查证原任务，不会重复扣额度重画。');
+          void loadOverview();
+          void loadComics(1);
+          state.timer = setInterval(() => {
+            if (state.disposed || document.hidden || state.pending || state.actionBusy || state.listLoading || state.overviewBusy || state.imageBusy || state.uploadBusy) return;
+            void loadOverview();
+          }, 5000);
+        } catch (error) {
+          $('connection').textContent = '连接不可用';
+          $('comics').setAttribute('aria-busy', 'false');
+          $('comics').replaceChildren(element('p', '无法连接宿主，请在 MaiBot WebUI 中重新打开漫画廊。', 'empty'));
+          notice(`连接失败：${text(error.message)}`, true);
+        }
+      }
+      void start();
+    })();
+  </script>
+</body>
+</html>

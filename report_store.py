@@ -24,6 +24,10 @@ class ReportStore:
     MAX_PIXELS = 40_000_000
     SUMMARY_FIELDS = ('group_id', 'group_name', 'day', 'theme', 'created_at', 'revision',
                       'has_image', 'message_count', 'participant_count', 'elapsed_seconds', 'version')
+    COMIC_FILES = ('comic.png', 'comic_thumb.jpg', 'comic.json')
+    COMIC_SUMMARY_FIELDS = ('group_id', 'group_name', 'day', 'style', 'created_at', 'revision',
+                            'message_count', 'sent', 'request_id')
+    MAX_COMIC_PROMPT = 8000
 
     def __init__(self, data_dir: Path):
         self.root = Path(data_dir).absolute() / 'reports'
@@ -172,6 +176,12 @@ class ReportStore:
                     (staging / 'report.png').write_bytes(image)
                     (staging / 'thumb.jpg').write_bytes(thumb)
                 (staging / 'meta.json').write_bytes(encoded)
+                # 整目录替换前保留当日漫画存档（P3），否则重新生成日报会抹掉漫画
+                if directory.exists():
+                    for name in self.COMIC_FILES:
+                        source = directory / name
+                        if source.is_file():
+                            shutil.copy2(source, staging / name)
                 self._check_path(directory)
                 if directory.exists():
                     os.replace(directory, backup)
@@ -337,3 +347,210 @@ class ReportStore:
         with self._lock:
             old = [row for row in self._catalog() if row['day'] < cutoff]
             return sum(self.delete(row['group_id'], row['day'], row['revision'])['deleted'] for row in old)
+
+    # ------------------------------------------------------------------ 漫画存档（P3）
+    # 漫画三件套 comic.png / comic_thumb.jpg / comic.json 与日报同住 reports/<群>/<日>/，
+    # 日报 save() 整目录替换时会保留它们；delete() 删整日目录则一并删除。
+
+    def _read_comic_meta(self, directory):
+        path = self._file(directory, 'comic.json')
+        if path.stat().st_size > self.MAX_META_BYTES:
+            raise ValueError('漫画元数据过大')
+        try:
+            meta = json.loads(path.read_text(encoding='utf-8'))
+            if not isinstance(meta, dict) or meta['group_id'] != directory.parent.name or meta['day'] != directory.name:
+                raise ValueError('漫画元数据不匹配')
+            self._group(meta['group_id'])
+            self._day(meta['day'])
+            if not re.fullmatch(r'[0-9a-f]{32}', meta['revision']):
+                raise ValueError('漫画版本无效')
+            if not re.fullmatch(r'[A-Za-z0-9_-]{8,80}', meta['request_id']):
+                raise ValueError('漫画请求键无效')
+            datetime.fromisoformat(meta['created_at'])
+            for key in ('group_name', 'style', 'version'):
+                if not isinstance(meta[key], str) or len(meta[key]) > 200:
+                    raise ValueError('漫画文本字段无效')
+            if type(meta['message_count']) is not int or not 0 <= meta['message_count'] <= 10**12:
+                raise ValueError('漫画计数字段无效')
+            if type(meta['sent']) is not bool:
+                raise ValueError('漫画发送标记无效')
+            if any(not self._file(directory, name).is_file() for name in ('comic.png', 'comic_thumb.jpg')):
+                raise ValueError('漫画文件不完整')
+        except (KeyError, TypeError, UnicodeError, json.JSONDecodeError):
+            raise ValueError('漫画元数据无效') from None
+        return meta
+
+    def save_comic(self, group_id, day, image_b64, metadata):
+        directory = self._directory(group_id, day)
+        if not isinstance(metadata, dict):
+            raise ValueError('漫画元数据无效')
+        image, thumb = self._image(image_b64)
+        storyboard = metadata.get('storyboard')
+        if not isinstance(storyboard, dict):
+            storyboard = {}
+        meta = {
+            'group_id': group_id, 'day': day, 'revision': uuid.uuid4().hex,
+            'created_at': datetime.now().isoformat(timespec='microseconds'),
+            'group_name': str(metadata.get('group_name') or group_id)[:200],
+            'style': str(metadata.get('style') or '')[:200],
+            'request_id': str(metadata.get('request_id') or ''),
+            'task_id': str(metadata.get('task_id') or '')[:64],
+            'prompt': str(metadata.get('prompt') or '')[:self.MAX_COMIC_PROMPT],
+            'storyboard': storyboard,
+            'message_count': metadata.get('message_count', 0),
+            'sent': False, 'version': str(metadata.get('version') or '')[:200],
+        }
+        if not re.fullmatch(r'[A-Za-z0-9_-]{8,80}', meta['request_id']):
+            raise ValueError('漫画请求键无效')
+        encoded = json.dumps(meta, ensure_ascii=False, allow_nan=False).encode('utf-8')
+        if len(encoded) > self.MAX_META_BYTES:
+            raise ValueError('漫画元数据超过 128 KiB')
+        with self._lock:
+            self._check_path(directory)
+            directory.mkdir(parents=True, exist_ok=True)
+            # 逐文件原子替换，comic.json 最后写（它是列表可见性的提交标记）
+            for name, payload in (('comic.png', image), ('comic_thumb.jpg', thumb), ('comic.json', encoded)):
+                fd, tmp = tempfile.mkstemp(prefix=f'.{name}-', dir=str(directory))
+                try:
+                    with os.fdopen(fd, 'wb') as stream:
+                        stream.write(payload)
+                    self._check_path(directory / name)
+                    os.replace(tmp, directory / name)
+                finally:
+                    if os.path.exists(tmp):
+                        os.unlink(tmp)
+        return meta
+
+    def _comic_catalog(self):
+        self._check_path(self.root)
+        if not self.root.exists():
+            return []
+        result = []
+        for group in self.root.iterdir():
+            try:
+                self._group(group.name)
+                self._check_path(group)
+                if not group.is_dir():
+                    continue
+                for directory in group.iterdir():
+                    try:
+                        self._day(directory.name)
+                        self._check_path(directory)
+                        if directory.is_dir() and (directory / 'comic.json').is_file():
+                            result.append(self._read_comic_meta(directory))
+                    except (OSError, ValueError):
+                        continue
+            except (OSError, ValueError):
+                continue
+        result.sort(key=lambda row: (row['created_at'], row['day'], row['group_id']), reverse=True)
+        return result
+
+    def list_comics(self, group_id='', date_from='', date_to='', page=1, page_size=12,
+                    search='', sort_order='desc'):
+        if group_id:
+            self._group(group_id)
+        if date_from:
+            self._day(date_from)
+        if date_to:
+            self._day(date_to)
+        if date_from and date_to and date_from > date_to:
+            raise ValueError('起始日期晚于结束日期')
+        if type(page) is not int or not 1 <= page <= 1_000_000 or type(page_size) is not int or not 1 <= page_size <= 12:
+            raise ValueError('分页参数无效')
+        if not isinstance(search, str) or len(search) > 100:
+            raise ValueError('搜索词无效')
+        if sort_order not in ('desc', 'asc'):
+            raise ValueError('排序方向无效')
+        keyword = search.strip().casefold()
+        with self._lock:
+            all_rows = self._comic_catalog()
+            groups = {}
+            for row in all_rows:
+                groups.setdefault(row['group_id'], row['group_name'])
+            rows = [row for row in all_rows if (not group_id or row['group_id'] == group_id)
+                    and (not date_from or row['day'] >= date_from) and (not date_to or row['day'] <= date_to)
+                    and (not keyword or any(keyword in str(row[key]).casefold()
+                                            for key in ('group_name', 'group_id', 'day', 'style')))]
+            if sort_order == 'asc':
+                rows.reverse()
+            start = (page - 1) * page_size
+            return {'items': [{key: row[key] for key in self.COMIC_SUMMARY_FIELDS} for row in rows[start:start + page_size]],
+                    'total': len(rows), 'page': page, 'pages': (len(rows) + page_size - 1) // page_size,
+                    'groups': [{'group_id': gid, 'group_name': name} for gid, name in sorted(groups.items())[:100]]}
+
+    def comic_detail(self, group_id, day):
+        with self._lock:
+            return self._read_comic_meta(self._directory(group_id, day))
+
+    def comic_thumbnail(self, group_id, day, revision=''):
+        with self._lock:
+            directory = self._directory(group_id, day)
+            meta = self._read_comic_meta(directory)
+            self._revision(meta, revision)
+            path = self._file(directory, 'comic_thumb.jpg')
+            if path.stat().st_size > 15 * 1024:
+                raise ValueError('缩略图文件过大')
+            return {'data_uri': 'data:image/jpeg;base64,' + base64.b64encode(path.read_bytes()).decode('ascii'),
+                    'revision': meta['revision']}
+
+    def read_comic_bytes(self, group_id, day, revision=''):
+        with self._lock:
+            directory = self._directory(group_id, day)
+            meta = self._read_comic_meta(directory)
+            self._revision(meta, revision)
+            path = self._file(directory, 'comic.png')
+            size = path.stat().st_size
+            if not 0 < size <= self.MAX_IMAGE_BYTES:
+                raise ValueError('漫画文件大小无效')
+            return path.read_bytes()
+
+    def comic_chunk(self, group_id, day, offset=0, revision=''):
+        with self._lock:
+            directory = self._directory(group_id, day)
+            meta = self._read_comic_meta(directory)
+            self._revision(meta, revision)
+            path = self._file(directory, 'comic.png')
+            size = path.stat().st_size
+            if not 0 < size <= self.MAX_IMAGE_BYTES:
+                raise ValueError('漫画文件大小无效')
+            if type(offset) is not int or not 0 <= offset <= size:
+                raise ValueError('分块偏移无效')
+            with path.open('rb') as stream:
+                stream.seek(offset)
+                block = stream.read(self.CHUNK_BYTES)
+            next_offset = offset + len(block)
+            return {'data': base64.b64encode(block).decode('ascii'), 'offset': offset,
+                    'next_offset': next_offset, 'size': size, 'done': next_offset == size,
+                    'mime': 'image/png', 'filename': f'{group_id}-{day}-comic.png',
+                    'revision': meta['revision']}
+
+    def mark_comic_sent(self, group_id, day, revision=''):
+        with self._lock:
+            directory = self._directory(group_id, day)
+            meta = self._read_comic_meta(directory)
+            self._revision(meta, revision)
+            meta['sent'] = True
+            encoded = json.dumps(meta, ensure_ascii=False, allow_nan=False).encode('utf-8')
+            path = self._file(directory, 'comic.json')
+            fd, tmp = tempfile.mkstemp(prefix='.comic.json-', dir=str(directory))
+            try:
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(encoded)
+                os.replace(tmp, path)
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+            return meta
+
+    def delete_comic(self, group_id, day, revision=''):
+        with self._lock:
+            directory = self._directory(group_id, day)
+            if not (directory / 'comic.json').is_file():
+                return {'deleted': False}
+            meta = self._read_comic_meta(directory)
+            self._revision(meta, revision)
+            for name in self.COMIC_FILES:
+                path = self._file(directory, name)
+                if path.is_file():
+                    path.unlink()
+            return {'deleted': True}

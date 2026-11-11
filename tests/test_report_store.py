@@ -234,5 +234,135 @@ class ReportStoreTest(unittest.TestCase):
                 ReportStore(self.data).list_reports()
 
 
+class ComicStoreTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.data = Path(self.temp.name)
+        self.store = ReportStore(self.data)
+
+    def save_report(self, group='123', day=DAY):
+        return self.store.save(group, day, encoded_image(), '<html>synthetic</html>',
+                               {'group_name': '测试群', 'theme': 'atri', 'message_count': 20})
+
+    def save_comic(self, group='123', day=DAY, **meta):
+        return self.store.save_comic(group, day, encoded_image(), {
+            'group_name': '测试群', 'style': 'four_panel', 'request_id': 'comic-abcdef123456',
+            'task_id': 'task-1', 'prompt': '绘图提示词', 'storyboard': {'title': 't', 'panels': []},
+            'message_count': 20, 'version': '1.5.0', **meta})
+
+    def test_save_comic_writes_three_files_and_summary_projection(self):
+        meta = self.save_comic()
+        directory = self.store.root / '123' / DAY
+        for name in ReportStore.COMIC_FILES:
+            self.assertTrue((directory / name).is_file())
+        rows = self.store.list_comics()
+        self.assertEqual(rows['total'], 1)
+        item = rows['items'][0]
+        self.assertEqual(set(item), set(ReportStore.COMIC_SUMMARY_FIELDS))
+        self.assertFalse(item['sent'])
+        detail = self.store.comic_detail('123', DAY)
+        self.assertEqual(detail['prompt'], '绘图提示词')
+        self.assertEqual(detail['storyboard']['title'], 't')
+
+    def test_save_comic_requires_valid_request_id_and_image(self):
+        with self.assertRaises(ValueError):
+            self.save_comic(request_id='bad')
+        with self.assertRaises((ValueError, OSError)):
+            self.store.save_comic('123', DAY, 'not-base64', {'request_id': 'comic-abcdef123456'})
+        self.assertEqual(self.store.list_comics()['total'], 0)
+
+    def test_report_regeneration_preserves_comic(self):
+        comic = self.save_comic()
+        self.save_report()
+        self.save_report()
+        self.assertEqual(self.store.comic_detail('123', DAY)['revision'], comic['revision'])
+        self.assertEqual(self.store.list_comics()['total'], 1)
+
+    def test_report_delete_removes_comic_too(self):
+        self.save_report()
+        self.save_comic()
+        self.assertTrue(self.store.delete('123', DAY)['deleted'])
+        self.assertEqual(self.store.list_comics()['total'], 0)
+        self.assertFalse((self.store.root / '123' / DAY).exists())
+
+    def test_delete_comic_keeps_report_and_requires_revision(self):
+        report = self.save_report()
+        comic = self.save_comic()
+        with self.assertRaises(ValueError):
+            self.store.delete_comic('123', DAY, revision='0' * 32)
+        self.assertTrue(self.store.delete_comic('123', DAY, comic['revision'])['deleted'])
+        self.assertFalse(self.store.delete_comic('123', DAY)['deleted'])
+        self.assertEqual(self.store.detail('123', DAY)['revision'], report['revision'])
+        directory = self.store.root / '123' / DAY
+        for name in ReportStore.COMIC_FILES:
+            self.assertFalse((directory / name).exists())
+        self.assertTrue((directory / 'meta.json').is_file())
+
+    def test_mark_sent_and_stale_revision_guards(self):
+        old = self.save_comic()
+        current = self.save_comic()
+        for method, args in [(self.store.comic_thumbnail, ()), (self.store.read_comic_bytes, ()),
+                             (self.store.comic_chunk, ()), (self.store.mark_comic_sent, ()),
+                             (self.store.delete_comic, ())]:
+            with self.subTest(method=method), self.assertRaises(ValueError):
+                method('123', DAY, *args, revision=old['revision'])
+        marked = self.store.mark_comic_sent('123', DAY, current['revision'])
+        self.assertTrue(marked['sent'])
+        self.assertTrue(self.store.comic_detail('123', DAY)['sent'])
+        self.assertTrue(self.store.list_comics()['items'][0]['sent'])
+
+    def test_comic_chunk_reassembly_and_thumbnail(self):
+        meta = self.save_comic()
+        offset = 0
+        blocks = []
+        while True:
+            chunk = self.store.comic_chunk('123', DAY, offset=offset, revision=meta['revision'])
+            self.assertEqual(chunk['mime'], 'image/png')
+            self.assertEqual(chunk['filename'], f'123-{DAY}-comic.png')
+            blocks.append(base64.b64decode(chunk['data']))
+            offset = chunk['next_offset']
+            if chunk['done']:
+                break
+        self.assertEqual(b''.join(blocks), self.store.read_comic_bytes('123', DAY))
+        uri = self.store.comic_thumbnail('123', DAY)['data_uri']
+        self.assertTrue(uri.startswith('data:image/jpeg;base64,'))
+        self.assertLessEqual(len(uri.encode()), 20 * 1024)
+        for bad in [-1, offset + 1, True, '0']:
+            with self.subTest(offset=bad), self.assertRaises(ValueError):
+                self.store.comic_chunk('123', DAY, offset=bad)
+
+    def test_list_comics_filters_pagination_and_search(self):
+        for index in range(15):
+            self.save_comic(day=(date.today() - timedelta(days=index)).isoformat())
+        self.save_comic(group='456')
+        rows = self.store.list_comics()
+        self.assertEqual((len(rows['items']), rows['total'], rows['pages']), (12, 16, 2))
+        self.assertEqual(self.store.list_comics(group_id='456')['total'], 1)
+        self.assertEqual(self.store.list_comics(date_from=DAY, date_to=DAY)['total'], 2)
+        self.assertEqual(self.store.list_comics(search='456')['total'], 1)
+        self.assertEqual(self.store.list_comics(sort_order='asc')['items'][0]['group_id'], '123')
+        self.assertEqual([group['group_id'] for group in rows['groups']], ['123', '456'])
+        for kwargs in [{'page': 0}, {'page_size': 13}, {'date_from': DAY, 'date_to': '2020-01-01'},
+                       {'search': 'x' * 101}, {'sort_order': 'up'}]:
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                self.store.list_comics(**kwargs)
+
+    def test_corrupt_comic_meta_hidden_from_catalog(self):
+        self.save_comic()
+        path = self.store.root / '123' / DAY / 'comic.json'
+        path.write_text('{invalid', encoding='utf-8')
+        self.assertEqual(self.store.list_comics()['total'], 0)
+        with self.assertRaises(ValueError):
+            self.store.comic_detail('123', DAY)
+        self.assertTrue(path.exists())
+
+    def test_comic_without_report_and_missing_files(self):
+        self.save_comic()
+        self.assertEqual(self.store.list_comics()['total'], 1)
+        (self.store.root / '123' / DAY / 'comic.png').unlink()
+        self.assertEqual(self.store.list_comics()['total'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -40,8 +40,7 @@ class ReportLibraryTest(unittest.IsolatedAsyncioTestCase):
                                      call_capability=AsyncMock(return_value={'image_base64': png_base64()}))
         self.p._report_store = module.ReportStore(Path(self.temp.name))
         self.p._tasks = []
-        self.p._webui_tasks = {}
-        self.p._webui_operations = {}
+        self.p._jobs = module.JobManager(self.p._spawn, Mock())
         self.p._stats = {'chats': {'stream': {'group_id': '123', 'name': '测试群', 'last_daily': '',
                                             'days': {DAY: {'total': 20, 'users': {}, 'sample': [], 'hours': [0] * 24}}}}}
         self.p._attach_avatars = AsyncMock()
@@ -64,8 +63,11 @@ class ReportLibraryTest(unittest.IsolatedAsyncioTestCase):
                                           'message_count': 20, 'participant_count': 3}, context)
 
     async def wait_for_operation(self):
-        tasks = list(self.p._webui_tasks.values())
+        tasks = list(self.p._jobs._tasks.values())
         await asyncio.gather(*tasks, return_exceptions=True)
+
+    def operation(self, group_id='123'):
+        return next(job for job in self.p._jobs.snapshot() if job['group_id'] == group_id)
 
     async def test_image_generation_archives_before_delivery(self):
         async def send(image, stream):
@@ -114,7 +116,7 @@ class ReportLibraryTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await self.p.webui_trigger('123'))['accepted'])
         self.assertTrue((await self.p.webui_cancel('123'))['accepted'])
         await self.wait_for_operation()
-        self.assertEqual(self.p._webui_operations['123']['status'], 'cancelled')
+        self.assertEqual(self.operation()['status'], 'cancelled')
         self.p.ctx.send.image.assert_not_awaited()
         self.assertFalse((await self.p.webui_cancel('123'))['accepted'])
 
@@ -122,20 +124,20 @@ class ReportLibraryTest(unittest.IsolatedAsyncioTestCase):
         await self.p.webui_trigger('123')
         await self.p.webui_cancel('123')
         await self.wait_for_operation()
-        self.assertEqual(self.p._webui_operations['123']['status'], 'cancelled')
-        self.assertNotIn('123', self.p._webui_tasks)
+        self.assertEqual(self.operation()['status'], 'cancelled')
+        self.assertIsNone(self.p._jobs.active_for('123'))
 
     async def test_background_error_is_consumed_and_retry_allowed(self):
         self.p._generate_daily_and_send = AsyncMock(side_effect=RuntimeError('private-value'))
         await self.p.webui_trigger('123')
         await self.wait_for_operation()
-        state = self.p._webui_operations['123']
+        state = self.operation()
         self.assertEqual(state['status'], 'failed')
         self.assertNotIn('private-value', json.dumps(state))
         self.p._generate_daily_and_send = AsyncMock(return_value='ok')
         self.assertTrue((await self.p.webui_trigger('123'))['accepted'])
         await self.wait_for_operation()
-        self.assertEqual(self.p._webui_operations['123']['status'], 'succeeded')
+        self.assertEqual(self.operation()['status'], 'succeeded')
 
     async def test_historical_generation_uses_existing_bucket_not_today(self):
         self.p._stats['chats']['stream']['days']['2026-01-01'] = {'total': 20}
@@ -172,7 +174,7 @@ class ReportLibraryTest(unittest.IsolatedAsyncioTestCase):
         self.p._send_daily_html = AsyncMock(return_value=False)
         await self.p.webui_rerun('123', DAY, meta['revision'])
         await self.wait_for_operation()
-        self.assertEqual(self.p._webui_operations['123']['status'], 'failed')
+        self.assertEqual(self.operation()['status'], 'failed')
         self.p.ctx.send.image.assert_not_awaited()
 
     async def test_rerender_replaces_archive_without_llm_or_send(self):
@@ -184,7 +186,7 @@ class ReportLibraryTest(unittest.IsolatedAsyncioTestCase):
         self.p._call_llm_json = AsyncMock(side_effect=AssertionError('重绘不得调用模型'))
         self.assertTrue((await self.p.webui_rerender('123', DAY, 'bluearchive', meta['revision']))['accepted'])
         await self.wait_for_operation()
-        self.assertEqual(self.p._webui_operations['123']['status'], 'succeeded')
+        self.assertEqual(self.operation()['status'], 'succeeded')
         current = self.p._report_store.detail('123', DAY)
         self.assertEqual(current['theme'], 'bluearchive')
         self.assertNotEqual(current['revision'], meta['revision'])
@@ -275,9 +277,11 @@ class DeclarationTest(unittest.TestCase):
             self.assertFalse(metadata['public'])
 
     def test_custom_page_does_not_require_form_or_download_permissions(self):
+        for entry in ('report_library.html', 'comic_gallery.html'):
+            page = (ROOT / 'webui' / entry).read_text(encoding='utf-8')
+            self.assertNotIn('<form', page)
+            self.assertNotIn('type="submit"', page)
         page = (ROOT / 'webui/report_library.html').read_text(encoding='utf-8')
-        self.assertNotIn('<form', page)
-        self.assertNotIn('type="submit"', page)
         self.assertIn('id="apply-filter" type="button"', page)
         self.assertIn('disabled aria-describedby="download-note"', page)
 
@@ -287,6 +291,8 @@ class DeclarationTest(unittest.TestCase):
         self.assertEqual(manifest['host_application']['min_version'], '1.3.19')
         self.assertEqual(manifest['sdk']['min_version'], '2.12.0')
         self.assertIn('webui.claim_upload', manifest['capabilities'])
+        self.assertIn('api.call', manifest['capabilities'])
+        self.assertIn('api.get', manifest['capabilities'])
         self.assertTrue((ROOT / manifest['changelog']).is_file())
         declaration = json.loads((ROOT / 'webui.json').read_text(encoding='utf-8'))
         for page in declaration['pages']:
@@ -308,8 +314,14 @@ class DeclarationTest(unittest.TestCase):
         sys.modules[schema_spec.name] = schema
         schema_spec.loader.exec_module(schema)
         extension = schema.load_webui_extension(ROOT)
-        self.assertEqual(len(extension.pages), 2)
+        self.assertEqual(len(extension.pages), 3)
         self.assertEqual(extension.schema_version, 2)
+        gallery = next(p for p in extension.pages if p.id == 'comic-gallery')
+        self.assertIn('image_upload', extension.required_capabilities)
+        upload = gallery.uploads['ref']
+        self.assertEqual(upload.action, 'upload_ref')
+        self.assertEqual(upload.image_max_edge, 4096)
+        self.assertTrue(gallery.actions['upload_ref'].parameters['upload_id'].required)
 
     @unittest.skipUnless(os.environ.get('MAIBOT_HOST_ROOT'), 'set MAIBOT_HOST_ROOT to validate against host source')
     def test_page_default_args_pass_host_validation(self):
@@ -326,6 +338,17 @@ class DeclarationTest(unittest.TestCase):
         page.queries['reports'].validate_args(default_args)
         page.queries['reports'].validate_args({**default_args, 'report_type': 'image', 'search': '测试'})
         page.queries['reports'].validate_args({**default_args, 'report_type': 'html', 'sort_order': 'asc'})
+        gallery = next(p for p in extension.pages if p.id == 'comic-gallery')
+        gallery.queries['comics'].validate_args({'group_id': '', 'date_from': '', 'date_to': '',
+                                                 'search': '', 'sort_order': 'desc', 'page': 1})
+        gallery.queries['comic_chunk'].validate_args({'group_id': '123', 'day': '2026-01-01',
+                                                      'offset': 0, 'revision': 'a' * 32})
+        gallery.actions['draw'].validate_args({'group_id': '123', 'day': '', 'style': 'four_panel'})
+        gallery.actions['upload_ref'].validate_args({'upload_id': 'upload-1'})
+        with self.assertRaises(ValueError):
+            gallery.actions['upload_ref'].validate_args({})
+        with self.assertRaises(ValueError):
+            gallery.actions['draw'].validate_args({'group_id': '123', 'style': 'unknown'})
 
 
 if __name__ == '__main__':

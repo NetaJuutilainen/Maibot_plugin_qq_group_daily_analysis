@@ -311,6 +311,22 @@ class DeclarationTest(unittest.TestCase):
         self.assertEqual(len(extension.pages), 2)
         self.assertEqual(extension.schema_version, 2)
 
+    @unittest.skipUnless(os.environ.get('MAIBOT_HOST_ROOT'), 'set MAIBOT_HOST_ROOT to validate against host source')
+    def test_page_default_args_pass_host_validation(self):
+        # 页面默认带 report_type=''（不限）；choices 漏收空串会被宿主拒绝（2026-11-11 真机实测）
+        host = Path(os.environ['MAIBOT_HOST_ROOT'])
+        schema_spec = importlib.util.spec_from_file_location('host_webui_schema', host / 'src/plugin_runtime/webui_schema.py')
+        schema = importlib.util.module_from_spec(schema_spec)
+        sys.modules[schema_spec.name] = schema
+        schema_spec.loader.exec_module(schema)
+        extension = schema.load_webui_extension(ROOT)
+        page = next(p for p in extension.pages if p.id == 'report-library')
+        default_args = {'group_id': '', 'date_from': '', 'date_to': '', 'search': '',
+                        'report_type': '', 'sort_order': 'desc', 'page': 1}
+        page.queries['reports'].validate_args(default_args)
+        page.queries['reports'].validate_args({**default_args, 'report_type': 'image', 'search': '测试'})
+        page.queries['reports'].validate_args({**default_args, 'report_type': 'html', 'sort_order': 'asc'})
+
 
 if __name__ == '__main__':
     unittest.main()

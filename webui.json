@@ -22,7 +22,7 @@
             "date_to": {"type": "string", "max_length": 10},
             "page": {"type": "integer", "minimum": 1, "maximum": 1000000},
             "search": {"type": "string", "max_length": 100},
-            "report_type": {"type": "string", "choices": ["image", "html"], "max_length": 5},
+            "report_type": {"type": "string", "choices": ["", "image", "html"], "max_length": 5},
             "sort_order": {"type": "string", "choices": ["desc", "asc"], "max_length": 4}
           }
         },

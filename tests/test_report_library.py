@@ -233,6 +233,33 @@ class ReportLibraryTest(unittest.IsolatedAsyncioTestCase):
         self.assertLess(len(json.dumps(overview).encode()), 512 * 1024)
 
 
+class UnloadGuardTest(unittest.IsolatedAsyncioTestCase):
+    """宿主注册失败时也会调 on_unload（on_load 未跑过），不得把空统计写盘覆盖真实数据。"""
+
+    async def asyncSetUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.stats_path = Path(self.temp.name) / 'stats.json'
+        self.original = {'chats': {'s1': {'group_id': '123', 'name': '测试群',
+                                          'days': {DAY: {'total': 20, 'users': {}, 'sample': [], 'hours': [0] * 24}}}}}
+        self.stats_path.write_text(json.dumps(self.original, ensure_ascii=False), encoding='utf-8')
+        self.p = module.GroupDailyAnalysisPlugin()
+        self.p._ctx = SimpleNamespace(logger=Mock(), paths=SimpleNamespace(data_dir=Path(self.temp.name)))
+        self.p._tasks = []
+
+    async def test_unload_without_load_keeps_stats_file(self):
+        await self.p.on_unload()
+        self.assertEqual(json.loads(self.stats_path.read_text(encoding='utf-8')), self.original)
+
+    async def test_unload_after_load_still_saves(self):
+        self.p._stats = self.p._load_stats()
+        self.p._stats_loaded = True
+        self.p._stats['chats']['s1']['days'][DAY]['total'] = 21
+        await self.p.on_unload()
+        saved = json.loads(self.stats_path.read_text(encoding='utf-8'))
+        self.assertEqual(saved['chats']['s1']['days'][DAY]['total'], 21)
+
+
 class DeclarationTest(unittest.TestCase):
     def test_sdk_discovers_bound_apis(self):
         from maibot_sdk.components import collect_components

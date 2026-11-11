@@ -587,6 +587,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     config_model = DailyAnalysisConfig
 
     _stats: ClassVar[dict] = {"chats": {}}
+    _stats_loaded: ClassVar[bool] = False
     _pending_quote: ClassVar[dict | None] = None
     _asset_cache: ClassVar[dict[str, str]] = {}
     _jinja_envs: ClassVar[dict[str, Any]] = {}
@@ -645,6 +646,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         self._webui_tasks: dict[str, asyncio.Task] = {}
         self._webui_operations: dict[str, dict] = {}
         self._stats = self._load_stats()
+        self._stats_loaded = True
         try:
             await asyncio.to_thread(self._report_store.cleanup, self._report_cfg().archive_retention_days)
         except (OSError, ValueError) as exc:
@@ -720,7 +722,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     async def on_unload(self) -> None:
         for task in self._tasks:
             task.cancel()
-        self._save_stats()
+        # 宿主在注册失败时也会调 on_unload（此时 on_load 未跑过）；
+        # 不落盘，避免把类变量空默认值写成 stats.json 覆盖真实统计（2026-11-11 实测事故）
+        if self._stats_loaded:
+            self._save_stats()
         self.ctx.logger.info("群聊每日分析插件已卸载")
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:

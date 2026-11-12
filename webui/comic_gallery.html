@@ -161,7 +161,7 @@
       const BOOK_STATUS_NAMES = { submitting: '提交中', unknown: '回执未知', pending: '等待绘图', running: '绘图中', unconfirmed: '远端待确认', completed: '已完成未发送', failed: '失败', rejected: '被拒绝', cancelled: '已取消', not_accepted: '未受理' };
       const KIND_NAMES = { comic: '漫画', draw: '漫画' };
       const SOURCE_NAMES = { webui: 'WebUI', command: '命令', schedule: '定时', auto: '日报联动' };
-      const state = { ready: false, disposed: false, actionBusy: false, overviewBusy: false, listLoading: false, uploadBusy: false, pending: 0, page: 1, pages: 1, listToken: 0, modalToken: 0, imageToken: 0, modalRow: null, imageBusy: false, overviewStamp: null, comicsDirty: false, timer: null, busyGroups: new Set(), enabled: false, drawpicAvailable: false, useRefs: false, refCount: 0 };
+      const state = { ready: false, disposed: false, actionBusy: false, overviewBusy: false, listLoading: false, uploadBusy: false, pending: 0, page: 1, pages: 1, listToken: 0, modalToken: 0, imageToken: 0, modalRow: null, imageBusy: false, overviewStamp: null, refsStamp: null, comicsDirty: false, timer: null, busyGroups: new Set(), enabled: false, drawpicAvailable: false, useRefs: false, refCount: 0 };
       let bridge;
       let queue = Promise.resolve();
       let filters = { group_id: '', date_from: '', date_to: '', search: '', sort_order: 'desc' };
@@ -421,6 +421,7 @@
 
       function startRename(ref, actions) {
         if (!state.ready || state.actionBusy || state.disposed) return;
+        const original = Array.from(actions.childNodes);
         const input = document.createElement('input');
         input.type = 'text';
         input.maxLength = 40;
@@ -437,7 +438,7 @@
         input.focus();
         const submit = () => { void performAction('rename_ref', { ref_id: ref.ref_id, name: input.value }, '重命名参考图'); };
         save.addEventListener('click', submit);
-        cancel.addEventListener('click', () => { void loadOverview(); });
+        cancel.addEventListener('click', () => { actions.replaceChildren(...original); });
         input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); submit(); } });
       }
 
@@ -475,7 +476,12 @@
             $('gallery-hint').textContent = '任务或存档有更新，关闭详情后将自动刷新列表。';
           }
           state.overviewStamp = stamp;
-          await renderRefs(refs);
+          // 参考图无变化不重建卡片，否则每轮轮询重拉缩略图造成闪烁。
+          const refsStamp = JSON.stringify([state.useRefs, refs.map(ref => object(ref) ? [ref.ref_id, ref.name, ref.size] : null)]);
+          if (state.refsStamp !== refsStamp) {
+            state.refsStamp = refsStamp;
+            await renderRefs(refs);
+          }
           if (state.comicsDirty && !state.actionBusy && !state.listLoading && !state.imageBusy && $('overlay').hidden) void loadComics(state.page);
         } catch (error) {
           if (!(error instanceof StaleRequest) && !state.disposed) $('task-status').textContent = `状态刷新失败：${text(error.message)}。保留上次状态，下一轮重试。`;

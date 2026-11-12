@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>群聊分析 · 分析总览</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f5f7fa; --panel: #fff; --ink: #202b3c; --muted: #637084; --line: #dce3ec; --accent: #315eb5; --soft: #edf3ff; --danger: #b63838; --ok: #1a7f37; --ok-soft: #e1f0e5; --warn: #9a6700; --warn-soft: #fff1cc; --danger-soft: #fbe9e9; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #141a23; --panel: #1c2430; --ink: #e6ebf3; --muted: #a4b1c4; --line: #364254; --accent: #9abaff; --soft: #25334c; --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; } }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 system-ui, -apple-system, "Microsoft YaHei", sans-serif; }
+    main { max-width: 1280px; margin: auto; padding: 24px; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 25px; letter-spacing: .03em; }
+    h2 { font-size: 17px; }
+    button, input, select { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 8px 12px; }
+    button { cursor: pointer; min-height: 38px; }
+    button:hover:not(:disabled) { border-color: var(--accent); background: var(--soft); }
+    button:disabled { cursor: not-allowed; opacity: .48; }
+    button.primary { color: var(--panel); background: var(--accent); border-color: var(--accent); }
+    button.primary:hover:not(:disabled) { filter: brightness(.94); background: var(--accent); }
+    button.danger { color: var(--danger); }
+    :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
+    input, select { min-width: 0; width: 100%; color: var(--ink); }
+    .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+    .header { margin-bottom: 20px; }
+    .muted, .hint { color: var(--muted); font-size: 13px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+    .fields { display: grid; grid-template-columns: 1.5fr 1fr 1fr auto; align-items: end; gap: 12px; margin: 14px 0; }
+    .notice { border-left: 3px solid var(--accent); background: var(--soft); padding: 10px 14px; border-radius: 5px; margin-bottom: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .notice.error { border-left-color: var(--danger); color: var(--danger); }
+    .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: 5px; font-size: 12px; line-height: 1.4; color: var(--muted); background: var(--soft); }
+    .badge::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .badge.ok { color: var(--ok); background: var(--ok-soft); }
+    .badge.warn { color: var(--warn); background: var(--warn-soft); }
+    .badge.err { color: var(--danger); background: var(--danger-soft); }
+    .buttons { display: flex; flex-wrap: wrap; gap: 7px; }
+    .buttons button { font-size: 12px; padding: 5px 10px; }
+    .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+    .stat { background: var(--bg); padding: 10px; border-radius: 6px; overflow-wrap: anywhere; }
+    .stat dt { color: var(--muted); font-size: 12px; }
+    .stat dd { margin: 4px 0 0; }
+    .task { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 10px 0; }
+    .task-copy { min-width: 0; overflow-wrap: anywhere; }
+    .task-error { color: var(--danger); white-space: pre-wrap; }
+    .tasks { max-height: 300px; overflow-y: auto; margin-top: 12px; }
+    progress { width: 100%; height: 9px; accent-color: var(--accent); margin: 12px 0 3px; }
+    .table-wrap { overflow-x: auto; margin-top: 12px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+    th { color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .empty { padding: 24px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; margin-top: 12px; }
+    .chart { display: flex; align-items: flex-end; gap: 10px; height: 170px; margin-top: 14px; padding: 0 4px; }
+    .bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; min-width: 0; height: 100%; }
+    .bar-value { font-size: 12px; color: var(--muted); }
+    .bar-fill { width: 100%; max-width: 56px; background: var(--accent); border-radius: 4px 4px 0 0; min-height: 2px; }
+    .bar-day { font-size: 12px; color: var(--muted); white-space: nowrap; }
+    @media (max-width: 900px) { .fields { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 580px) { main { padding: 14px; } .fields, .stats { grid-template-columns: 1fr; } .chart { gap: 5px; } .task { align-items: flex-start; } }
+  </style>
+</head>
+<body>
+  <main id="main">
+    <header class="header">
+      <div><h1>分析总览</h1><p class="muted">群聊分析 · 报告统计、任务状态与近七天消息量</p></div>
+      <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span><button id="library-link" type="button" disabled>报告库</button><button id="gallery-link" type="button" disabled>漫画廊</button><button id="refresh" type="button" disabled>刷新</button></div>
+    </header>
+    <div id="notice" class="notice" role="status" aria-live="polite">正在等待 MaiBot 页面桥就绪…</div>
+
+    <section class="panel" aria-labelledby="generation-title">
+      <h2 id="generation-title">生成报告</h2>
+      <div class="fields">
+        <label>发送到群<select id="generate-group" disabled><option value="">请选择群聊</option></select></label>
+        <label>报告日期<input id="generate-day" type="date" disabled></label>
+        <label>报告主题<select id="generate-theme" disabled><option value="">默认（按群配置）</option></select></label>
+        <button id="generate" class="primary" type="button" data-mutation disabled>立即生成</button>
+      </div>
+      <p class="hint">日期留空为今天（以服务器日期为准）；当日重建使用滚动24小时，历史日期仅用既有统计，不补造历史。生成会消耗模型额度并发送到所选群；取消按群生效，已发出的报告不会撤回。</p>
+    </section>
+
+    <section class="panel" aria-labelledby="tasks-title">
+      <div class="section-heading"><h2 id="tasks-title">后台任务状态</h2><span id="active-count" class="muted">等待状态</span></div>
+      <p class="hint">显示 WebUI、命令与定时启动的任务；每群仅保留最近状态，不是完整任务历史。每5秒轮询，忙碌时跳过。</p>
+      <progress id="task-progress" value="0" max="100" aria-label="任务进度"></progress>
+      <p id="task-status" class="muted" role="status">尚未读取</p>
+      <div id="tasks" class="tasks"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="stats-title">
+      <h2 id="stats-title">报告统计</h2>
+      <dl class="stats">
+        <div class="stat"><dt>今日报告</dt><dd id="stat-today">—</dd></div>
+        <div class="stat"><dt>最近生成</dt><dd id="stat-last">—</dd></div>
+        <div class="stat"><dt>今日消息数</dt><dd id="stat-messages">—</dd></div>
+      </dl>
+    </section>
+
+    <section class="panel" aria-labelledby="recent-title">
+      <h2 id="recent-title">最近10份报告</h2>
+      <div id="recent" class="table-wrap" aria-busy="true"><p class="empty">正在连接…</p></div>
+      <p class="hint">查看、重发或删除存档请前往报告库。</p>
+    </section>
+
+    <section class="panel" aria-labelledby="week-title">
+      <h2 id="week-title">近7天消息量</h2>
+      <div id="week" class="chart" role="img" aria-label="近7天消息量柱状图，等待数据"></div>
+    </section>
+  </main>
+
+  <script>
+    'use strict';
+    (() => {
+      const $ = id => document.getElementById(id);
+      const TERMINAL = new Set(['completed', 'succeeded', 'success', 'done', 'failed', 'error', 'cancelled', 'canceled', 'rejected']);
+      const STATUS_NAMES = { queued: '排队中', pending: '等待中', accepted: '已接受', running: '运行中', cancelling: '正在取消', cancelled: '已取消', canceled: '已取消', completed: '已完成', succeeded: '已完成', success: '已完成', done: '已完成', failed: '失败', error: '失败', rejected: '已拒绝', idle: '空闲' };
+      const KIND_NAMES = { report: '生成', trigger: '生成', generate: '生成', rerun: '重发成品', resend: '重发成品', rerender: '换主题重绘', comic: '漫画', draw: '漫画' };
+      const SOURCE_NAMES = { webui: 'WebUI', command: '命令', schedule: '定时', auto: '日报联动' };
+      const state = { ready: false, disposed: false, actionBusy: false, overviewBusy: false, pending: 0, timer: null, busyGroups: new Set() };
+      let bridge;
+      let queue = Promise.resolve();
+      let themeLabels = new Map();
+      class StaleRequest extends Error {}
+
+      const text = (value, limit = 1000) => {
+        if (value === null || value === undefined || value === '') return '—';
+        const result = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        return result.length > limit ? result.slice(0, limit) + '…' : result;
+      };
+      const element = (tag, value, className) => {
+        const node = document.createElement(tag);
+        if (value !== undefined) node.textContent = text(value);
+        if (className) node.className = className;
+        return node;
+      };
+      const notice = (message, error = false) => {
+        if (state.disposed) return;
+        $('notice').textContent = message;
+        $('notice').classList.toggle('error', error);
+      };
+      const object = value => value && typeof value === 'object' && !Array.isArray(value);
+      const validGroup = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+      const validDay = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+      const count = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+
+      // Every bridge call shares this queue, including calls waiting for host confirmation.
+      // The bridge already returns the business object; there is no success/result envelope here.
+      function call(kind, name, args = {}) {
+        const frozenArgs = { ...args };
+        state.pending += 1;
+        const request = queue.then(async () => {
+          if (state.disposed) throw new StaleRequest();
+          await bridge.ready;
+          if (state.disposed) throw new StaleRequest();
+          return bridge[kind](name, frozenArgs);
+        });
+        queue = request.then(() => undefined, () => undefined);
+        return request.finally(() => { state.pending -= 1; });
+      }
+
+      function syncControls() {
+        const locked = !state.ready || state.actionBusy;
+        for (const id of ['generate-group', 'generate-day', 'generate-theme', 'refresh', 'library-link', 'gallery-link']) $(id).disabled = locked;
+        for (const button of document.querySelectorAll('[data-mutation]')) {
+          const busy = button.dataset.action !== 'cancel' && state.busyGroups.has(button.dataset.group);
+          button.disabled = locked || busy;
+          button.title = busy ? '该群有进行中的任务，请等待完成或先取消' : '';
+        }
+        $('generate').disabled = locked || !validGroup($('generate-group').value) || state.busyGroups.has($('generate-group').value);
+      }
+
+      function replaceOptions(select, entries, placeholder, valueKey, labelKey) {
+        const selected = select.value;
+        const options = [new Option(placeholder, '')];
+        const seen = new Set();
+        for (const entry of entries) {
+          if (!object(entry)) continue;
+          const value = entry[valueKey];
+          if (typeof value !== 'string' || !value || value.length > (valueKey === 'group_id' ? 128 : 64) || seen.has(value)) continue;
+          seen.add(value);
+          const label = labelKey === 'group_name' ? `${text(entry[labelKey], 100)} (${value})` : text(entry[labelKey], 100);
+          options.push(new Option(label, value));
+        }
+        // Preserve the currently selected value if a refreshed catalog omits it.
+        if (selected && !seen.has(selected)) options.push(new Option(selected, selected));
+        select.replaceChildren(...options);
+        select.value = selected;
+      }
+
+      function mutationButton(label, name, args) {
+        const button = element('button', label, name === 'cancel' ? 'danger' : '');
+        button.type = 'button';
+        button.dataset.mutation = 'true';
+        button.dataset.group = args.group_id || '';
+        button.dataset.action = name;
+        button.disabled = state.actionBusy || !state.ready;
+        button.addEventListener('click', () => { void performAction(name, args, label); });
+        return button;
+      }
+
+      async function performAction(name, args, label) {
+        if (!state.ready || state.disposed || state.actionBusy) return;
+        if (!validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
+        state.actionBusy = true;
+        syncControls();
+        notice(`${label}：请在宿主确认框中确认（如有），正在等待结果…`);
+        try {
+          const result = await call('action', name, args);
+          if (state.disposed) return;
+          if (!object(result)) throw new Error('操作响应格式不正确');
+          const accepted = result.accepted === true;
+          notice(`${accepted ? '已接受' : '未接受'}：${text(result.message || result.status)}${accepted ? ' 请查看任务状态；接受不代表已完成。' : ''}`, !accepted);
+        } catch (error) {
+          if (!(error instanceof StaleRequest)) notice(`${label}未完成或确认已取消：${text(error.message)}。若请求已发送，请先刷新状态再重试，避免重复操作。`, true);
+        } finally {
+          state.actionBusy = false;
+          if (!state.disposed) { syncControls(); void loadOverview(); }
+        }
+      }
+
+      function operationTime(operation) {
+        const value = operation.started_at;
+        const numeric = typeof value === 'number' ? value : Date.parse(value);
+        return Number.isFinite(numeric) ? numeric : 0;
+      }
+
+      function renderOperations(operations, groups) {
+        const latest = new Map();
+        for (const operation of operations) {
+          if (!object(operation) || !validGroup(operation.group_id)) continue;
+          const previous = latest.get(operation.group_id);
+          // 快照按新到旧排序且 started_at 仅秒级：同秒并列时保留先见（更新）的一条。
+          if (!previous || operationTime(operation) > operationTime(previous)) latest.set(operation.group_id, operation);
+        }
+        const names = new Map(groups.filter(object).map(group => [group.group_id, group.group_name]));
+        const rows = [];
+        const busy = new Set();
+        for (const operation of latest.values()) {
+          const row = element('div', undefined, 'task');
+          const copy = element('div', undefined, 'task-copy');
+          const sourceLabel = SOURCE_NAMES[operation.source] || operation.source;
+          copy.append(element('strong', `${text(names.get(operation.group_id) || operation.group_id, 100)} · ${text(operation.day)} · ${text(KIND_NAMES[operation.kind] || operation.kind)}${sourceLabel ? ' · ' + text(sourceLabel, 20) : ''}`));
+          copy.append(element('p', `${text(STATUS_NAMES[operation.status] || operation.status)} · ${text(operation.stage)} · 开始 ${text(operation.started_at)}${operation.finished_at ? ' · 结束 ' + text(operation.finished_at) : ''}`, 'muted'));
+          if (operation.error) copy.append(element('p', text(operation.error, 1600), 'task-error'));
+          row.append(copy);
+          if (operation.status && !TERMINAL.has(operation.status) && operation.status !== 'idle') {
+            busy.add(operation.group_id);
+            row.append(mutationButton('取消该群任务', 'cancel', { group_id: operation.group_id }));
+          }
+          rows.push(row);
+        }
+        state.busyGroups = busy;
+        $('tasks').replaceChildren(...(rows.length ? rows : [element('p', '暂无任务记录（含 WebUI、命令与定时任务）。', 'muted')]));
+        syncControls();
+      }
+
+      function renderRecent(recent) {
+        const rows = [];
+        for (const row of recent.slice(0, 10)) {
+          if (!object(row) || !validGroup(row.group_id) || !validDay(row.day)) continue;
+          const tr = element('tr');
+          tr.append(
+            element('td', `${text(row.group_name, 100)} (${row.group_id})`),
+            element('td', row.day),
+            element('td', themeLabels.get(row.theme) || text(row.theme)),
+            element('td', count(row.message_count) === null ? '—' : count(row.message_count)),
+            element('td', row.created_at)
+          );
+          rows.push(tr);
+        }
+        if (!rows.length) {
+          $('recent').replaceChildren(element('p', '暂无报告存档。', 'empty'));
+          return;
+        }
+        const table = element('table');
+        const head = element('tr');
+        for (const label of ['群聊', '日期', '主题', '消息数', '生成时间']) head.append(element('th', label));
+        const thead = element('thead');
+        thead.append(head);
+        const tbody = element('tbody');
+        tbody.append(...rows);
+        table.append(thead, tbody);
+        $('recent').replaceChildren(table);
+      }
+
+      function renderWeek(week) {
+        const entries = [];
+        for (const entry of week.slice(0, 7)) {
+          if (!object(entry) || !validDay(entry.day)) continue;
+          const value = count(entry.message_count);
+          entries.push({ day: entry.day, value: value === null ? 0 : value });
+        }
+        if (!entries.length) {
+          $('week').replaceChildren(element('p', '暂无消息统计。', 'empty'));
+          $('week').setAttribute('aria-label', '近7天消息量：暂无数据');
+          return;
+        }
+        const max = Math.max(1, ...entries.map(entry => entry.value));
+        const bars = entries.map(entry => {
+          const bar = element('div', undefined, 'bar');
+          bar.title = `${entry.day}：${entry.value} 条消息`;
+          bar.append(element('span', entry.value, 'bar-value'));
+          const fill = element('div', undefined, 'bar-fill');
+          fill.style.height = `${Math.max(2, Math.round(entry.value / max * 110))}px`;
+          bar.append(fill, element('span', entry.day.slice(5), 'bar-day'));
+          return bar;
+        });
+        $('week').replaceChildren(...bars);
+        $('week').setAttribute('aria-label', `近7天消息量柱状图：${entries.map(entry => `${entry.day} ${entry.value} 条`).join('，')}`);
+      }
+
+      async function loadOverview() {
+        if (!state.ready || state.disposed || state.overviewBusy) return;
+        state.overviewBusy = true;
+        try {
+          const result = await call('query', 'overview');
+          if (state.disposed) return;
+          if (!object(result)) throw new Error('状态响应格式不正确');
+          const groups = Array.isArray(result.groups) ? result.groups : [];
+          replaceOptions($('generate-group'), groups, '请选择群聊', 'group_id', 'group_name');
+          const themes = Array.isArray(result.themes) ? result.themes : [];
+          themeLabels = new Map(themes.filter(object).map(entry => [entry.key, entry.label]));
+          replaceOptions($('generate-theme'), themes, '默认（按群配置）', 'key', 'label');
+          $('active-count').textContent = `活跃任务：${text(result.active_count)}`;
+          $('task-status').textContent = `${text(result.status)} · 更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
+          $('task-progress').value = typeof result.progress === 'number' && Number.isFinite(result.progress) ? Math.max(0, Math.min(100, result.progress)) : 0;
+          renderOperations(Array.isArray(result.operations) ? result.operations : [], groups);
+          $('stat-today').textContent = text(result.today_count);
+          $('stat-last').textContent = text(result.last_generated);
+          $('stat-messages').textContent = text(result.message_count);
+          renderRecent(Array.isArray(result.recent) ? result.recent : []);
+          renderWeek(Array.isArray(result.week) ? result.week : []);
+          $('recent').setAttribute('aria-busy', 'false');
+        } catch (error) {
+          if (!(error instanceof StaleRequest) && !state.disposed) $('task-status').textContent = `状态刷新失败：${text(error.message)}。保留上次状态，下一轮重试。`;
+        } finally { state.overviewBusy = false; }
+      }
+
+      $('generate-group').addEventListener('change', syncControls);
+      $('generate').addEventListener('click', () => {
+        void performAction('trigger', { group_id: $('generate-group').value, day: $('generate-day').value, theme: $('generate-theme').value }, '生成报告');
+      });
+      $('refresh').addEventListener('click', () => { void loadOverview(); });
+      $('library-link').addEventListener('click', async () => {
+        try { await call('navigate', 'report-library'); }
+        catch (error) { if (!(error instanceof StaleRequest)) notice(`无法打开报告库：${text(error.message)}`, true); }
+      });
+      $('gallery-link').addEventListener('click', async () => {
+        try { await call('navigate', 'comic-gallery'); }
+        catch (error) { if (!(error instanceof StaleRequest)) notice(`无法打开漫画廊：${text(error.message)}`, true); }
+      });
+      function dispose() {
+        if (state.disposed) return;
+        state.disposed = true;
+        clearInterval(state.timer);
+      }
+      window.addEventListener('pagehide', dispose);
+      window.addEventListener('beforeunload', dispose);
+
+      async function start() {
+        try {
+          bridge = window.maibot;
+          if (!bridge || !bridge.ready) throw new Error('请从 MaiBot WebUI 打开此页面');
+          await bridge.ready;
+          if (state.disposed) return;
+          state.ready = true;
+          $('connection').textContent = '已连接宿主';
+          $('connection').className = 'badge ok';
+          syncControls();
+          notice('群号与主题从下拉选择；生成与取消由宿主确认。每5秒自动刷新，也可手动刷新。');
+          void loadOverview();
+          // 与原声明式 auto_refresh 行为一致：后台标签页也轮询，仅忙碌时跳过。
+          state.timer = setInterval(() => {
+            if (state.disposed || state.pending || state.actionBusy || state.overviewBusy) return;
+            void loadOverview();
+          }, 5000);
+        } catch (error) {
+          $('connection').textContent = '连接不可用';
+          $('connection').className = 'badge err';
+          $('recent').setAttribute('aria-busy', 'false');
+          $('recent').replaceChildren(element('p', '无法连接宿主，请在 MaiBot WebUI 中重新打开分析总览。', 'empty'));
+          notice(`连接失败：${text(error.message)}`, true);
+        }
+      }
+      void start();
+    })();
+  </script>
+</body>
+</html>

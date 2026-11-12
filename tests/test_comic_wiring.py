@@ -355,6 +355,102 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.p.webui_comic_ref_thumb('../stats.json')
 
+    async def test_rename_ref_lifecycle(self):
+        path = Path(self.temp.name) / 'upload-0.png'
+        path.write_bytes(png_bytes('white'))
+        self.p.ctx.webui.claim_upload.return_value = {'path': str(path)}
+        ref_id = (await self.p.webui_upload_ref('upload-0'))['ref_id']
+        self.assertEqual(self.p._comic_refs()[0]['name'], '')
+
+        result = await self.p.webui_rename_ref(ref_id, '  麦麦角色立绘  ')
+        self.assertTrue(result['renamed'])
+        self.assertEqual(result['name'], '麦麦角色立绘')
+        self.assertEqual(self.p._comic_refs()[0]['name'], '麦麦角色立绘')
+        overview = await self.p.webui_comic_overview()
+        self.assertEqual(overview['refs'][0]['name'], '麦麦角色立绘')
+
+        self.assertTrue((await self.p.webui_rename_ref(ref_id, ''))['renamed'])
+        self.assertEqual(self.p._comic_refs()[0]['name'], '')
+
+        self.assertFalse((await self.p.webui_rename_ref('../stats.json', 'x'))['renamed'])
+        self.assertFalse((await self.p.webui_rename_ref('0' * 16 + '.png', 'x'))['renamed'])
+        self.assertFalse((await self.p.webui_rename_ref(ref_id, '坏\n名字'))['renamed'])
+        long_name = '名' * 60
+        self.assertEqual((await self.p.webui_rename_ref(ref_id, long_name))['name'], '名' * 40)
+
+        await self.p.webui_rename_ref(ref_id, '待清理')
+        self.assertTrue((await self.p.webui_delete_ref(ref_id))['deleted'])
+        self.assertEqual(self.p._comic_ref_names(), {})
+
+    async def test_rename_ref_survives_corrupt_sidecar(self):
+        path = Path(self.temp.name) / 'upload-0.png'
+        path.write_bytes(png_bytes('white'))
+        self.p.ctx.webui.claim_upload.return_value = {'path': str(path)}
+        ref_id = (await self.p.webui_upload_ref('upload-0'))['ref_id']
+        (self.p._comic_refs_dir() / 'names.json').write_text('{broken', encoding='utf-8')
+        self.assertEqual(self.p._comic_refs()[0]['name'], '')
+        self.assertTrue((await self.p.webui_rename_ref(ref_id, '重建'))['renamed'])
+        self.assertEqual(self.p._comic_refs()[0]['name'], '重建')
+
+    async def test_album_file_stem_kind_and_day(self):
+        self.assertEqual(self.p._album_file_stem('stream'), f'测试群-日报-{date.today().isoformat()}')
+        self.assertEqual(self.p._album_file_stem('stream', '漫画', '2026-01-02'), '测试群-漫画-2026-01-02')
+        self.assertEqual(self.p._album_file_stem('missing', '漫画', '2026-01-02'), '漫画-2026-01-02')
+
+    async def test_comic_pipeline_album_upload_params(self):
+        self.save_daily()
+        ccfg = self.p._comic_cfg()
+        ccfg.album_upload_enabled = True
+        ccfg.album_name = '漫画专属相册'
+        self.p._upload_report_to_album = AsyncMock()
+        self.assertTrue((await self.p.webui_draw('123', DAY, 'four_panel'))['accepted'])
+        await self.wait_for_operation()
+        self.assertEqual(self.operation()['status'], 'succeeded')
+        self.p._upload_report_to_album.assert_awaited_once()
+        call = self.p._upload_report_to_album.await_args
+        self.assertEqual(call.args[:2], ('stream', '123'))
+        self.assertEqual(call.kwargs['stem'], f'测试群-漫画-{DAY}')
+        self.assertEqual(call.kwargs['album_name_override'], '漫画专属相册')
+        self.assertIs(call.kwargs['enabled'], True)
+
+    async def test_comic_resend_skips_album(self):
+        self.save_daily()
+        meta = self.save_comic()
+        self.p._comic_cfg().album_upload_enabled = True
+        self.p._upload_report_to_album = AsyncMock()
+        self.assertTrue((await self.p.webui_comic_resend('123', DAY, meta['revision']))['accepted'])
+        await self.wait_for_operation()
+        self.assertEqual(self.operation()['status'], 'succeeded')
+        self.p._upload_report_to_album.assert_not_awaited()
+
+    async def test_comic_album_switch_independent_of_daily(self):
+        acfg = self.p._album_cfg()
+        acfg.album_upload_enabled = False
+        acfg.album_strict_mode = False
+        self.p._napcat_api_retry = Mock(return_value={'data': [{'album_id': 'a1', 'name': '默认相册'}]})
+        self.p._napcat_api = Mock(return_value={'retcode': 0})
+        await self.p._upload_report_to_album('stream', '123', png_base64())
+        self.p._napcat_api_retry.assert_not_called()
+        await self.p._upload_report_to_album('stream', '123', png_base64(),
+                                             stem='测试群-漫画-x', enabled=True)
+        self.p._napcat_api_retry.assert_called()
+        uploads = [c for c in self.p._napcat_api.call_args_list if c.args[0] == 'upload_image_to_qun_album']
+        self.assertTrue(uploads)
+        self.assertEqual(uploads[0].args[1]['album_id'], 'a1')
+
+    async def test_comic_album_name_override_strict(self):
+        acfg = self.p._album_cfg()
+        acfg.album_upload_enabled = False
+        acfg.album_strict_mode = True
+        self.p._napcat_api_retry = Mock(return_value={'data': [{'album_id': 'a9', 'name': '漫画相册'}]})
+        self.p._napcat_api = Mock(return_value={'retcode': 0})
+        await self.p._upload_report_to_album('stream', '123', png_base64(),
+                                             album_name_override='漫画相册', enabled=True)
+        uploads = [c for c in self.p._napcat_api.call_args_list if c.args[0] == 'upload_image_to_qun_album']
+        self.assertTrue(uploads)
+        self.assertEqual(uploads[0].args[1]['album_id'], 'a9')
+        self.assertEqual(uploads[0].args[1]['album_name'], '漫画相册')
+
     async def test_reference_images_passed_to_submit(self):
         self.save_daily()
         self.p._comic_cfg().use_reference_images = True

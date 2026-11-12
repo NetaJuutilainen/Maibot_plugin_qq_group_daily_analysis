@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>群聊分析 · 漫画廊</title>
   <style>
-    :root { color-scheme: light dark; --bg: #f5f7fa; --panel: #fff; --ink: #202b3c; --muted: #637084; --line: #dce3ec; --accent: #315eb5; --soft: #edf3ff; --danger: #b63838; }
-    @media (prefers-color-scheme: dark) { :root { --bg: #141a23; --panel: #1c2430; --ink: #e6ebf3; --muted: #a4b1c4; --line: #364254; --accent: #9abaff; --soft: #25334c; --danger: #ffaaaa; } }
+    :root { color-scheme: light dark; --bg: #f5f7fa; --panel: #fff; --ink: #202b3c; --muted: #637084; --line: #dce3ec; --accent: #315eb5; --soft: #edf3ff; --danger: #b63838; --ok: #1a7f37; --ok-soft: #e1f0e5; --warn: #9a6700; --warn-soft: #fff1cc; --danger-soft: #fbe9e9; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #141a23; --panel: #1c2430; --ink: #e6ebf3; --muted: #a4b1c4; --line: #364254; --accent: #9abaff; --soft: #25334c; --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; } }
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
     body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 system-ui, -apple-system, "Microsoft YaHei", sans-serif; }
@@ -32,7 +32,11 @@
     .fields { display: grid; grid-template-columns: 1.5fr 1fr 1fr auto; align-items: end; gap: 12px; margin: 14px 0; }
     .notice { border-left: 3px solid var(--accent); background: var(--soft); padding: 10px 14px; border-radius: 5px; margin-bottom: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .notice.error { border-left-color: var(--danger); color: var(--danger); }
-    .badge { color: var(--accent); background: var(--soft); padding: 3px 9px; border-radius: 5px; font-size: 12px; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: 5px; font-size: 12px; line-height: 1.4; color: var(--muted); background: var(--soft); }
+    .badge::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .badge.ok { color: var(--ok); background: var(--ok-soft); }
+    .badge.warn { color: var(--warn); background: var(--warn-soft); }
+    .badge.err { color: var(--danger); background: var(--danger-soft); }
     .catalog { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
     .report { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
     .thumbnail { width: 100%; height: 180px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; overflow: hidden; background: var(--soft); color: var(--muted); }
@@ -73,7 +77,7 @@
   <main id="main">
     <header class="header">
       <div><h1>漫画廊</h1><p class="muted">群聊分析 · 把日报画成四格漫画 / 单幅海报（经麦麦绘图协作）</p></div>
-      <div class="buttons"><span id="connection" class="badge">正在连接宿主</span><button id="library-link" type="button" disabled>报告库</button><button id="overview-link" type="button" disabled>分析总览</button></div>
+      <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span><button id="library-link" type="button" disabled>报告库</button><button id="overview-link" type="button" disabled>分析总览</button></div>
     </header>
     <div id="notice" class="notice" role="status" aria-live="polite">正在等待 MaiBot 页面桥就绪…</div>
 
@@ -285,9 +289,9 @@
 
       async function performAction(name, args, label) {
         if (!state.ready || state.disposed || state.actionBusy) return;
-        if (name !== 'delete_ref' && !validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
+        if (name !== 'delete_ref' && name !== 'rename_ref' && !validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
         if ((name === 'comic_resend' || name === 'delete_comic') && !validRevision(args.revision)) { notice('存档版本缺失，请刷新列表后重试。', true); return; }
-        if (name === 'delete_ref' && (typeof args.ref_id !== 'string' || !REF_ID.test(args.ref_id))) { notice('参考图标识无效。', true); return; }
+        if ((name === 'delete_ref' || name === 'rename_ref') && (typeof args.ref_id !== 'string' || !REF_ID.test(args.ref_id))) { notice('参考图标识无效。', true); return; }
         state.actionBusy = true;
         syncControls();
         notice(`${label}：请在宿主确认框中确认（如有），正在等待结果…`);
@@ -296,7 +300,9 @@
           const result = await call('action', name, args);
           if (state.disposed) return;
           if (!object(result)) throw new Error('操作响应格式不正确');
-          if (name === 'delete_comic' || name === 'delete_ref') {
+          if (name === 'rename_ref') {
+            notice(result.renamed === true ? '已保存参考图名称。' : `未保存：${text(result.message)}`, result.renamed !== true);
+          } else if (name === 'delete_comic' || name === 'delete_ref') {
             deleted = result.deleted === true;
             notice(deleted ? (name === 'delete_comic' ? '已删除所选漫画存档，当日日报保留。' : '已删除参考图。') : '未删除，可能已更新或不存在；请刷新后重试。', !deleted);
             if (deleted && name === 'delete_comic') closeModal();
@@ -327,7 +333,8 @@
         for (const operation of operations) {
           if (!object(operation) || !validGroup(operation.group_id)) continue;
           const previous = latest.get(operation.group_id);
-          if (!previous || operationTime(operation) >= operationTime(previous)) latest.set(operation.group_id, operation);
+          // 快照按新到旧排序且 started_at 仅秒级：同秒并列时保留先见（更新）的一条。
+          if (!previous || operationTime(operation) > operationTime(previous)) latest.set(operation.group_id, operation);
         }
         const names = new Map([...comicGroups, ...overviewGroups].filter(object).map(group => [group.group_id, group.group_name]));
         const rows = [];
@@ -375,12 +382,19 @@
           if (!object(ref) || typeof ref.ref_id !== 'string' || !REF_ID.test(ref.ref_id)) continue;
           const card = element('div', undefined, 'ref');
           const preview = element('img');
-          preview.alt = `参考图 ${ref.ref_id}`;
+          const named = typeof ref.name === 'string' && ref.name.trim() !== '';
+          preview.alt = `参考图 ${named ? ref.name : ref.ref_id}`;
           preview.decoding = 'async';
           const body = element('div', undefined, 'ref-body');
-          body.append(element('p', `${text(ref.ref_id, 40)} · ${(Number(ref.size) / 1024).toFixed(0)} KiB`));
+          body.append(element('p', `${text(named ? ref.name : ref.ref_id, 40)} · ${(Number(ref.size) / 1024).toFixed(0)} KiB`));
+          if (named) body.append(element('p', text(ref.ref_id, 40)));
           const actions = element('div', undefined, 'buttons');
-          actions.append(mutationButton('删除', 'delete_ref', { ref_id: ref.ref_id }));
+          const rename = element('button', '重命名');
+          rename.type = 'button';
+          rename.dataset.mutation = 'true';
+          rename.dataset.action = 'rename_ref';
+          rename.addEventListener('click', () => startRename(ref, actions));
+          actions.append(rename, mutationButton('删除', 'delete_ref', { ref_id: ref.ref_id }));
           body.append(actions);
           card.append(preview, body);
           cards.push(card);
@@ -405,6 +419,28 @@
         }
       }
 
+      function startRename(ref, actions) {
+        if (!state.ready || state.actionBusy || state.disposed) return;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.maxLength = 40;
+        input.value = typeof ref.name === 'string' ? ref.name : '';
+        input.placeholder = '名称（留空清除）';
+        input.setAttribute('aria-label', '参考图名称');
+        const save = element('button', '保存');
+        save.type = 'button';
+        const cancel = element('button', '取消');
+        cancel.type = 'button';
+        const row = element('div', undefined, 'buttons');
+        row.append(save, cancel);
+        actions.replaceChildren(input, row);
+        input.focus();
+        const submit = () => { void performAction('rename_ref', { ref_id: ref.ref_id, name: input.value }, '重命名参考图'); };
+        save.addEventListener('click', submit);
+        cancel.addEventListener('click', () => { void loadOverview(); });
+        input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); submit(); } });
+      }
+
       async function loadOverview() {
         if (!state.ready || state.disposed || state.overviewBusy) return;
         state.overviewBusy = true;
@@ -418,6 +454,7 @@
           $('feature-state').textContent = state.enabled
             ? (state.drawpicAvailable ? '漫画已启用 · 绘图接口可用' : '漫画已启用 · 未检测到绘图接口')
             : '漫画未启用（插件设置 → 群聊漫画）';
+          $('feature-state').className = state.enabled ? (state.drawpicAvailable ? 'badge ok' : 'badge warn') : 'badge';
           overviewGroups = Array.isArray(result.groups) ? result.groups : [];
           renderGroups();
           if (Array.isArray(result.styles) && result.styles.length) styleEntries = result.styles;
@@ -795,6 +832,7 @@
           if (state.disposed) return;
           state.ready = true;
           $('connection').textContent = '已连接宿主';
+          $('connection').className = 'badge ok';
           syncControls();
           notice('漫画由麦麦绘图插件生成；恢复进度只查证原任务，不会重复扣额度重画。');
           void loadOverview();
@@ -805,6 +843,7 @@
           }, 5000);
         } catch (error) {
           $('connection').textContent = '连接不可用';
+          $('connection').className = 'badge err';
           $('comics').setAttribute('aria-busy', 'false');
           $('comics').replaceChildren(element('p', '无法连接宿主，请在 MaiBot WebUI 中重新打开漫画廊。', 'empty'));
           notice(`连接失败：${text(error.message)}`, true);

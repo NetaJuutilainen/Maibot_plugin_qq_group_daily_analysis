@@ -596,6 +596,8 @@ class ComicSectionConfig(PluginConfigBase):
     max_wait_seconds: int = Field(default=300, description="单次等待绘图完成的最长秒数（超时保留进度，可在漫画廊恢复）", ge=60, le=3600)
     use_reference_images: bool = Field(default=False, description="绘图时附带参考图（在漫画廊上传，最多 4 张，用于固定角色形象与画风）")
     comic_caption: str = Field(default="🎨 今日群聊漫画出炉～", description="漫画图片前的提示文字（留空则只发图）")
+    album_upload_enabled: bool = Field(default=False, description="漫画发送成功后自动上传到 QQ 群相册（与日报相册开关相互独立；NapCat / SnowLuma 均支持）")
+    album_name: str = Field(default="", description="漫画目标群相册名称；留空=跟随日报相册设置（按群指定/默认相册名），严格模式沿用相册设置")
     groups: str = Field(default="", description="自动联动群列表，每行一个群号；留空=不自动联动", json_schema_extra={"rows": 4})
     llm_model_task: str = Field(default="", description="分镜脚本用模型任务（留空跟随分析设置的默认任务）")
 
@@ -1097,6 +1099,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "max_wait_seconds": {"label": "等待绘图上限（秒）", "ui_type": "number", "min": 60, "max": 3600, "hint": "超时不丢进度，可在漫画廊点「恢复进度」继续"},
             "use_reference_images": {"label": "附带参考图", "ui_type": "switch", "hint": "在漫画廊上传角色/画风参考图，最多 4 张；绘图时一并传给麦麦绘图"},
             "comic_caption": {"label": "漫画提示文字", "ui_type": "text", "hint": "漫画图片前附带；留空则只发图"},
+            "album_upload_enabled": {"label": "漫画发送后上传群相册", "ui_type": "switch", "hint": "与日报相册开关独立；仅发送成功后上传，失败不影响已发出的漫画"},
+            "album_name": {"label": "漫画相册名称", "ui_type": "text", "hint": "留空=跟随日报相册设置；严格模式沿用相册设置"},
             "groups": {"label": "自动联动群列表", "ui_type": "textarea", "rows": 4, "hint": "每行一个群号；留空=不自动联动"},
             "llm_model_task": {"label": "分镜模型任务", "ui_type": "select", "choices": [], "hint": "留空跟随分析设置的默认任务"},
             },
@@ -2562,15 +2566,15 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     time.sleep(0.8 * (i + 1))
         raise last if last is not None else RuntimeError("OneBot API 调用失败")
 
-    def _album_file_stem(self, stream_id: str) -> str:
-        """相册里显示的文件名。群相册把「文件名」当照片名，所以取「群名-日报-日期」更好看。"""
+    def _album_file_stem(self, stream_id: str, kind: str = "日报", day: str = "") -> str:
+        """相册里显示的文件名。群相册把「文件名」当照片名，所以取「群名-类型-日期」更好看。"""
         try:
             chat = (getattr(self, "_stats", {}) or {}).get("chats", {}).get(stream_id) or {}
         except Exception:
             chat = {}
         name = str(chat.get("chat_name") or chat.get("name") or "").strip()
-        day = datetime.now().strftime("%Y-%m-%d")
-        return ("%s-日报-%s" % (name, day)) if name else ("日报-%s" % day)
+        day = day or datetime.now().strftime("%Y-%m-%d")
+        return ("%s-%s-%s" % (name, kind, day)) if name else ("%s-%s" % (kind, day))
 
     def _write_album_temp(self, group_id: str, image_b64: str, friendly: str = "") -> tuple[str, int]:
         """把日报图片写成临时文件，返回 (绝对路径, 字节数)；失败返回 ("", 0)。
@@ -2605,17 +2609,23 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         except OSError:
             return "", 0
 
-    async def _upload_report_to_album(self, stream_id: str, group_id: str, image_b64: str) -> None:
-        """把日报图片上传到 QQ 群相册（移植原版 qq_group_upload 语义）。
+    async def _upload_report_to_album(self, stream_id: str, group_id: str, image_b64: str,
+                                      stem: str = "", album_name_override: str = "",
+                                      enabled: bool | None = None) -> None:
+        """把日报/漫画图片上传到 QQ 群相册（移植原版 qq_group_upload 语义）。
 
-        失败只记日志，不影响已经发出的日报图片；严格模式语义与原版一致。
+        失败只记日志，不影响已经发出的图片；严格模式语义与原版一致。
+        stem/album_name_override/enabled 供漫画复用：漫画开关与日报独立，
+        enabled=None 沿用日报相册开关，显式传值则用调用方自己的开关。
         """
         cfg = self._album_cfg()
-        if not getattr(cfg, "album_upload_enabled", False):
+        if enabled is None:
+            enabled = bool(getattr(cfg, "album_upload_enabled", False))
+        if not enabled:
             return
         if not group_id or not image_b64:
             return
-        album_name = self._album_name_for_group(group_id)
+        album_name = str(album_name_override or "").strip() or self._album_name_for_group(group_id)
         strict = bool(getattr(cfg, "album_strict_mode", True))
         try:
             albums: list = []
@@ -2656,7 +2666,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 params_base["album_name"] = resolved_name or album_name
             # 关键：优先用「本地文件路径」而不是 base64 —— 协议端 HTTP API 对请求体有大小限制
             # （实测 SnowLuma 约 1MB，超过直接重置连接 → WinError 10054），而日报图常有数 MB。
-            file_path, blob_len = self._write_album_temp(group_id, image_b64, self._album_file_stem(stream_id))
+            file_path, blob_len = self._write_album_temp(group_id, image_b64, stem or self._album_file_stem(stream_id))
             variants: list[tuple[str, dict[str, Any]]] = []
             if file_path:
                 variants.append(("本地路径", {**params_base, "file": file_path}))
@@ -2664,7 +2674,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 variants.append(("base64", {**params_base, "file": "base64://" + image_b64}))
             if not variants:
                 self.ctx.logger.warning(
-                    "[weekly] 日报图片落盘失败且 base64 体积过大（%d 字符），跳过群相册上传", len(image_b64))
+                    "[weekly] 图片落盘失败且 base64 体积过大（%d 字符），跳过群相册上传", len(image_b64))
                 return
             upload_name = Path(file_path).name if file_path else ""
             errors: list[str] = []
@@ -2687,7 +2697,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 retcode = resp.get("retcode") if isinstance(resp, dict) else None
                 if retcode in (0, None):
                     self.ctx.logger.info(
-                        "[weekly] 日报已上传群相册（%s/%s，群 %s，图片 %d 字节）",
+                        "[weekly] 图片已上传群相册（%s/%s，群 %s，图片 %d 字节）",
                         action, tag, group_id, blob_len or len(image_b64) * 3 // 4)
                     return True
                 errors.append("%s(%s): %s" % (action, tag, str(resp)[:90]))
@@ -3035,14 +3045,36 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     def _comic_refs_dir(self) -> Path:
         return Path(self.ctx.paths.data_dir) / "comic_refs"
 
+    def _comic_ref_names(self) -> dict:
+        """ref_id → 显示名 sidecar；损坏/缺失一律当空，不影响参考图本体。"""
+        try:
+            data = json.loads((self._comic_refs_dir() / "names.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): str(v)[:40] for k, v in data.items() if isinstance(v, str)}
+
+    def _set_ref_name(self, ref_id: str, name: str) -> None:
+        names = self._comic_ref_names()
+        if name:
+            names[ref_id] = name
+        else:
+            names.pop(ref_id, None)
+        directory = self._comic_refs_dir()
+        tmp = directory / "names.json.tmp"
+        tmp.write_text(json.dumps(names, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, directory / "names.json")
+
     def _comic_refs(self) -> list[dict]:
         directory = self._comic_refs_dir()
         if not directory.is_dir():
             return []
+        names = self._comic_ref_names()
         rows = []
         for item in sorted(directory.iterdir()):
             if _COMIC_REF_RE.fullmatch(item.name) and item.is_file():
-                rows.append({"ref_id": item.name, "size": item.stat().st_size})
+                rows.append({"ref_id": item.name, "size": item.stat().st_size, "name": names.get(item.name, "")})
         return rows[:4]
 
     def _load_ref_images(self) -> tuple[list[str], list[str]]:
@@ -3257,10 +3289,29 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             path = self._comic_refs_dir() / ref_id
             if path.is_file():
                 path.unlink()
+                try:
+                    self._set_ref_name(ref_id, "")
+                except OSError:
+                    pass
                 return {"deleted": True}
             return {"deleted": False}
 
         return await asyncio.to_thread(remove)
+
+    @API("rename_ref", version="1")
+    async def webui_rename_ref(self, ref_id: str, name: str = "") -> dict:
+        try:
+            if not isinstance(ref_id, str) or not _COMIC_REF_RE.fullmatch(ref_id):
+                raise ValueError("参考图标识无效")
+            if not (self._comic_refs_dir() / ref_id).is_file():
+                raise ValueError("参考图不存在")
+            name = str(name or "").strip()[:40]
+            if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+                raise ValueError("名称不能含控制字符")
+            await asyncio.to_thread(self._set_ref_name, ref_id, name)
+        except (OSError, TypeError, ValueError):
+            return {"renamed": False, "message": "参考图不存在、标识无效或名称不合法"}
+        return {"renamed": True, "ref_id": ref_id, "name": name}
 
     @staticmethod
     def _resolve_analysis_names(analysis: dict, user_names: dict) -> dict:
@@ -3467,6 +3518,14 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         if await self._send_comic_image(stream_id, blob):
             await asyncio.to_thread(self._report_store.mark_comic_sent, group_id, day, comic_meta["revision"])
             await asyncio.to_thread(self._comic_book.update, request_id, sent=True)
+            # 群相册上传（对齐原版漫画独立开关；失败静默，不影响已发出的漫画）
+            try:
+                await self._upload_report_to_album(
+                    stream_id, group_id, base64.b64encode(blob).decode("ascii"),
+                    stem=self._album_file_stem(stream_id, "漫画", day),
+                    album_name_override=ccfg.album_name, enabled=ccfg.album_upload_enabled)
+            except Exception as exc:
+                self.ctx.logger.warning("[comic] 群相册上传异常: %s", exc)
             return "ok"
         await asyncio.to_thread(self._comic_book.update, request_id, error="已存档，发送失败")
         job["error"] = "漫画已存档，但发送到群失败；可在漫画廊重发"

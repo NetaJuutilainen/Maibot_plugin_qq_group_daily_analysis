@@ -277,7 +277,7 @@ class DeclarationTest(unittest.TestCase):
             self.assertFalse(metadata['public'])
 
     def test_custom_page_does_not_require_form_or_download_permissions(self):
-        for entry in ('report_library.html', 'comic_gallery.html'):
+        for entry in ('report_library.html', 'comic_gallery.html', 'overview.html'):
             page = (ROOT / 'webui' / entry).read_text(encoding='utf-8')
             self.assertNotIn('<form', page)
             self.assertNotIn('type="submit"', page)
@@ -316,6 +316,11 @@ class DeclarationTest(unittest.TestCase):
         extension = schema.load_webui_extension(ROOT)
         self.assertEqual(len(extension.pages), 3)
         self.assertEqual(extension.schema_version, 2)
+        overview = next(p for p in extension.pages if p.id == 'overview')
+        self.assertEqual(overview.mode, 'custom')
+        self.assertEqual(overview.entry, 'webui/overview.html')
+        self.assertEqual(set(overview.actions), {'trigger', 'cancel'})
+        self.assertTrue(overview.actions['trigger'].confirmation)
         gallery = next(p for p in extension.pages if p.id == 'comic-gallery')
         self.assertIn('image_upload', extension.required_capabilities)
         upload = gallery.uploads['ref']

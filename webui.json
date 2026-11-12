@@ -220,6 +220,14 @@
             "ref_id": {"type": "string", "required": true, "max_length": 32}
           }
         },
+        "rename_ref": {
+          "api": "rename_ref",
+          "version": "1",
+          "parameters": {
+            "ref_id": {"type": "string", "required": true, "max_length": 32},
+            "name": {"type": "string", "max_length": 40}
+          }
+        },
         "cancel": {
           "api": "cancel",
           "version": "1",
@@ -234,13 +242,13 @@
     },
     {
       "id": "overview",
-      "mode": "declarative",
+      "mode": "custom",
       "title": "分析总览",
-      "description": "报告统计与近七天消息量；每5秒刷新，操作后自动刷新。任务状态含 WebUI、命令与定时来源。",
+      "description": "报告统计、任务状态与近七天消息量；群号/主题下拉选择，每5秒轮询。任务状态含 WebUI、命令与定时来源。",
       "placement": "sidebar",
       "icon": "chart",
-      "auto_refresh": true,
-      "poll_interval_seconds": 5,
+      "entry": "webui/overview.html",
+      "layout": "viewport",
       "queries": {
         "overview": {"api": "overview", "version": "1"}
       },
@@ -262,59 +270,7 @@
             "group_id": {"type": "string", "required": true, "max_length": 128}
           }
         }
-      },
-      "content": [
-        {
-          "type": "grid",
-          "columns": 3,
-          "children": [
-            {"type": "stat", "label": "今日报告", "value": {"source": "overview", "field": "today_count"}},
-            {"type": "stat", "label": "最近生成", "value": {"source": "overview", "field": "last_generated"}},
-            {"type": "stat", "label": "消息数", "value": {"source": "overview", "field": "message_count"}}
-          ]
-        },
-        {
-          "type": "card",
-          "label": "任务状态",
-          "children": [
-            {"type": "text", "value": "显示 WebUI、命令与定时启动的任务；每群仅保留最近状态，不是完整任务历史。每5秒轮询，忙碌时跳过。"},
-            {"type": "stat", "label": "活跃任务", "value": {"source": "overview", "field": "active_count"}},
-            {"type": "text", "label": "状态", "value": {"source": "overview", "field": "status"}},
-            {"type": "progress", "label": "任务进度", "value": {"source": "overview", "field": "progress"}}
-          ]
-        },
-        {
-          "type": "card",
-          "label": "立即生成 / 取消",
-          "children": [
-            {"type": "input", "name": "group_id", "label": "群号（必填）", "value": ""},
-            {"type": "input", "name": "day", "label": "报告日期（YYYY-MM-DD，留空为今天）", "value": ""},
-            {"type": "input", "name": "theme", "label": "主题键（留空使用默认主题）", "value": ""},
-            {"type": "text", "value": "当日重新生成统计滚动24小时；历史日期只用既有统计，不补造历史。生成会消耗模型额度并发送到所选群。取消按群生效，已发出的报告不会撤回；操作后请看上方状态。"},
-            {"type": "button", "label": "立即生成", "action": "trigger", "variant": "primary"},
-            {"type": "button", "label": "取消该群任务", "action": "cancel", "variant": "muted"}
-          ]
-        },
-        {
-          "type": "table",
-          "label": "最近10份报告",
-          "value": {"source": "overview", "field": "recent"},
-          "columns": [
-            {"field": "group_name", "label": "群聊"},
-            {"field": "day", "label": "日期"},
-            {"field": "theme", "label": "主题"},
-            {"field": "message_count", "label": "消息数"}
-          ]
-        },
-        {
-          "type": "chart",
-          "label": "近7天消息量",
-          "chart_type": "bar",
-          "value": {"source": "overview", "field": "week"},
-          "x": "day",
-          "y": "message_count"
-        }
-      ]
+      }
     }
   ]
 }

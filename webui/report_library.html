@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>群聊分析 · 报告库</title>
   <style>
-    :root { color-scheme: light dark; --bg: #f5f7fa; --panel: #fff; --ink: #202b3c; --muted: #637084; --line: #dce3ec; --accent: #315eb5; --soft: #edf3ff; --danger: #b63838; }
-    @media (prefers-color-scheme: dark) { :root { --bg: #141a23; --panel: #1c2430; --ink: #e6ebf3; --muted: #a4b1c4; --line: #364254; --accent: #9abaff; --soft: #25334c; --danger: #ffaaaa; } }
+    :root { color-scheme: light dark; --bg: #f5f7fa; --panel: #fff; --ink: #202b3c; --muted: #637084; --line: #dce3ec; --accent: #315eb5; --soft: #edf3ff; --danger: #b63838; --ok: #1a7f37; --ok-soft: #e1f0e5; --warn: #9a6700; --warn-soft: #fff1cc; --danger-soft: #fbe9e9; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #141a23; --panel: #1c2430; --ink: #e6ebf3; --muted: #a4b1c4; --line: #364254; --accent: #9abaff; --soft: #25334c; --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; } }
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
     body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 system-ui, -apple-system, "Microsoft YaHei", sans-serif; }
@@ -32,7 +32,11 @@
     .fields { display: grid; grid-template-columns: 1.5fr 1fr 1fr auto; align-items: end; gap: 12px; margin: 14px 0; }
     .notice { border-left: 3px solid var(--accent); background: var(--soft); padding: 10px 14px; border-radius: 5px; margin-bottom: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .notice.error { border-left-color: var(--danger); color: var(--danger); }
-    .badge { color: var(--accent); background: var(--soft); padding: 3px 9px; border-radius: 5px; font-size: 12px; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: 5px; font-size: 12px; line-height: 1.4; color: var(--muted); background: var(--soft); }
+    .badge::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .badge.ok { color: var(--ok); background: var(--ok-soft); }
+    .badge.warn { color: var(--warn); background: var(--warn-soft); }
+    .badge.err { color: var(--danger); background: var(--danger-soft); }
     .catalog { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
     .report { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
     .thumbnail { width: 100%; height: 180px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; overflow: hidden; background: var(--soft); color: var(--muted); }
@@ -70,7 +74,7 @@
   <main id="main">
     <header class="header">
       <div><h1>报告库</h1><p class="muted">群聊分析 · 查看存档、重发成品与管理生成</p></div>
-      <div class="buttons"><span id="connection" class="badge">正在连接宿主</span><button id="overview-link" type="button" disabled>分析总览</button></div>
+      <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span><button id="overview-link" type="button" disabled>分析总览</button></div>
     </header>
     <div id="notice" class="notice" role="status" aria-live="polite">正在等待 MaiBot 页面桥就绪…</div>
 
@@ -303,7 +307,8 @@
         for (const operation of operations) {
           if (!object(operation) || !validGroup(operation.group_id)) continue;
           const previous = latest.get(operation.group_id);
-          if (!previous || operationTime(operation) >= operationTime(previous)) latest.set(operation.group_id, operation);
+          // 快照按新到旧排序且 started_at 仅秒级：同秒并列时保留先见（更新）的一条。
+          if (!previous || operationTime(operation) > operationTime(previous)) latest.set(operation.group_id, operation);
         }
         const names = new Map([...reportGroups, ...overviewGroups].filter(object).map(group => [group.group_id, group.group_name]));
         const rows = [];
@@ -693,6 +698,7 @@
           if (state.disposed) return;
           state.ready = true;
           $('connection').textContent = '已连接宿主';
+          $('connection').className = 'badge ok';
           syncControls();
           notice('报告内容仅作安全预览；重发、删除和生成由宿主确认。下载暂不可用。');
           // Enqueue both initial queries immediately; thumbnails follow in the same serial queue.
@@ -704,6 +710,7 @@
           }, 5000);
         } catch (error) {
           $('connection').textContent = '连接不可用';
+          $('connection').className = 'badge err';
           $('reports').setAttribute('aria-busy', 'false');
           $('reports').replaceChildren(element('p', '无法连接宿主，请在 MaiBot WebUI 中重新打开报告库。', 'empty'));
           notice(`连接失败：${text(error.message)}`, true);

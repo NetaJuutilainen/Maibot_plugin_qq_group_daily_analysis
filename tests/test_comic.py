@@ -20,7 +20,7 @@ ANALYSIS = {
 
 
 class FakeApi:
-    """按 drawpic 2.2.0 信封协议回放脚本化响应；记录全部调用供断言。"""
+    """按 drawpic 2.2.0 协议回放脚本化响应（宿主+SDK 已双层解包，直达业务字典）；记录全部调用供断言。"""
 
     def __init__(self, blob=b'fake-image-bytes', chunk_size=7):
         self.calls = []
@@ -44,22 +44,22 @@ class FakeApi:
         if operation == 'submit':
             result = dict(self.submit_result)
             result['request_id'] = kwargs['request_id']
-            return {'success': True, 'result': result}
+            return result
         if operation == 'task':
-            return {'success': True, 'result': dict(self.task_result)}
+            return dict(self.task_result)
         if operation == 'request':
-            return {'success': True, 'result': dict(self.request_result)}
+            return dict(self.request_result)
         if operation == 'cancel':
-            return {'success': True, 'result': {'task_id': kwargs['task_id'], 'status': 'cancelled',
-                                                'cancel_requested': True, 'upstream_cancelled': None}}
+            return {'task_id': kwargs['task_id'], 'status': 'cancelled',
+                    'cancel_requested': True, 'upstream_cancelled': None}
         if operation == 'image':
             offset = kwargs['offset']
             block = self.blob[offset:offset + self.chunk_size]
             next_offset = offset + len(block)
-            return {'success': True, 'result': {
+            return {
                 'data': base64.b64encode(block).decode('ascii'), 'offset': offset,
                 'next_offset': next_offset, 'size': len(self.blob),
-                'done': next_offset == len(self.blob), 'mime': 'image/png', 'error': None}}
+                'done': next_offset == len(self.blob), 'mime': 'image/png', 'error': None}
         raise AssertionError(f'unexpected operation {operation}')
 
 
@@ -73,7 +73,7 @@ class DrawpicClientTest(unittest.IsolatedAsyncioTestCase):
         name, kwargs = api.calls[0]
         self.assertEqual(name, 'maimai-drawpic-plugin.drawpic_submit_v2')
         self.assertEqual(kwargs['stream_id'], '')
-        self.assertEqual(kwargs['task_type'], 'draw')
+        self.assertEqual(kwargs['task_type'], 'edit_image')
         self.assertEqual(kwargs['model'], '实例 / 模型')
         self.assertEqual(kwargs['style'], '水彩')
         self.assertEqual(kwargs['source_images'], ['aGVsbG8='])
@@ -82,6 +82,7 @@ class DrawpicClientTest(unittest.IsolatedAsyncioTestCase):
         api = FakeApi()
         await comic.DrawpicClient(api).submit('提示词', 'comic-abcdef123456')
         _, kwargs = api.calls[0]
+        self.assertEqual(kwargs['task_type'], 'draw')
         self.assertNotIn('model', kwargs)
         self.assertNotIn('style', kwargs)
         self.assertNotIn('source_images', kwargs)
@@ -154,7 +155,7 @@ class DrawpicClientTest(unittest.IsolatedAsyncioTestCase):
             async def mutating_call(name, *, version='', _mutate=mutate, **kwargs):
                 response = await original_call(name, version=version, **kwargs)
                 if name.endswith('drawpic_image_v2') and kwargs['offset'] == 8:
-                    _mutate(response['result'])
+                    _mutate(response)
                 return response
 
             api.call = mutating_call

@@ -40,7 +40,7 @@ ANALYSIS = {
 
 
 class FakeDrawpic:
-    """脚本化的 drawpic v2 对端：信封协议 + 可注入的受理/进度/传输故障。"""
+    """脚本化的 drawpic v2 对端：业务字典直达（宿主+SDK 已双层解包）+ 可注入的受理/进度/传输故障。"""
 
     def __init__(self, blob=None):
         self.calls = []
@@ -64,27 +64,27 @@ class FakeDrawpic:
                 raise RuntimeError('transport down')
             result = dict(self.submit_result)
             result['request_id'] = kwargs['request_id']
-            return {'success': True, 'result': result}
+            return result
         if operation == 'task':
             if self.task_gate is not None:
                 await self.task_gate.wait()
             if self.task_raises:
                 raise RuntimeError('transport down')
             index = min(len([c for c in self.calls if c[0] == name]) - 1, len(self.task_results) - 1)
-            return {'success': True, 'result': dict(self.task_results[index])}
+            return dict(self.task_results[index])
         if operation == 'request':
-            return {'success': True, 'result': dict(self.request_result)}
+            return dict(self.request_result)
         if operation == 'cancel':
-            return {'success': True, 'result': {'task_id': kwargs['task_id'], 'status': 'cancelled',
-                                                'cancel_requested': True, 'upstream_cancelled': None}}
+            return {'task_id': kwargs['task_id'], 'status': 'cancelled',
+                    'cancel_requested': True, 'upstream_cancelled': None}
         if operation == 'image':
             offset = kwargs['offset']
             block = self.blob[offset:offset + 192 * 1024]
             next_offset = offset + len(block)
-            return {'success': True, 'result': {
+            return {
                 'data': base64.b64encode(block).decode('ascii'), 'offset': offset,
                 'next_offset': next_offset, 'size': len(self.blob),
-                'done': next_offset == len(self.blob), 'mime': 'image/png', 'error': None}}
+                'done': next_offset == len(self.blob), 'mime': 'image/png', 'error': None}
         raise AssertionError(f'unexpected operation {operation}')
 
     def ops(self):

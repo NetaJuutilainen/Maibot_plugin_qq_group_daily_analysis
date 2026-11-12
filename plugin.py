@@ -3320,21 +3320,24 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 job["stage"] = "读取参考图"
                 ref_ids, source_images = await asyncio.to_thread(self._load_ref_images)
             prompt = build_draw_prompt(storyboard, style, group_name, day, with_refs=bool(source_images))
+            task_type = "edit_image" if source_images else "draw"
             job["stage"] = "提交绘图任务"
             # 幂等纪律：请求键先落盘再提交；回执未知保留原键，绝不换键重画
             request_id = new_request_id()
             state["request_id"] = request_id
             await asyncio.to_thread(self._comic_book.record, request_id, group_id, day, style, prompt,
-                                    group_name, ccfg.model.strip(), ccfg.drawpic_style.strip(), "draw",
+                                    group_name, ccfg.model.strip(), ccfg.drawpic_style.strip(), task_type,
                                     ref_ids, storyboard)
             try:
                 result = await client.submit(prompt, request_id, model=ccfg.model.strip(),
-                                             style=ccfg.drawpic_style.strip(), source_images=source_images or None)
+                                             style=ccfg.drawpic_style.strip(), task_type=task_type,
+                                             source_images=source_images or None)
             except DrawpicError as exc:
                 if exc.code == "RPC_FAILED":
+                    self.ctx.logger.warning("[comic] 提交回执未知: %s", exc.message)
                     await asyncio.to_thread(self._comic_book.update, request_id, status="unknown",
-                                            error="提交回执未知，可恢复进度")
-                    job["error"] = "绘图接口无回执；请求键已保留，请到漫画廊「恢复进度」查证，不要直接重画"
+                                            error=f"提交回执未知，可恢复进度（{exc.message}）"[:300])
+                    job["error"] = f"绘图接口无回执；请求键已保留，请到漫画廊「恢复进度」查证，不要直接重画（{exc.message}）"[:300]
                 else:
                     await asyncio.to_thread(self._comic_book.update, request_id, status="not_accepted",
                                             error=f"{exc.code}: {exc.message}"[:300])
@@ -3363,9 +3366,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                                                 error="远端无原请求记录")
                         job["error"] = "远端找不到原请求记录（可能尚未受理或已超出保留范围），请核对后重新生成"
                     else:
+                        self.ctx.logger.warning("[comic] 查证原请求失败: %s", exc.message)
                         await asyncio.to_thread(self._comic_book.update, request_id, status="unknown",
-                                                error=f"查证失败（{exc.code}）")
-                        job["error"] = "查证原请求失败；请求键已保留，请稍后再试「恢复进度」"
+                                                error=f"查证失败（{exc.code}）：{exc.message}"[:300])
+                        job["error"] = f"查证原请求失败；请求键已保留，请稍后再试「恢复进度」（{exc.message}）"[:300]
                     return "failed"
                 state["task_id"] = str(found.get("task_id") or "")
                 if not state["task_id"]:
@@ -3406,8 +3410,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     await asyncio.sleep(4)
                     continue
                 await asyncio.to_thread(self._comic_book.update, request_id, status="unknown",
-                                        error=f"进度查询失败（{exc.code}）")
-                job["error"] = "绘图进度查询失败；请求键已保留，可到漫画廊「恢复进度」继续查证"
+                                        error=f"进度查询失败（{exc.code}）：{exc.message}"[:300])
+                job["error"] = f"绘图进度查询失败；请求键已保留，可到漫画廊「恢复进度」继续查证（{exc.message}）"[:300]
                 return "failed"
             status = str(task.get("status") or "")
             if status in ("failed", "rejected", "cancelled"):
@@ -3442,7 +3446,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             blob = await client.read_image(task_id)
         except DrawpicError as exc:
             await asyncio.to_thread(self._comic_book.update, request_id, status="completed",
-                                    error=f"取图失败（{exc.code}）")
+                                    error=f"取图失败（{exc.code}）：{exc.message}"[:300])
             job["error"] = f"绘图已完成但取图失败（{exc.code}）；可到漫画廊「恢复进度」重试读取"
             return "failed"
         job["stage"] = "存档漫画"

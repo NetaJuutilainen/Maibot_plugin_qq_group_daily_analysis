@@ -52,8 +52,8 @@ class DrawpicError(Exception):
 
 
 class DrawpicClient:
-    """ctx.api（SDK APICapability）之上的最小封装。信封 success 只代表 RPC 返回，
-    业务受理与否必须再看 accepted/status/error。"""
+    """ctx.api（SDK APICapability）之上的最小封装。宿主 runner 与 SDK 对 api.call 各剥一层
+    result，正常拿到的就是 drawpic 业务字典本身；受理与否看 accepted/status/error。"""
 
     def __init__(self, api):
         self._api = api
@@ -67,13 +67,19 @@ class DrawpicClient:
             raise
         except Exception as exc:
             # 传输失败不证明业务未受理；submit 场景调用方必须按 submission_unknown 处理
-            raise DrawpicError("RPC_FAILED", f"绘图接口调用失败（{type(exc).__name__}），提交状态未知，请先查证原请求") from exc
-        if not isinstance(response, dict) or response.get("success") is not True:
-            raise DrawpicError("RPC_FAILED", "绘图接口返回失败信封，提交状态未知，请先查证原请求")
-        result = response.get("result")
-        if not isinstance(result, dict):
+            raise DrawpicError("RPC_FAILED", f"绘图接口调用失败（{type(exc).__name__}: {str(exc)[:150]}），提交状态未知，请先查证原请求") from exc
+        if not isinstance(response, dict):
             raise DrawpicError("RPC_FAILED", "绘图接口返回格式不正确")
-        return result
+        # 业务字典已被双层解包直达（无 success 键）；带 success 键的只可能是宿主路由层信封。
+        if "success" in response:
+            if response.get("success") is not True:
+                detail = str(response.get("error") or "")[:200]
+                raise DrawpicError("RPC_FAILED", f"绘图接口路由失败{'：' + detail if detail else ''}，提交状态未知，请先查证原请求")
+            result = response.get("result")
+            if not isinstance(result, dict):
+                raise DrawpicError("RPC_FAILED", "绘图接口返回格式不正确")
+            return result
+        return response
 
     @staticmethod
     def _business_error(result: dict) -> DrawpicError | None:
@@ -89,6 +95,9 @@ class DrawpicClient:
             raise DrawpicError("INVALID_REQUEST", "提示词长度需在 1~16000 字符")
         if not REQUEST_ID_RE.fullmatch(request_id):
             raise DrawpicError("INVALID_REQUEST", "request_id 需为 8~80 位字母数字下划线横线")
+        # drawpic 协议：附带源图必须走图生图，文生图(draw)带源图会被拒。
+        if source_images and task_type == "draw":
+            task_type = "edit_image"
         args = {"prompt": prompt, "request_id": request_id, "stream_id": "", "task_type": task_type}
         if model:
             args["model"] = model

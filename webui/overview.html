@@ -5,33 +5,43 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>群聊分析 · 分析总览</title>
   <style>
-    :root { color-scheme: light dark; --bg: #f5f7fa; --panel: #fff; --ink: #202b3c; --muted: #637084; --line: #dce3ec; --accent: #315eb5; --soft: #edf3ff; --danger: #b63838; --ok: #1a7f37; --ok-soft: #e1f0e5; --warn: #9a6700; --warn-soft: #fff1cc; --danger-soft: #fbe9e9; }
-    @media (prefers-color-scheme: dark) { :root { --bg: #141a23; --panel: #1c2430; --ink: #e6ebf3; --muted: #a4b1c4; --line: #364254; --accent: #9abaff; --soft: #25334c; --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; } }
-    * { box-sizing: border-box; }
+    /* 宿主注入 --maibot-* 时跟随宿主主题（modern / millennium / future-retro × 明暗），
+       独立打开时回退到原有配色；语义色 ok/warn/danger 宿主未提供对应文字色，保留自有。 */
+    :root { color-scheme: light dark; --bg: var(--maibot-background, #f5f7fa); --panel: var(--maibot-surface, #fff); --ink: var(--maibot-foreground, #202b3c); --muted: var(--maibot-muted, #637084); --line: var(--maibot-border, #dce3ec); --accent: var(--maibot-primary, #315eb5); --accent-ink: var(--maibot-primary-foreground, #fff); --soft: var(--maibot-soft, #edf3ff); --radius: var(--maibot-radius, 12px); --danger: #b63838; --ok: #1a7f37; --ok-soft: #e1f0e5; --warn: #9a6700; --warn-soft: #fff1cc; --danger-soft: #fbe9e9; }
+    html.dark { --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: var(--maibot-background, #141a23); --panel: var(--maibot-surface, #1c2430); --ink: var(--maibot-foreground, #e6ebf3); --muted: var(--maibot-muted, #a4b1c4); --line: var(--maibot-border, #364254); --accent: var(--maibot-primary, #9abaff); --accent-ink: var(--maibot-primary-foreground, #10141c); --soft: var(--maibot-soft, #25334c); }
+      :root:not([data-dashboard-style]) { --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; }
+    }
+    * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
     [hidden] { display: none !important; }
-    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 system-ui, -apple-system, "Microsoft YaHei", sans-serif; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--line); border-radius: calc(var(--radius) * .5); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 var(--maibot-font-body, system-ui, -apple-system, "Microsoft YaHei", sans-serif); }
     main { max-width: 1280px; margin: auto; padding: 24px; }
     h1, h2, h3, p { margin: 0; }
-    h1 { font-size: 25px; letter-spacing: .03em; }
-    h2 { font-size: 17px; }
-    button, input, select { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 8px 12px; }
+    h1 { font-size: 25px; letter-spacing: .03em; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
+    h2 { font-size: 17px; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
+    button, input, select { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: calc(var(--radius) * .6); background: var(--panel); padding: 8px 12px; }
     button { cursor: pointer; min-height: 38px; }
     button:hover:not(:disabled) { border-color: var(--accent); background: var(--soft); }
     button:disabled { cursor: not-allowed; opacity: .48; }
-    button.primary { color: var(--panel); background: var(--accent); border-color: var(--accent); }
+    button.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
     button.primary:hover:not(:disabled) { filter: brightness(.94); background: var(--accent); }
     button.danger { color: var(--danger); }
     :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
     label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
-    input, select { min-width: 0; width: 100%; color: var(--ink); }
+    input, select { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); }
     .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
     .header { margin-bottom: 20px; }
     .muted, .hint { color: var(--muted); font-size: 13px; }
-    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin-bottom: 18px; }
     .fields { display: grid; grid-template-columns: 1.5fr 1fr 1fr auto; align-items: end; gap: 12px; margin: 14px 0; }
-    .notice { border-left: 3px solid var(--accent); background: var(--soft); padding: 10px 14px; border-radius: 5px; margin-bottom: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .notice { border-left: 3px solid var(--accent); background: var(--soft); padding: 10px 14px; border-radius: calc(var(--radius) * .5); margin-bottom: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .notice.error { border-left-color: var(--danger); color: var(--danger); }
-    .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: 5px; font-size: 12px; line-height: 1.4; color: var(--muted); background: var(--soft); }
+    .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: calc(var(--radius) * .5); font-size: 12px; line-height: 1.4; color: var(--muted); background: var(--soft); }
     .badge::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
     .badge.ok { color: var(--ok); background: var(--ok-soft); }
     .badge.warn { color: var(--warn); background: var(--warn-soft); }
@@ -39,9 +49,9 @@
     .buttons { display: flex; flex-wrap: wrap; gap: 7px; }
     .buttons button { font-size: 12px; padding: 5px 10px; }
     .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
-    .stat { background: var(--bg); padding: 10px; border-radius: 6px; overflow-wrap: anywhere; }
+    .stat { background: var(--bg); padding: 10px; border-radius: calc(var(--radius) * .5); overflow-wrap: anywhere; }
     .stat dt { color: var(--muted); font-size: 12px; }
-    .stat dd { margin: 4px 0 0; }
+    .stat dd { margin: 4px 0 0; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
     .task { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 10px 0; }
     .task-copy { min-width: 0; overflow-wrap: anywhere; }
     .task-error { color: var(--danger); white-space: pre-wrap; }
@@ -51,17 +61,17 @@
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
     th { color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
-    .empty { padding: 24px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; margin-top: 12px; }
+    .empty { padding: 24px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: calc(var(--radius) * .8); margin-top: 12px; }
     .chart { display: flex; align-items: flex-end; gap: 10px; height: 170px; margin-top: 14px; padding: 0 4px; }
     .bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; min-width: 0; height: 100%; }
     .bar-value { font-size: 12px; color: var(--muted); }
-    .bar-fill { width: 100%; max-width: 56px; background: var(--accent); border-radius: 4px 4px 0 0; min-height: 2px; }
+    .bar-fill { width: 100%; max-width: 56px; background: var(--accent); border-radius: calc(var(--radius) * .35) calc(var(--radius) * .35) 0 0; min-height: 2px; }
     .bar-day { font-size: 12px; color: var(--muted); white-space: nowrap; }
     @media (max-width: 900px) { .fields { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 580px) { main { padding: 14px; } .fields, .stats { grid-template-columns: 1fr; } .chart { gap: 5px; } .task { align-items: flex-start; } }
   </style>
 </head>
-<body>
+<body class="maibot-page">
   <main id="main">
     <header class="header">
       <div><h1>分析总览</h1><p class="muted">群聊分析 · 报告统计、任务状态与近七天消息量</p></div>

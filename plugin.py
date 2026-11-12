@@ -2841,7 +2841,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         acfg = self._cfg().analysis
         metadata = {
             "group_name": str(context["chat_name"])[:200], "stream_id": stream_id,
-            "theme": theme, "version": "1.5.0",
+            "theme": theme, "version": "1.6.0",
             "message_count": context["message_count"], "participant_count": context["participant_count"],
             "elapsed_seconds": round(time.monotonic() - started, 2),
             "model_tasks": {key: getattr(acfg, "llm_task_" + key) or acfg.llm_model_task
@@ -3132,6 +3132,27 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             thumb.save(output, format="JPEG", quality=60)
         return {"data_uri": "data:image/jpeg;base64," + base64.b64encode(output.getvalue()).decode("ascii")}
 
+    def _comic_ref_preview(self, ref_id: str) -> dict:
+        from PIL import Image
+        if not isinstance(ref_id, str) or not _COMIC_REF_RE.fullmatch(ref_id):
+            raise ValueError("参考图标识无效")
+        path = self._comic_refs_dir() / ref_id
+        if not path.is_file() or path.stat().st_size > 8 * 1024 * 1024:
+            raise ValueError("参考图不存在或过大")
+        with Image.open(path) as image:
+            preview = image.convert("RGB")
+            preview.thumbnail((1024, 1024))
+            # WebUI 单次响应上限 512 KiB：逐级降质/降边，保证 base64 后仍有余量。
+            for edge, quality in ((1024, 80), (1024, 55), (768, 55), (512, 50)):
+                candidate = preview.copy()
+                candidate.thumbnail((edge, edge))
+                output = io.BytesIO()
+                candidate.save(output, format="JPEG", quality=quality)
+                if output.tell() <= 300 * 1024:
+                    break
+        return {"data_uri": "data:image/jpeg;base64," + base64.b64encode(output.getvalue()).decode("ascii"),
+                "width": candidate.width, "height": candidate.height}
+
     @API("comic_overview", version="1")
     async def webui_comic_overview(self) -> dict:
         ccfg = self._comic_cfg()
@@ -3184,6 +3205,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     @API("comic_ref_thumb", version="1")
     async def webui_comic_ref_thumb(self, ref_id: str) -> dict:
         return await asyncio.to_thread(self._comic_ref_thumb, ref_id)
+
+    @API("comic_ref_preview", version="1")
+    async def webui_comic_ref_preview(self, ref_id: str) -> dict:
+        return await asyncio.to_thread(self._comic_ref_preview, ref_id)
 
     @API("draw", version="1")
     async def webui_draw(self, group_id: str, day: str = "", style: str = "") -> dict:
@@ -3508,7 +3533,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 {"group_name": report_meta.get("group_name") or group_id, "style": style,
                  "request_id": request_id, "task_id": task_id,
                  "prompt": entry.get("prompt") or "", "storyboard": entry.get("storyboard") or {},
-                 "message_count": report_meta.get("message_count", 0), "version": "1.5.0"})
+                 "message_count": report_meta.get("message_count", 0), "version": "1.6.0"})
         except (OSError, ValueError):
             await asyncio.to_thread(self._comic_book.update, request_id, status="completed", error="本地存档失败")
             job["error"] = "漫画已生成但本地存档失败，请检查磁盘空间后到漫画廊「恢复进度」"

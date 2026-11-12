@@ -73,7 +73,7 @@ class ReportLibraryTest(unittest.IsolatedAsyncioTestCase):
         async def send(image, stream):
             meta = self.p._report_store.detail('123', DAY)
             self.assertTrue(meta['has_image'])
-            self.assertEqual(meta['version'], '1.5.0')
+            self.assertEqual(meta['version'], '1.6.0')
             self.assertEqual(meta['message_count'], 20)
             self.assertNotIn('sample', meta)
             self.assertEqual(meta['analysis']['topics'], [])
@@ -287,7 +287,7 @@ class DeclarationTest(unittest.TestCase):
 
     def test_manifest_and_bound_api_signatures(self):
         manifest = json.loads((ROOT / '_manifest.json').read_text(encoding='utf-8'))
-        self.assertEqual(manifest['version'], '1.5.0')
+        self.assertEqual(manifest['version'], '1.6.0')
         self.assertEqual(manifest['host_application']['min_version'], '1.3.19')
         self.assertEqual(manifest['sdk']['min_version'], '2.12.0')
         self.assertIn('webui.claim_upload', manifest['capabilities'])

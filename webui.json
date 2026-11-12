@@ -111,7 +111,7 @@
       "id": "comic-gallery",
       "mode": "custom",
       "title": "漫画廊",
-      "description": "把日报画成四格漫画/单幅海报（经麦麦绘图协作）；预览、重发、恢复进度与参考图管理。",
+      "description": "把日报画成四格漫画/单幅海报（经麦麦绘图协作）；预览、重发、恢复进度与参考图管理（含灯箱放大预览）。",
       "placement": "workspace",
       "icon": "puzzle",
       "entry": "webui/comic_gallery.html",
@@ -159,6 +159,13 @@
         },
         "comic_ref_thumb": {
           "api": "comic_ref_thumb",
+          "version": "1",
+          "parameters": {
+            "ref_id": {"type": "string", "required": true, "max_length": 32}
+          }
+        },
+        "comic_ref_preview": {
+          "api": "comic_ref_preview",
           "version": "1",
           "parameters": {
             "ref_id": {"type": "string", "required": true, "max_length": 32}

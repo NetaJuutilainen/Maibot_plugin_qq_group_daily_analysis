@@ -355,6 +355,35 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.p.webui_comic_ref_thumb('../stats.json')
 
+    async def test_ref_preview_lifecycle_and_size_budget(self):
+        with self.assertRaises(ValueError):
+            await self.p.webui_comic_ref_preview('../stats.json')
+        with self.assertRaises(ValueError):
+            await self.p.webui_comic_ref_preview('0' * 16 + '.png')
+        path = Path(self.temp.name) / 'upload-0.png'
+        path.write_bytes(png_bytes('white'))
+        self.p.ctx.webui.claim_upload.return_value = {'path': str(path)}
+        ref_id = (await self.p.webui_upload_ref('upload-0'))['ref_id']
+        preview = await self.p.webui_comic_ref_preview(ref_id)
+        self.assertTrue(preview['data_uri'].startswith('data:image/jpeg;base64,'))
+        self.assertEqual((preview['width'], preview['height']), (24, 48))
+
+        big = io.BytesIO()
+        Image.effect_noise((1200, 1200), 128).convert('RGB').save(big, format='PNG')
+        path = Path(self.temp.name) / 'upload-1.png'
+        path.write_bytes(big.getvalue())
+        self.p.ctx.webui.claim_upload.return_value = {'path': str(path)}
+        big_id = (await self.p.webui_upload_ref('upload-1'))['ref_id']
+        preview = await self.p.webui_comic_ref_preview(big_id)
+        self.assertEqual(preview['width'], preview['height'])
+        self.assertLessEqual(preview['width'], 1024)
+        self.assertLessEqual(len(base64.b64decode(preview['data_uri'].split(',', 1)[1])), 300 * 1024)
+
+        oversize = self.p._comic_refs_dir() / ('f' * 16 + '.png')
+        oversize.write_bytes(b'\0' * (8 * 1024 * 1024 + 1))
+        with self.assertRaises(ValueError):
+            await self.p.webui_comic_ref_preview(oversize.name)
+
     async def test_rename_ref_lifecycle(self):
         path = Path(self.temp.name) / 'upload-0.png'
         path.write_bytes(png_bytes('white'))

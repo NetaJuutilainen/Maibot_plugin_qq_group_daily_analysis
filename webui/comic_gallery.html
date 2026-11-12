@@ -5,67 +5,81 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>群聊分析 · 漫画廊</title>
   <style>
-    :root { color-scheme: light dark; --bg: #f5f7fa; --panel: #fff; --ink: #202b3c; --muted: #637084; --line: #dce3ec; --accent: #315eb5; --soft: #edf3ff; --danger: #b63838; --ok: #1a7f37; --ok-soft: #e1f0e5; --warn: #9a6700; --warn-soft: #fff1cc; --danger-soft: #fbe9e9; }
-    @media (prefers-color-scheme: dark) { :root { --bg: #141a23; --panel: #1c2430; --ink: #e6ebf3; --muted: #a4b1c4; --line: #364254; --accent: #9abaff; --soft: #25334c; --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; } }
-    * { box-sizing: border-box; }
+    /* 宿主注入 --maibot-* 时跟随宿主主题（modern / millennium / future-retro × 明暗），
+       独立打开时回退到原有配色；语义色 ok/warn/danger 宿主未提供对应文字色，保留自有。 */
+    :root { color-scheme: light dark; --bg: var(--maibot-background, #f5f7fa); --panel: var(--maibot-surface, #fff); --ink: var(--maibot-foreground, #202b3c); --muted: var(--maibot-muted, #637084); --line: var(--maibot-border, #dce3ec); --accent: var(--maibot-primary, #315eb5); --accent-ink: var(--maibot-primary-foreground, #fff); --soft: var(--maibot-soft, #edf3ff); --radius: var(--maibot-radius, 12px); --danger: #b63838; --ok: #1a7f37; --ok-soft: #e1f0e5; --warn: #9a6700; --warn-soft: #fff1cc; --danger-soft: #fbe9e9; }
+    html.dark { --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: var(--maibot-background, #141a23); --panel: var(--maibot-surface, #1c2430); --ink: var(--maibot-foreground, #e6ebf3); --muted: var(--maibot-muted, #a4b1c4); --line: var(--maibot-border, #364254); --accent: var(--maibot-primary, #9abaff); --accent-ink: var(--maibot-primary-foreground, #10141c); --soft: var(--maibot-soft, #25334c); }
+      :root:not([data-dashboard-style]) { --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; }
+    }
+    * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
     [hidden] { display: none !important; }
-    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 system-ui, -apple-system, "Microsoft YaHei", sans-serif; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--line); border-radius: calc(var(--radius) * .5); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 var(--maibot-font-body, system-ui, -apple-system, "Microsoft YaHei", sans-serif); }
     main { max-width: 1280px; margin: auto; padding: 24px; }
     h1, h2, h3, p { margin: 0; }
-    h1 { font-size: 25px; letter-spacing: .03em; }
-    h2 { font-size: 17px; }
+    h1 { font-size: 25px; letter-spacing: .03em; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
+    h2 { font-size: 17px; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
     h3 { font-size: 15px; overflow-wrap: anywhere; }
-    button, input, select { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 8px 12px; }
+    button, input, select { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: calc(var(--radius) * .6); background: var(--panel); padding: 8px 12px; }
     button { cursor: pointer; min-height: 38px; }
     button:hover:not(:disabled) { border-color: var(--accent); background: var(--soft); }
     button:disabled { cursor: not-allowed; opacity: .48; }
-    button.primary { color: var(--panel); background: var(--accent); border-color: var(--accent); }
+    button.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
     button.primary:hover:not(:disabled) { filter: brightness(.94); background: var(--accent); }
     button.danger { color: var(--danger); }
     :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
     label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
-    input, select { min-width: 0; width: 100%; color: var(--ink); }
+    input, select { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); }
     .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
     .header { margin-bottom: 20px; }
     .muted, .hint { color: var(--muted); font-size: 13px; }
-    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin-bottom: 18px; }
     .fields { display: grid; grid-template-columns: 1.5fr 1fr 1fr auto; align-items: end; gap: 12px; margin: 14px 0; }
-    .notice { border-left: 3px solid var(--accent); background: var(--soft); padding: 10px 14px; border-radius: 5px; margin-bottom: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .notice { border-left: 3px solid var(--accent); background: var(--soft); padding: 10px 14px; border-radius: calc(var(--radius) * .5); margin-bottom: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .notice.error { border-left-color: var(--danger); color: var(--danger); }
-    .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: 5px; font-size: 12px; line-height: 1.4; color: var(--muted); background: var(--soft); }
+    .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: calc(var(--radius) * .5); font-size: 12px; line-height: 1.4; color: var(--muted); background: var(--soft); }
     .badge::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
     .badge.ok { color: var(--ok); background: var(--ok-soft); }
     .badge.warn { color: var(--warn); background: var(--warn-soft); }
     .badge.err { color: var(--danger); background: var(--danger-soft); }
     .catalog { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
-    .report { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+    .report { border: 1px solid var(--line); border-radius: calc(var(--radius) * .8); background: var(--panel); overflow: hidden; }
     .thumbnail { width: 100%; height: 180px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; overflow: hidden; background: var(--soft); color: var(--muted); }
     .thumbnail img { display: block; width: 100%; height: 100%; object-fit: contain; }
     .report-body { padding: 14px; }
     .report-meta { color: var(--muted); margin: 5px 0 12px; font-size: 12px; overflow-wrap: anywhere; }
     .buttons { display: flex; flex-wrap: wrap; gap: 7px; }
     .buttons button { font-size: 12px; padding: 5px 10px; }
-    .empty { grid-column: 1 / -1; padding: 36px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; }
+    .empty { grid-column: 1 / -1; padding: 36px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: calc(var(--radius) * .8); }
     .pager { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 20px 0; }
     .task { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 10px 0; }
     .task-copy { min-width: 0; overflow-wrap: anywhere; }
     .task-error { color: var(--danger); white-space: pre-wrap; }
     .tasks { max-height: 300px; overflow-y: auto; margin-top: 12px; }
     .refs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
-    .ref { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
+    .ref { border: 1px solid var(--line); border-radius: calc(var(--radius) * .7); overflow: hidden; background: var(--bg); }
     .ref img { display: block; width: 100%; height: 110px; object-fit: contain; background: var(--soft); }
+    .ref img.zoomable { cursor: zoom-in; }
     .ref-body { padding: 8px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
     .overlay { position: fixed; inset: 0; background: #0009; display: flex; justify-content: center; align-items: center; padding: 20px; z-index: 10; }
-    .modal { width: min(1100px, 100%); max-height: 94vh; overflow: auto; border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 20px; }
-    .modal-head { position: sticky; top: -20px; z-index: 1; background: var(--panel); padding: 10px 0; }
+    /* 宿主 future-retro 的 surface 采样为透明，弹层必须用不透明的页面底色兜底。 */
+    .modal { width: min(1100px, 100%); max-height: 94vh; overflow: auto; border: 1px solid var(--line); background: var(--bg); border-radius: var(--radius); padding: 20px; }
+    .modal-head { position: sticky; top: -20px; z-index: 1; background: var(--bg); padding: 10px 0; }
     .modal h2 { overflow-wrap: anywhere; }
+    .ref-overlay { z-index: 20; background: #000c; }
+    .ref-view { max-height: 74vh; }
     .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 16px 0; }
-    .stat { background: var(--bg); padding: 10px; border-radius: 6px; overflow-wrap: anywhere; }
+    .stat { background: var(--bg); padding: 10px; border-radius: calc(var(--radius) * .5); overflow-wrap: anywhere; }
     .stat dt { color: var(--muted); font-size: 12px; }
-    .stat dd { margin: 4px 0 0; }
+    .stat dd { margin: 4px 0 0; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
     details { margin: 14px 0; }
     summary { cursor: pointer; }
-    pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 250px; overflow: auto; font: inherit; background: var(--bg); padding: 12px; border-radius: 6px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 250px; overflow: auto; font: inherit; background: var(--bg); padding: 12px; border-radius: calc(var(--radius) * .5); }
     .image-view { overflow: auto; max-height: 65vh; background: var(--bg); margin-top: 12px; }
     .image-view img { display: block; max-width: 100%; height: auto; margin: auto; }
     .image-view.natural-size img { max-width: none; margin: 0; }
@@ -73,7 +87,7 @@
     @media (max-width: 580px) { main { padding: 14px; } .catalog, .fields { grid-template-columns: 1fr; } .stats { grid-template-columns: 1fr 1fr; } .overlay { padding: 8px; } .modal { padding: 14px; } .task { align-items: flex-start; } }
   </style>
 </head>
-<body>
+<body class="maibot-page">
   <main id="main">
     <header class="header">
       <div><h1>漫画廊</h1><p class="muted">群聊分析 · 把日报画成四格漫画 / 单幅海报（经麦麦绘图协作）</p></div>
@@ -147,6 +161,14 @@
     </section>
   </div>
 
+  <div id="ref-overlay" class="overlay ref-overlay" hidden>
+    <section id="ref-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="ref-title" aria-describedby="ref-state">
+      <header class="row modal-head"><h2 id="ref-title" tabindex="-1">参考图预览</h2><button id="ref-close" type="button" aria-label="关闭参考图预览">关闭</button></header>
+      <p id="ref-state" class="muted" role="status" aria-live="polite">正在读取…</p>
+      <div class="image-view ref-view"><img id="ref-image" alt="参考图放大预览" hidden></div>
+    </section>
+  </div>
+
   <script>
     'use strict';
     (() => {
@@ -161,7 +183,7 @@
       const BOOK_STATUS_NAMES = { submitting: '提交中', unknown: '回执未知', pending: '等待绘图', running: '绘图中', unconfirmed: '远端待确认', completed: '已完成未发送', failed: '失败', rejected: '被拒绝', cancelled: '已取消', not_accepted: '未受理' };
       const KIND_NAMES = { comic: '漫画', draw: '漫画' };
       const SOURCE_NAMES = { webui: 'WebUI', command: '命令', schedule: '定时', auto: '日报联动' };
-      const state = { ready: false, disposed: false, actionBusy: false, overviewBusy: false, listLoading: false, uploadBusy: false, pending: 0, page: 1, pages: 1, listToken: 0, modalToken: 0, imageToken: 0, modalRow: null, imageBusy: false, overviewStamp: null, refsStamp: null, comicsDirty: false, timer: null, busyGroups: new Set(), enabled: false, drawpicAvailable: false, useRefs: false, refCount: 0 };
+      const state = { ready: false, disposed: false, actionBusy: false, overviewBusy: false, listLoading: false, uploadBusy: false, pending: 0, page: 1, pages: 1, listToken: 0, modalToken: 0, imageToken: 0, refToken: 0, modalRow: null, imageBusy: false, overviewStamp: null, refsStamp: null, comicsDirty: false, timer: null, busyGroups: new Set(), enabled: false, drawpicAvailable: false, useRefs: false, refCount: 0 };
       let bridge;
       let queue = Promise.resolve();
       let filters = { group_id: '', date_from: '', date_to: '', search: '', sort_order: 'desc' };
@@ -169,6 +191,7 @@
       let overviewGroups = [];
       let styleEntries = [{ key: 'four_panel', label: '四格漫画' }, { key: 'poster', label: '单幅海报' }];
       let returnFocus = null;
+      let refReturnFocus = null;
       const blobURLs = new Set();
       class StaleRequest extends Error {}
 
@@ -412,6 +435,14 @@
             if (state.disposed) break;
             if (!object(thumb) || typeof thumb.data_uri !== 'string' || !thumb.data_uri.startsWith('data:image/jpeg;base64,')) throw new Error('缩略图格式不匹配');
             preview.src = thumb.data_uri;
+            preview.classList.add('zoomable');
+            preview.tabIndex = 0;
+            preview.setAttribute('role', 'button');
+            preview.setAttribute('aria-label', `放大查看参考图 ${typeof ref.name === 'string' && ref.name.trim() !== '' ? ref.name : ref.ref_id}`);
+            preview.addEventListener('click', () => { void openRefPreview(ref, preview); });
+            preview.addEventListener('keydown', event => {
+              if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void openRefPreview(ref, preview); }
+            });
           } catch (error) {
             if (error instanceof StaleRequest) break;
             if (!state.disposed) preview.alt = `参考图 ${ref.ref_id}（缩略图不可用）`;
@@ -603,6 +634,42 @@
         $('main').inert = false;
         document.body.style.overflow = '';
         if (wasOpen && !state.disposed) (returnFocus && returnFocus.isConnected ? returnFocus : $('refresh')).focus();
+      }
+
+      function closeRefPreview() {
+        state.refToken += 1;
+        const wasOpen = !$('ref-overlay').hidden;
+        $('ref-overlay').hidden = true;
+        $('ref-image').removeAttribute('src');
+        $('ref-image').hidden = true;
+        $('main').inert = false;
+        document.body.style.overflow = '';
+        if (wasOpen && !state.disposed) (refReturnFocus && refReturnFocus.isConnected ? refReturnFocus : $('upload-ref')).focus();
+      }
+
+      async function openRefPreview(ref, trigger) {
+        if (!state.ready || state.disposed) return;
+        const token = ++state.refToken;
+        const relevant = () => token === state.refToken && !$('ref-overlay').hidden;
+        refReturnFocus = trigger || null;
+        const named = typeof ref.name === 'string' && ref.name.trim() !== '';
+        $('ref-title').textContent = `参考图预览 · ${text(named ? ref.name : ref.ref_id, 40)}`;
+        $('ref-state').textContent = '正在读取大图…';
+        $('ref-image').hidden = true;
+        $('ref-overlay').hidden = false;
+        $('main').inert = true;
+        document.body.style.overflow = 'hidden';
+        $('ref-title').focus();
+        try {
+          const result = await call('query', 'comic_ref_preview', { ref_id: ref.ref_id }, relevant);
+          if (state.disposed || !relevant()) return;
+          if (!object(result) || typeof result.data_uri !== 'string' || !result.data_uri.startsWith('data:image/jpeg;base64,')) throw new Error('预览图格式不匹配');
+          $('ref-image').src = result.data_uri;
+          $('ref-image').hidden = false;
+          $('ref-state').textContent = `${text(result.width)}×${text(result.height)} 像素 · JPEG 预览（最长边 1024，非原始文件）`;
+        } catch (error) {
+          if (!(error instanceof StaleRequest) && !state.disposed && relevant()) $('ref-state').textContent = `预览读取失败：${text(error.message)}`;
+        }
       }
 
       function addStat(label, value) {
@@ -802,12 +869,19 @@
       });
       $('close-modal').addEventListener('click', closeModal);
       $('overlay').addEventListener('click', event => { if (event.target === $('overlay')) closeModal(); });
+      $('ref-close').addEventListener('click', closeRefPreview);
+      $('ref-overlay').addEventListener('click', event => { if (event.target === $('ref-overlay')) closeRefPreview(); });
       $('load-image').addEventListener('click', () => { void loadOriginal(); });
       $('image-size').addEventListener('click', () => {
         const natural = $('image-view').classList.toggle('natural-size');
         $('image-size').textContent = natural ? '适应宽度' : '原始尺寸';
       });
       document.addEventListener('keydown', event => {
+        if (!$('ref-overlay').hidden) {
+          if (event.key === 'Escape') { event.preventDefault(); closeRefPreview(); }
+          if (event.key === 'Tab') { event.preventDefault(); $('ref-close').focus(); }
+          return;
+        }
         if ($('overlay').hidden) return;
         if (event.key === 'Escape') { event.preventDefault(); closeModal(); }
         if (event.key === 'Tab') {
@@ -824,6 +898,7 @@
         state.disposed = true;
         state.listToken += 1;
         state.modalToken += 1;
+        state.refToken += 1;
         clearInterval(state.timer);
         releaseImages();
       }

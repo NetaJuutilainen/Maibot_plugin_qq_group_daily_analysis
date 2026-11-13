@@ -65,7 +65,7 @@
     .empty { padding: 24px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: calc(var(--radius) * .8); margin-top: 12px; }
     .chart { display: flex; align-items: flex-end; gap: 10px; height: 170px; margin-top: 14px; padding: 0 4px; }
     .bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; min-width: 0; height: 100%; }
-    .bar-value { font-size: 12px; color: var(--muted); }
+    .bar-value { font-size: 12px; color: var(--muted); font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
     .bar-fill { width: 100%; max-width: 56px; background: var(--accent); border-radius: calc(var(--radius) * .35) calc(var(--radius) * .35) 0 0; min-height: 2px; }
     .bar-day { font-size: 12px; color: var(--muted); white-space: nowrap; }
     /* 挂 maibot-card/button/input/select 后由宿主注入采样外观（阴影/描边/纹理/字体）；

@@ -7,6 +7,7 @@ import html as html_esc
 import io
 import json
 import os
+import random
 import re
 import ssl
 import time
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, Literal, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from maibot_sdk import API, Command, Field, HookHandler, MaiBotPlugin, PluginConfigBase
+from maibot_sdk import API, Command, Field, HookHandler, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import HookMode
 
 from .comic import (
@@ -590,7 +591,12 @@ class ComicSectionConfig(PluginConfigBase):
 
     enabled: bool = Field(default=False, description="启用群聊漫画（需安装并启用麦麦绘图插件 drawpic 2.x，且其联动开关允许插件调用）")
     auto_after_daily: bool = Field(default=False, description="日报发送成功后自动追加漫画（仅对下方联动群列表内的群生效；列表留空则不自动）")
-    style: str = Field(default="four_panel", description="默认漫画风格：four_panel=四格漫画 / poster=单幅海报")
+    style: str = Field(default="four_panel", description="默认漫画风格（固定模式或轮换池外显式指定时用）")
+    style_rotation: str = Field(default="off", description="风格轮换：off=固定默认 / sequential=顺序循环 / random=每次随机 / shuffle=洗牌一轮不重复")
+    rotation_styles: str = Field(default="", description="参与轮换的风格 key，每行一个；留空=全部内置风格", json_schema_extra={"rows": 3})
+    rotation_scope: str = Field(default="global", description="轮换进度范围：global=全局共享一份进度 / group=按群独立进度")
+    active_character: str = Field(default="", description="当前漫画角色方案 id（留空=不用角色方案，沿用全局参考图）；在漫画廊管理")
+    daily_random_character: bool = Field(default=False, description="每日随机角色：当天首次生成时随机选一个角色方案并固定一整天")
     drawpic_style: str = Field(default="", description="传给麦麦绘图的风格预设名（留空=绘图插件当前默认风格）")
     model: str = Field(default="", description="指定绘图模型完整名「实例名 / 模型名」（留空=绘图插件默认模型）")
     max_wait_seconds: int = Field(default=300, description="单次等待绘图完成的最长秒数（超时保留进度，可在漫画廊恢复）", ge=60, le=3600)
@@ -986,6 +992,156 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     def _comic_cfg(self) -> ComicSectionConfig:
         return cast(DailyAnalysisConfig, self.config).comic
 
+    def _rotation_path(self) -> Path:
+        return Path(self.ctx.paths.data_dir) / "comic_rotation.json"
+
+    def _load_rotation(self) -> dict:
+        try:
+            data = json.loads(self._rotation_path().read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_rotation(self, data: dict) -> None:
+        path = self._rotation_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def _rotation_pool(self) -> list[str]:
+        ccfg = self._comic_cfg()
+        pool = [line.strip() for line in str(ccfg.rotation_styles or "").splitlines()
+                if line.strip() in COMIC_STYLES]
+        return pool or list(COMIC_STYLES)
+
+    def _pick_comic_style(self, group_id: str) -> str:
+        ccfg = self._comic_cfg()
+        mode = ccfg.style_rotation
+        if mode not in ("sequential", "random", "shuffle"):
+            return ccfg.style if ccfg.style in COMIC_STYLES else "four_panel"
+        pool = self._rotation_pool()
+        key = group_id if ccfg.rotation_scope == "group" else "global"
+        data = self._load_rotation()
+        prog = data.get(key) or {}
+        if mode == "random":
+            style = random.choice(pool)
+        elif mode == "sequential":
+            idx = int(prog.get("index") or 0) % len(pool)
+            style = pool[idx]
+            prog["index"] = idx + 1
+        else:
+            order = [s for s in (prog.get("order") or []) if s in pool]
+            if not order or prog.get("pool") != pool:
+                order = list(pool)
+                random.shuffle(order)
+                prog["pool"] = pool
+            style = order.pop(0)
+            prog["order"] = order
+        prog["last"] = style
+        data[key] = prog
+        self._save_rotation(data)
+        return style
+
+    def _rotation_state(self) -> dict:
+        ccfg = self._comic_cfg()
+        return {"mode": ccfg.style_rotation, "scope": ccfg.rotation_scope,
+                "pool": self._rotation_pool(), "progress": self._load_rotation()}
+
+    @API("comic_rotation_reset", version="1")
+    async def webui_comic_rotation_reset(self, scope: str = "global") -> dict:
+        data = self._load_rotation()
+        if scope == "all":
+            data = {}
+        else:
+            data.pop(scope, None)
+        self._save_rotation(data)
+        return {"reset": True, "message": "已重置轮换进度"}
+
+    def _characters_path(self) -> Path:
+        return Path(self.ctx.paths.data_dir) / "comic_characters.json"
+
+    def _comic_characters(self) -> list[dict]:
+        try:
+            data = json.loads(self._characters_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        if not isinstance(data, list):
+            return []
+        rows = []
+        for item in data:
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]:
+                rows.append({"id": item["id"][:32], "name": str(item.get("name") or "")[:40],
+                             "persona": str(item.get("persona") or "")[:400],
+                             "scene_prompt": str(item.get("scene_prompt") or "")[:400],
+                             "ref_ids": [str(r) for r in (item.get("ref_ids") or []) if isinstance(r, str)][:4]})
+        return rows[:8]
+
+    def _save_characters(self, rows: list[dict]) -> None:
+        path = self._characters_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+
+    def _active_character(self, group_id: str) -> dict | None:
+        ccfg = self._comic_cfg()
+        rows = self._comic_characters()
+        if not rows:
+            return None
+        if ccfg.daily_random_character:
+            path = Path(self.ctx.paths.data_dir) / "comic_character_daily.json"
+            today = date.today().isoformat()
+            try:
+                daily = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                daily = {}
+            if not isinstance(daily, dict):
+                daily = {}
+            picked = daily.get("id") if daily.get("date") == today else None
+            if picked not in {r["id"] for r in rows}:
+                picked = random.choice(rows)["id"]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps({"date": today, "id": picked}, ensure_ascii=False), encoding="utf-8")
+            return next(r for r in rows if r["id"] == picked)
+        if ccfg.active_character:
+            return next((r for r in rows if r["id"] == ccfg.active_character), None)
+        return None
+
+    @API("comic_character_save", version="1")
+    async def webui_comic_character_save(self, id: str = "", name: str = "", persona: str = "",
+                                         scene_prompt: str = "", ref_ids: str = "") -> dict:
+        rows = self._comic_characters()
+        valid_refs = {row["ref_id"] for row in self._comic_refs()}
+        refs = [r.strip() for r in ref_ids.split(",") if r.strip() in valid_refs][:4]
+        if id:
+            row = next((r for r in rows if r["id"] == id), None)
+            if row is None:
+                return {"saved": False, "message": "角色方案不存在"}
+        else:
+            if len(rows) >= 8:
+                return {"saved": False, "message": "角色方案已达上限 8 个"}
+            row = {"id": hashlib.sha1(os.urandom(8)).hexdigest()[:12]}
+            rows.append(row)
+        row.update({"name": name[:40], "persona": persona[:400],
+                    "scene_prompt": scene_prompt[:400], "ref_ids": refs})
+        self._save_characters(rows)
+        return {"saved": True, "id": row["id"], "message": "已保存角色方案"}
+
+    @API("comic_character_delete", version="1")
+    async def webui_comic_character_delete(self, id: str) -> dict:
+        rows = self._comic_characters()
+        remain = [r for r in rows if r["id"] != id]
+        if len(remain) == len(rows):
+            return {"deleted": False, "message": "角色方案不存在"}
+        self._save_characters(remain)
+        if self._comic_cfg().active_character == id:
+            self._comic_cfg().active_character = ""
+        return {"deleted": True, "message": "已删除角色方案"}
+
+    @API("comic_character_set_active", version="1")
+    async def webui_comic_character_set_active(self, id: str = "") -> dict:
+        if id and id not in {r["id"] for r in self._comic_characters()}:
+            return {"saved": False, "message": "角色方案不存在"}
+        self._comic_cfg().active_character = id
+        return {"saved": True, "message": "已切换当前角色方案"}
+
     def _cfg(self) -> DailyAnalysisConfig:
         return cast(DailyAnalysisConfig, self.config)
 
@@ -1093,7 +1249,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "fields": {
             "enabled": {"label": "启用群聊漫画", "ui_type": "switch", "hint": "需安装并启用麦麦绘图插件（drawpic 2.x），并在其通用配置中允许插件联动"},
             "auto_after_daily": {"label": "日报后自动画漫画", "ui_type": "switch", "hint": "仅对下方联动群列表内的群生效；列表留空则不自动"},
-            "style": {"label": "默认漫画风格", "ui_type": "select", "choices": ["four_panel", "poster"], "hint": "four_panel=四格漫画 / poster=单幅海报"},
+            "style": {"label": "默认漫画风格", "ui_type": "select", "choices": list(COMIC_STYLES), "hint": "固定模式用此风格；开启轮换时作为显式指定外的兜底"},
+            "style_rotation": {"label": "风格轮换", "ui_type": "select", "choices": ["off", "sequential", "random", "shuffle"], "hint": "off=固定 / sequential=顺序循环 / random=每次随机 / shuffle=洗牌一轮不重复"},
+            "rotation_styles": {"label": "轮换风格池", "ui_type": "textarea", "rows": 3, "hint": "每行一个风格 key；留空=全部内置风格"},
+            "rotation_scope": {"label": "轮换进度范围", "ui_type": "select", "choices": ["global", "group"], "hint": "global=全局共享进度 / group=按群独立进度"},
             "drawpic_style": {"label": "绘图风格预设名", "ui_type": "text", "hint": "麦麦绘图工作台里的预设名；留空用其当前默认风格"},
             "model": {"label": "绘图模型完整名", "ui_type": "text", "hint": "格式「实例名 / 模型名」；留空用绘图插件默认模型"},
             "max_wait_seconds": {"label": "等待绘图上限（秒）", "ui_type": "number", "min": 60, "max": 3600, "hint": "超时不丢进度，可在漫画廊点「恢复进度」继续"},
@@ -3077,12 +3236,14 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 rows.append({"ref_id": item.name, "size": item.stat().st_size, "name": names.get(item.name, "")})
         return rows[:4]
 
-    def _load_ref_images(self) -> tuple[list[str], list[str]]:
+    def _load_ref_images(self, only_ids: list[str] | None = None) -> tuple[list[str], list[str]]:
         """读取参考图为 base64 列表（每张≤8MiB、总≤40MiB，与 drawpic 源图限制一致）。"""
         ref_ids: list[str] = []
         images: list[str] = []
         total = 0
         for row in self._comic_refs():
+            if only_ids is not None and row["ref_id"] not in only_ids:
+                continue
             size = row["size"]
             if size > 8 * 1024 * 1024 or total + size > 40 * 1024 * 1024:
                 continue
@@ -3170,6 +3331,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "drawpic_available": await self._drawpic_ready() if ccfg.enabled else False,
             "styles": [{"key": key, "label": meta["label"]} for key, meta in COMIC_STYLES.items()],
             "default_style": ccfg.style if ccfg.style in COMIC_STYLES else "four_panel",
+            "rotation": self._rotation_state(),
+            "characters": self._comic_characters(),
+            "active_character": ccfg.active_character,
+            "daily_random_character": bool(ccfg.daily_random_character),
             "use_reference_images": bool(ccfg.use_reference_images),
             "total": listing["total"], "today_count": daily["total"],
             "groups": [{"group_id": gid, "group_name": str(chat.get("name") or gid)[:200]}
@@ -3225,7 +3390,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 raise ValueError
         except ValueError:
             return {"accepted": False, "status": "rejected", "message": "日期需为 YYYY-MM-DD，且不能晚于今天"}
-        style = style or (ccfg.style if ccfg.style in COMIC_STYLES else "four_panel")
+        style = style or self._pick_comic_style(group_id)
         if style not in COMIC_STYLES:
             return {"accepted": False, "status": "rejected", "message": "未知漫画风格"}
         try:
@@ -3273,6 +3438,18 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             return await self._comic_resume_work(job, stream_id, group_id, day, entry)
 
         return self._jobs.submit("comic", group_id, day, work)
+
+    @API("comic_forget", version="1")
+    async def webui_comic_forget(self, request_id: str) -> dict:
+        entry = await asyncio.to_thread(self._comic_book.get, request_id)
+        if entry is None:
+            return {"deleted": False, "message": "记录不存在或已被清理"}
+        if entry.get("status") not in RECOVERABLE_STATUSES or entry.get("sent"):
+            return {"deleted": False, "message": "该记录不在可恢复列表，无需删除"}
+        if self._jobs.active_for(str(entry.get("group_id") or "")) is not None:
+            return {"deleted": False, "message": "该群有任务进行中，请稍后再删"}
+        await asyncio.to_thread(self._comic_book.forget, request_id)
+        return {"deleted": True, "message": "已删除恢复记录"}
 
     @API("comic_resend", version="1")
     async def webui_comic_resend(self, group_id: str, day: str, revision: str = "") -> dict:
@@ -3361,10 +3538,13 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         resolved["titles"] = [dict(t) for t in analysis.get("titles") or [] if isinstance(t, dict)]
         return resolved
 
-    async def _comic_storyboard(self, analysis: dict, group_name: str, day: str, style: str) -> dict:
+    async def _comic_storyboard(self, analysis: dict, group_name: str, day: str, style: str, extra: str = "") -> dict:
         ccfg = self._comic_cfg()
+        prompt = storyboard_prompt(analysis, group_name, day, style)
+        if extra:
+            prompt += "\n\n角色与场景设定（只影响画风与角色，不改变素材事实）：\n" + extra
         try:
-            data = await self._call_llm_json(storyboard_prompt(analysis, group_name, day, style),
+            data = await self._call_llm_json(prompt,
                                              self._cfg().analysis, task=(ccfg.llm_model_task or "").strip())
         except Exception as exc:
             self.ctx.logger.warning("[comic] 分镜 LLM 调用异常，使用保底分镜: %s", type(exc).__name__)
@@ -3389,10 +3569,17 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 except (OSError, ValueError):
                     pass
             job["stage"] = "生成分镜脚本"
-            storyboard = await self._comic_storyboard(analysis, group_name, day, style)
+            character = self._active_character(group_id)
+            extra = ""
+            if character:
+                extra = "\n".join(part for part in (character.get("persona"), character.get("scene_prompt")) if part)
+            storyboard = await self._comic_storyboard(analysis, group_name, day, style, extra)
             ref_ids: list[str] = []
             source_images: list[str] = []
-            if ccfg.use_reference_images:
+            if character and character.get("ref_ids"):
+                job["stage"] = "读取角色参考图"
+                ref_ids, source_images = await asyncio.to_thread(self._load_ref_images, character["ref_ids"])
+            elif ccfg.use_reference_images:
                 job["stage"] = "读取参考图"
                 ref_ids, source_images = await asyncio.to_thread(self._load_ref_images)
             prompt = build_draw_prompt(storyboard, style, group_name, day, with_refs=bool(source_images))
@@ -3612,7 +3799,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 await asyncio.to_thread(self._report_store.detail, group_id, day)
             except (OSError, ValueError):
                 return
-            style = ccfg.style if ccfg.style in COMIC_STYLES else "four_panel"
+            style = self._pick_comic_style(group_id)
 
             async def auto():
                 # 日报 job 还占着同群互斥位，等它释放（最多 30s）
@@ -4034,6 +4221,186 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         task.add_done_callback(lambda t: self._tasks.remove(t) if t in self._tasks else None)
         return task
 
+    # ------------------------------------------------------------------ 统计与数据管理
+    @API("stats", version="1")
+    async def webui_stats(self, range_days: int = 7) -> dict:
+        range_days = max(1, min(int(range_days), 30))
+        today = date.today()
+        days = [(today - timedelta(days=offset)).isoformat() for offset in range(range_days - 1, -1, -1)]
+        messages = {day: 0 for day in days}
+        for chat in self._stats.get("chats", {}).values():
+            if not isinstance(chat, dict):
+                continue
+            for day, bucket in (chat.get("days") or {}).items():
+                if day in messages and isinstance(bucket, dict):
+                    messages[day] += int(bucket.get("total") or 0)
+        catalog = await asyncio.to_thread(self._report_store._catalog)
+        reports = {day: 0 for day in days}
+        for row in catalog:
+            if row["day"] in reports:
+                reports[row["day"]] += 1
+        return {"range_days": range_days,
+                "days": [{"day": day, "messages": messages[day], "reports": reports[day]} for day in days],
+                "total_messages": sum(messages.values()), "total_reports": sum(reports.values())}
+
+    @staticmethod
+    def _dir_usage(path: Path) -> dict:
+        files = 0
+        size = 0
+        if path.is_dir():
+            for item in path.rglob("*"):
+                if item.is_file():
+                    files += 1
+                    size += item.stat().st_size
+        return {"files": files, "bytes": size}
+
+    @API("storage", version="1")
+    async def webui_storage(self) -> dict:
+        data_dir = Path(self.ctx.paths.data_dir)
+        partitions = []
+        for key, label in (("reports", "报告/漫画存档"), ("comic_refs", "参考图"),
+                           ("uploads", "上传暂存"), ("cache", "运行时缓存")):
+            usage = await asyncio.to_thread(self._dir_usage, data_dir / key)
+            partitions.append({"key": key, "label": label, **usage})
+        catalog = await asyncio.to_thread(self._report_store._catalog)
+        return {"partitions": partitions,
+                "reports": [{k: row[k] for k in ("group_id", "group_name", "day", "revision")} for row in catalog][:200]}
+
+    @API("storage_delete", version="1")
+    async def webui_storage_delete(self, keys: str = "") -> dict:
+        deleted = 0
+        for token in keys.split(","):
+            token = token.strip()
+            if not token or "|" not in token:
+                continue
+            gid, day = token.split("|", 1)
+            try:
+                await asyncio.to_thread(self._report_store.delete, gid, day)
+                deleted += 1
+            except (OSError, ValueError):
+                continue
+        return {"deleted": deleted, "message": f"已删除 {deleted} 份存档"}
+
+    @API("cache_clear", version="1")
+    async def webui_cache_clear(self) -> dict:
+        cache = Path(self.ctx.paths.data_dir) / "cache"
+        before = await asyncio.to_thread(self._dir_usage, cache)
+        if cache.is_dir():
+            for item in sorted(cache.rglob("*"), reverse=True):
+                try:
+                    if item.is_file():
+                        item.unlink()
+                    elif item.is_dir():
+                        item.rmdir()
+                except OSError:
+                    continue
+        return {"cleared": before["bytes"], "message": f"已清理缓存 {before['bytes']} 字节"}
+
+    # ------------------------------------------------------------------ LLM 原生工具
+    def _tool_resolve_group(self, group: str, kwargs: dict) -> str | None:
+        best = self._best_chats()
+        group = (group or "").strip()
+        if not group:
+            msg = kwargs.get("message") or {}
+            if isinstance(msg, dict):
+                gid = str((msg.get("message_info", {}).get("group_info") or {}).get("group_id") or "")
+                return gid or None
+            return None
+        if group in best:
+            return group
+        hits = [gid for gid, chat in best.items()
+                if group.casefold() in str(chat.get("name") or "").casefold()]
+        return hits[0] if len(hits) == 1 else None
+
+    def _tool_resolve_day(self, raw: str) -> str:
+        raw = (raw or "").strip()
+        today = date.today()
+        if raw in ("昨天", "昨日"):
+            return (today - timedelta(days=1)).isoformat()
+        if raw == "前天":
+            return (today - timedelta(days=2)).isoformat()
+        m = re.fullmatch(r"(\d+)\s*天前", raw)
+        if m:
+            return (today - timedelta(days=min(int(m.group(1)), 365))).isoformat()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            return raw
+        return today.isoformat()
+
+    def _report_markdown(self, meta: dict, gid: str, day: str) -> str:
+        analysis = meta.get("analysis") or {}
+        names = {str(t.get("user_id")): str(t.get("name") or "")
+                 for t in analysis.get("titles") or [] if isinstance(t, dict)}
+
+        def clean(value) -> str:
+            return re.sub(r"\[(\d+)\]", lambda m: names.get(m.group(1)) or "群友", str(value or ""))
+
+        lines = [f"# 群 {meta.get('group_name') or gid} 日报 {day}",
+                 f"消息数 {meta.get('message_count', '—')} · 主题 {meta.get('theme', '—')}"]
+        topics = [t for t in analysis.get("topics") or [] if isinstance(t, dict)]
+        if topics:
+            lines.append("## 话题")
+            lines += [f"- {clean(t.get('topic'))}：{clean(t.get('detail'))}" for t in topics[:10]]
+        titles = [t for t in analysis.get("titles") or [] if isinstance(t, dict)]
+        if titles:
+            lines.append("## 称号")
+            lines += [f"- {clean(t.get('name'))}：{clean(t.get('title'))}" for t in titles[:15]]
+        quotes = [q for q in analysis.get("quotes") or [] if isinstance(q, dict)]
+        if quotes:
+            lines.append("## 金句")
+            lines += [f"- {clean(q.get('content'))}（{clean(q.get('sender'))}）" for q in quotes[:10]]
+        return "\n".join(lines)[:40000]
+
+    @Tool("group_daily_report_lookup",
+          description="读取群聊日报历史存档（只读、不消耗模型额度）。支持自然语言日期与群名/群号；返回紧凑 Markdown。",
+          parameters={
+              "group": {"type": "string", "description": "群号或群名关键词；群聊中留空表示本群"},
+              "date": {"type": "string", "description": "今天/昨天/前天/N天前/YYYY-MM-DD；留空=今天，自动回滑到最近一份存档"},
+          })
+    async def tool_get_report(self, group: str = "", date: str = "", **kwargs: Any) -> str:
+        gid = self._tool_resolve_group(group, kwargs)
+        if not gid:
+            return "未找到匹配的群，请提供群号或更准确的群名。"
+        target = self._tool_resolve_day(date)
+        listing = await asyncio.to_thread(self._report_store.list_reports, gid, "", target, 1, 1)
+        if not listing["items"]:
+            return f"群 {gid} 在 {target} 及之前没有日报存档。"
+        day = listing["items"][0]["day"]
+        meta = await asyncio.to_thread(self._report_store.detail, gid, day)
+        return self._report_markdown(meta, gid, day)
+
+    @Tool("group_daily_analysis_trigger",
+          description="管理员异步触发本群日报生成：受理即返回凭证，后台完成后自动发群。普通成员请改用 group_daily_report_lookup。",
+          parameters={})
+    async def tool_trigger(self, **kwargs: Any) -> str:
+        stream_id = str(kwargs.get("stream_id") or "")
+        if not stream_id:
+            return "找不到当前会话，请在群聊中使用。"
+        admins = self._admin_ids()
+        if admins is not None and str(kwargs.get("user_id") or "") not in admins:
+            return "仅管理员可触发分析（名单在插件设置的命令管理员里配置）。"
+        msg = kwargs.get("message") or {}
+        gid = ""
+        if isinstance(msg, dict):
+            gid = str((msg.get("message_info", {}).get("group_info") or {}).get("group_id") or "")
+        whitelist = self._whitelist_ids()
+        if whitelist is not None and gid not in whitelist:
+            return "本群不在白名单中，无法触发分析。"
+        day = date.today().strftime("%Y-%m-%d")
+        await self._rebuild_day_from_db(stream_id, day)
+        total = self._day_total(stream_id, day)
+        minimum = self._cfg().analysis.min_messages_threshold
+        if total < minimum:
+            return f"本群过去 24 小时只有 {total} 条消息（不足 {minimum} 条），暂不生成。"
+        theme = self._theme_for_group(gid)
+
+        async def generate(job):
+            return await self._generate_daily_and_send(stream_id, day, theme)
+
+        result = self._jobs.submit("report", gid or stream_id, day, generate, source="llm_tool")
+        if not result["accepted"]:
+            return result["message"]
+        return f"已受理：群 {gid or stream_id} {day} 日报生成中（job {result['job_id']}），完成后自动发群。"
+
     @Command("daily_report", description="手动生成本群日报，可带主题名，如 /日报 scrapbook", pattern=r"(?<!\S)/?日报(?:\s+(?P<theme>\S+))?\s*$")
     async def cmd_daily_report(self, **kwargs: Any) -> tuple[bool, str, bool]:
         stream_id = str(kwargs.get("stream_id") or "")
@@ -4126,7 +4493,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         if not await self._drawpic_ready():
             await self.ctx.send.text("没检测到麦麦绘图插件的接口，请确认它已安装、启用并允许插件联动", stream_id)
             return True, "绘图插件不可用", True
-        style = ccfg.style if ccfg.style in COMIC_STYLES else "four_panel"
+        style = self._pick_comic_style(gid)
 
         async def work(job):
             return await self._comic_pipeline(job, stream_id, gid, day, style)

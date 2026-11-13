@@ -303,6 +303,89 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await self.p.webui_comic_resume('123', DAY))['accepted'])
         self.assertFalse((await self.p.webui_comic_resume('123', 'bad-day'))['accepted'])
 
+    async def test_comic_forget_guards_and_delete(self):
+        self.assertFalse((await self.p.webui_comic_forget('comic-missing00000'))['deleted'])
+        self.p._comic_book.record('comic-abcdef123456', '123', DAY, 'four_panel', 'p')
+        self.p._comic_book.update('comic-abcdef123456', status='failed')
+        self.assertFalse((await self.p.webui_comic_forget('comic-abcdef123456'))['deleted'])
+        self.p._comic_book.update('comic-abcdef123456', status='unknown')
+        with patch.object(self.p._jobs, 'active_for', return_value={'job_id': 'busy'}):
+            self.assertFalse((await self.p.webui_comic_forget('comic-abcdef123456'))['deleted'])
+        self.assertTrue((await self.p.webui_comic_forget('comic-abcdef123456'))['deleted'])
+        self.assertIsNone(self.p._comic_book.get('comic-abcdef123456'))
+        self.p._comic_book.record('comic-fedcba654321', '123', DAY, 'four_panel', 'p')
+        self.p._comic_book.update('comic-fedcba654321', status='completed', sent=True)
+        self.assertFalse((await self.p.webui_comic_forget('comic-fedcba654321'))['deleted'])
+
+    async def test_tool_get_report_markdown_desensitizes_and_slides(self):
+        self.save_daily()
+        md = await self.p.tool_get_report(group='123', date='今天')
+        self.assertIn('日报', md)
+        self.assertIn('小明', md)
+        self.assertNotIn('[10001]', md)
+        # 未来日期回滑到最近一份存档
+        md2 = await self.p.tool_get_report(group='测试群', date='2099-01-01')
+        self.assertIn('日报', md2)
+        self.assertIn('未找到匹配的群', await self.p.tool_get_report(group='不存在的群'))
+
+    async def test_tool_trigger_admin_gate_and_accept(self):
+        self.p._report_cfg().command_admins = '999'
+        kwargs = {'stream_id': 'stream', 'message': {'message_info': {'group_info': {'group_id': '123'}}}}
+        self.assertIn('仅管理员', await self.p.tool_trigger(user_id='1', **kwargs))
+        with patch.object(self.p, '_rebuild_day_from_db', AsyncMock()), \
+                patch.object(self.p, '_day_total', return_value=100):
+            res = await self.p.tool_trigger(user_id='999', **kwargs)
+        self.assertIn('已受理', res)
+        await self.wait_for_operation()
+
+    async def test_style_rotation_sequential_shuffle_and_reset(self):
+        ccfg = self.p._comic_cfg()
+        ccfg.style_rotation = 'sequential'
+        ccfg.rotation_styles = 'four_panel\nposter'
+        self.assertEqual(self.p._pick_comic_style('123'), 'four_panel')
+        self.assertEqual(self.p._pick_comic_style('123'), 'poster')
+        self.assertEqual(self.p._pick_comic_style('123'), 'four_panel')
+        self.assertTrue((await self.p.webui_comic_rotation_reset('all'))['reset'])
+        self.assertEqual(self.p._pick_comic_style('123'), 'four_panel')
+        ccfg.style_rotation = 'shuffle'
+        seen = [self.p._pick_comic_style('123') for _ in range(2)]
+        self.assertEqual(sorted(seen), ['four_panel', 'poster'])
+        ccfg.style_rotation = 'off'
+        ccfg.style = 'poster'
+        self.assertEqual(self.p._pick_comic_style('123'), 'poster')
+
+    async def test_character_schemes_and_daily_random(self):
+        r1 = await self.p.webui_comic_character_save(name='麦麦', persona='粉发', scene_prompt='教室')
+        self.assertTrue(r1['saved'])
+        cid = r1['id']
+        self.assertTrue((await self.p.webui_comic_character_save(name='原创', persona='蓝发'))['saved'])
+        self.assertEqual(len(self.p._comic_characters()), 2)
+        self.assertTrue((await self.p.webui_comic_character_set_active(cid))['saved'])
+        self.assertEqual(self.p._active_character('123')['id'], cid)
+        self.p._comic_cfg().daily_random_character = True
+        self.assertEqual(self.p._active_character('123')['id'], self.p._active_character('456')['id'])
+        self.p._comic_cfg().daily_random_character = False
+        self.assertTrue((await self.p.webui_comic_character_delete(cid))['deleted'])
+        self.assertEqual(len(self.p._comic_characters()), 1)
+        self.assertFalse((await self.p.webui_comic_character_delete('nope'))['deleted'])
+
+    async def test_storyboard_includes_character_extra(self):
+        await self.p._comic_storyboard(ANALYSIS, '群', DAY, 'four_panel', extra='粉发角色')
+        self.assertIn('粉发角色', self.p._call_llm_json.call_args[0][0])
+
+    async def test_stats_storage_and_bulk_delete(self):
+        self.save_daily()
+        s = await self.p.webui_stats(7)
+        self.assertEqual(s['range_days'], 7)
+        self.assertGreaterEqual(s['total_reports'], 1)
+        self.assertGreaterEqual(s['total_messages'], 1)
+        st = await self.p.webui_storage()
+        self.assertTrue(any(p['key'] == 'reports' for p in st['partitions']))
+        self.assertGreaterEqual(len(st['reports']), 1)
+        keys = ','.join(f"{r['group_id']}|{r['day']}" for r in st['reports'])
+        self.assertGreaterEqual((await self.p.webui_storage_delete(keys))['deleted'], 1)
+        self.assertIn('cleared', await self.p.webui_cache_clear())
+
     async def test_comic_resend_and_delete_guards(self):
         self.save_daily()
         meta = self.save_comic()
@@ -583,7 +666,7 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(overview['enabled'])
         self.assertTrue(overview['drawpic_available'])
         self.assertEqual(overview['total'], 1)
-        self.assertEqual(len(overview['styles']), 2)
+        self.assertEqual(len(overview['styles']), len(module.COMIC_STYLES))
         self.assertEqual(overview['default_style'], 'four_panel')
         self.assertEqual([row['request_id'] for row in overview['recoverable']], ['comic-abcdef123456'])
         self.assertEqual(overview['groups'], [{'group_id': '123', 'group_name': '测试群'}])

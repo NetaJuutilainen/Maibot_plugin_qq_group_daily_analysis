@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>群聊分析 · 统计与数据</title>
+  <style>
+    /* 宿主注入 --maibot-* 时跟随宿主主题（modern / millennium / future-retro × 明暗），
+       独立打开时回退到原有配色；语义色 ok/warn/danger 宿主未提供对应文字色，保留自有。 */
+    :root { color-scheme: light dark; --bg: var(--maibot-background, #f5f7fa); --panel: var(--maibot-surface, #fff); --ink: var(--maibot-foreground, #202b3c); --muted: var(--maibot-muted, #637084); --line: var(--maibot-border, #dce3ec); --accent: var(--maibot-primary, #315eb5); --accent-ink: var(--maibot-primary-foreground, #fff); --soft: var(--maibot-soft, #edf3ff); --radius: var(--maibot-radius, 12px); --danger: #b63838; --ok: #1a7f37; --ok-soft: #e1f0e5; --warn: #9a6700; --warn-soft: #fff1cc; --danger-soft: #fbe9e9; }
+    html.dark { color-scheme: dark; --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; }
+    :root[data-dashboard-style]:not(.dark) { color-scheme: light; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: var(--maibot-background, #141a23); --panel: var(--maibot-surface, #1c2430); --ink: var(--maibot-foreground, #e6ebf3); --muted: var(--maibot-muted, #a4b1c4); --line: var(--maibot-border, #364254); --accent: var(--maibot-primary, #9abaff); --accent-ink: var(--maibot-primary-foreground, #10141c); --soft: var(--maibot-soft, #25334c); }
+      :root:not([data-dashboard-style]) { --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; }
+    }
+    * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+    [hidden] { display: none !important; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--line); border-radius: calc(var(--radius) * .5); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 var(--maibot-font-body, system-ui, -apple-system, "Microsoft YaHei", sans-serif); }
+    main { max-width: 1280px; margin: auto; padding: 24px; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 25px; letter-spacing: .03em; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
+    h2 { font-size: 17px; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
+    button, input, select { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: calc(var(--radius) * .6); background: var(--panel); padding: 8px 12px; }
+    button { cursor: pointer; min-height: 38px; }
+    button:disabled { cursor: not-allowed; opacity: .48; }
+    button.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+    button.danger { color: var(--danger); }
+    :root:not([data-dashboard-style]) button:hover:not(:disabled) { border-color: var(--accent); background: var(--soft); }
+    :root:not([data-dashboard-style]) button.primary:hover:not(:disabled) { filter: brightness(.94); background: var(--accent); }
+    :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
+    input, select { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); }
+    select option, select optgroup { background-color: var(--panel); color: var(--ink); }
+    input[type="checkbox"] { width: auto; }
+    .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+    .header { margin-bottom: 20px; }
+    .muted, .hint { color: var(--muted); font-size: 13px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin-bottom: 18px; }
+    .fields { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 12px; margin: 14px 0; }
+    .notice { border-left: 3px solid var(--accent); background: var(--soft); padding: 10px 14px; border-radius: calc(var(--radius) * .5); margin-bottom: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .notice.error { border-left-color: var(--danger); color: var(--danger); }
+    .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: calc(var(--radius) * .5); font-size: 12px; line-height: 1.4; color: var(--muted); background: var(--soft); }
+    .badge::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .badge.ok { color: var(--ok); background: var(--ok-soft); }
+    .buttons { display: flex; flex-wrap: wrap; gap: 7px; }
+    .buttons button { font-size: 12px; padding: 5px 10px; }
+    .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+    .stat { background: var(--bg); padding: 10px; border-radius: calc(var(--radius) * .5); overflow-wrap: anywhere; }
+    .stat dt { color: var(--muted); font-size: 12px; }
+    .stat dd { margin: 4px 0 0; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
+    .table-wrap { overflow-x: auto; margin-top: 12px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+    th { color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .empty { padding: 24px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: calc(var(--radius) * .8); margin-top: 12px; }
+    .chart { display: flex; align-items: flex-end; gap: 10px; height: 170px; margin-top: 14px; padding: 0 4px; }
+    .bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; min-width: 0; height: 100%; }
+    .bar-value { font-size: 12px; color: var(--muted); font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
+    .bar-fill { width: 100%; max-width: 56px; background: var(--accent); border-radius: calc(var(--radius) * .35) calc(var(--radius) * .35) 0 0; min-height: 2px; }
+    .bar-day { font-size: 12px; color: var(--muted); white-space: nowrap; }
+    /* 挂 maibot-card/button/input/select 后由宿主注入采样外观；高特异性保布局。 */
+    :root[data-dashboard-style='millennium'] .panel.maibot-card h2 { letter-spacing: .14em; font-weight: 700; }
+    :root[data-dashboard-style='future-retro'] .panel.maibot-card { position: relative; isolation: isolate; overflow: hidden; }
+    :root[data-dashboard-style='future-retro'] .panel.maibot-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 8px; background: var(--maibot-foreground); z-index: 0; }
+    :root[data-dashboard-style='future-retro'] .panel.maibot-card::after { content: ""; position: absolute; right: -1px; bottom: -1px; border-style: solid; border-width: 0 0 22px 22px; border-color: transparent transparent var(--maibot-foreground) transparent; z-index: 0; }
+    :root[data-dashboard-style='future-retro'] .panel.maibot-card > * { position: relative; z-index: 1; }
+    :root[data-dashboard-style='future-retro'] h1 { font-size: clamp(1.8rem, 2.1vw, 2.25rem); line-height: 1.08; font-weight: 800; letter-spacing: 0; }
+    @media (max-width: 580px) { main { padding: 14px; } .fields, .stats { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="header">
+      <div><h1 id="page-title">统计与数据</h1><p class="muted" id="page-tagline">群聊分析 · 消息/报告趋势与存储管理</p></div>
+      <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span></div>
+    </header>
+    <div id="notice" class="notice" role="status" aria-live="polite">正在等待 MaiBot 页面桥就绪…</div>
+
+    <section class="panel" aria-labelledby="stats-title">
+      <div class="section-heading"><h2 id="stats-title">统计趋势</h2><span id="stats-range-label" class="muted">近 7 天</span></div>
+      <div class="fields">
+        <label>时间范围<select id="range"><option value="2">48 小时</option><option value="7" selected>7 天</option><option value="14">14 天</option><option value="30">30 天</option></select></label>
+        <button id="refresh-stats" type="button" disabled>刷新统计</button>
+      </div>
+      <dl class="stats">
+        <div class="stat"><dt>区间消息数</dt><dd id="stat-messages">—</dd></div>
+        <div class="stat"><dt>区间报告数</dt><dd id="stat-reports">—</dd></div>
+        <div class="stat"><dt>日均消息</dt><dd id="stat-avg">—</dd></div>
+      </dl>
+      <div id="chart" class="chart" role="img" aria-label="消息量柱状图，等待数据"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="storage-title">
+      <div class="section-heading"><h2 id="storage-title">存储管理</h2><button id="clear-cache" type="button" disabled>清理运行时缓存</button></div>
+      <dl class="stats" id="partitions"></dl>
+      <p class="hint">勾选报告存档后批量删除（连带当日漫画）；参考图 / 上传暂存 / 缓存分区只读展示，缓存可一键清理（可重建）。</p>
+      <div class="buttons"><button id="delete-selected" class="danger" type="button" disabled>删除所选存档</button><button id="refresh-storage" type="button" disabled>刷新存储</button></div>
+      <div id="storage-table" class="table-wrap" aria-busy="true"><p class="empty">正在连接…</p></div>
+    </section>
+  </main>
+
+  <script>
+    'use strict';
+    (() => {
+      const $ = id => document.getElementById(id);
+      const state = { ready: false, disposed: false, busy: false };
+      let bridge;
+      let queue = Promise.resolve();
+      const text = (v, limit = 200) => {
+        if (v === null || v === undefined || v === '') return '—';
+        const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+        return s.length > limit ? s.slice(0, limit) + '…' : s;
+      };
+      const element = (tag, value, className) => {
+        const node = document.createElement(tag);
+        if (value !== undefined) node.textContent = text(value);
+        if (className) node.className = className;
+        hostClass(node);
+        return node;
+      };
+      const hostClass = node => {
+        if (node.tagName === 'BUTTON') { node.classList.add('maibot-button'); if (node.classList.contains('primary')) node.classList.add('maibot-button-primary'); }
+        else if (node.tagName === 'INPUT' && node.type !== 'file' && node.type !== 'checkbox') node.classList.add('maibot-input');
+        else if (node.tagName === 'SELECT') node.classList.add('maibot-select');
+      };
+      const tagHostComponents = () => {
+        for (const node of document.querySelectorAll('button, input, select')) hostClass(node);
+        for (const node of document.querySelectorAll('.panel')) node.classList.add('maibot-card');
+      };
+      const notice = (message, error = false) => { $('notice').textContent = message; $('notice').classList.toggle('error', error); };
+      const call = (kind, name, args = {}) => {
+        const run = async () => { await bridge.ready; return bridge[kind](name, args); };
+        const request = queue.then(run, run);
+        queue = request.catch(() => {});
+        return request;
+      };
+      const fmtBytes = n => {
+        n = Number(n) || 0;
+        if (n < 1024) return n + ' B';
+        if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+        return (n / 1048576).toFixed(1) + ' MB';
+      };
+
+      async function loadStats() {
+        if (!state.ready || state.disposed) return;
+        const range = Number($('range').value) || 7;
+        $('stats-range-label').textContent = range === 2 ? '48 小时' : `近 ${range} 天`;
+        try {
+          const r = await call('query', 'stats', { range_days: range });
+          if (state.disposed) return;
+          $('stat-messages').textContent = text(r.total_messages);
+          $('stat-reports').textContent = text(r.total_reports);
+          $('stat-avg').textContent = text(Math.round((Number(r.total_messages) || 0) / Math.max(1, (r.days || []).length)));
+          const days = Array.isArray(r.days) ? r.days : [];
+          const max = Math.max(1, ...days.map(d => Number(d.messages) || 0));
+          const bars = days.map(d => {
+            const bar = element('div', undefined, 'bar');
+            bar.append(element('span', d.messages, 'bar-value'));
+            const fill = element('div', undefined, 'bar-fill');
+            fill.style.height = Math.max(2, Math.round((Number(d.messages) || 0) / max * 100)) + '%';
+            bar.append(fill);
+            bar.append(element('span', String(d.day).slice(5), 'bar-day'));
+            return bar;
+          });
+          $('chart').replaceChildren(...(bars.length ? bars : [element('p', '暂无数据', 'muted')]));
+          $('chart').setAttribute('aria-label', `消息量柱状图：${days.map(d => `${d.day} ${d.messages} 条`).join('，')}`);
+        } catch (e) { notice(`统计刷新失败：${text(e.message)}`, true); }
+      }
+
+      async function loadStorage() {
+        if (!state.ready || state.disposed) return;
+        try {
+          const r = await call('query', 'storage');
+          if (state.disposed) return;
+          const parts = Array.isArray(r.partitions) ? r.partitions : [];
+          $('partitions').replaceChildren(...parts.map(p => {
+            const stat = element('div', undefined, 'stat');
+            stat.append(element('dt', p.label));
+            stat.append(element('dd', `${fmtBytes(p.bytes)} · ${text(p.files)} 文件`));
+            return stat;
+          }));
+          const rows = Array.isArray(r.reports) ? r.reports : [];
+          const table = element('table');
+          const head = element('tr');
+          head.append(element('th', ''), element('th', '群'), element('th', '日期'), element('th', '版本'));
+          table.append(head);
+          for (const row of rows) {
+            const tr = element('tr');
+            const tdBox = element('td');
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.value = `${row.group_id}|${row.day}`;
+            box.setAttribute('aria-label', `选择 ${text(row.group_name)} ${row.day}`);
+            tdBox.append(box);
+            tr.append(tdBox, element('td', row.group_name || row.group_id), element('td', row.day), element('td', String(row.revision || '').slice(0, 8)));
+            table.append(tr);
+          }
+          $('storage-table').replaceChildren(...(rows.length ? [table] : [element('p', '暂无报告存档。', 'empty')]));
+          $('storage-table').setAttribute('aria-busy', 'false');
+          syncButtons();
+        } catch (e) { notice(`存储刷新失败：${text(e.message)}`, true); }
+      }
+
+      function syncButtons() {
+        const checked = $('storage-table').querySelectorAll('input:checked').length;
+        $('delete-selected').disabled = !state.ready || state.busy || checked === 0;
+        $('clear-cache').disabled = !state.ready || state.busy;
+        $('refresh-stats').disabled = !state.ready || state.busy;
+        $('refresh-storage').disabled = !state.ready || state.busy;
+        $('range').disabled = !state.ready || state.busy;
+      }
+
+      async function performAction(name, args, label) {
+        if (!state.ready || state.busy) return;
+        state.busy = true; syncButtons();
+        notice(`${label}：请在宿主确认框中确认（如有）…`);
+        try {
+          const r = await call('action', name, args);
+          notice(text(r.message || '完成'), false);
+        } catch (e) { notice(`${label}未完成或确认已取消：${text(e.message)}`, true); }
+        finally { state.busy = false; if (!state.disposed) { syncButtons(); void loadStorage(); void loadStats(); } }
+      }
+
+      function dispose() { state.disposed = true; }
+      window.addEventListener('pagehide', dispose);
+      window.addEventListener('beforeunload', dispose);
+
+      async function start() {
+        try {
+          bridge = window.maibot;
+          if (!bridge || !bridge.ready) throw new Error('请从 MaiBot WebUI 打开此页面');
+          await bridge.ready;
+          state.ready = true;
+          $('connection').textContent = '已连接宿主';
+          $('connection').className = 'badge ok';
+          notice('已连接。统计与存储数据就绪。');
+          syncButtons();
+          await loadStats();
+          await loadStorage();
+        } catch (e) {
+          $('connection').textContent = '连接失败';
+          $('connection').className = 'badge err';
+          notice(`连接失败：${text(e.message)}`, true);
+        }
+      }
+
+      $('range').addEventListener('change', () => { void loadStats(); });
+      $('refresh-stats').addEventListener('click', () => { void loadStats(); });
+      $('refresh-storage').addEventListener('click', () => { void loadStorage(); });
+      $('storage-table').addEventListener('change', syncButtons);
+      $('delete-selected').addEventListener('click', () => {
+        const keys = [...$('storage-table').querySelectorAll('input:checked')].map(i => i.value).join(',');
+        if (keys) void performAction('storage_delete', { keys }, '删除所选存档');
+      });
+      $('clear-cache').addEventListener('click', () => { void performAction('cache_clear', {}, '清理缓存'); });
+
+      // 内嵌时宿主 header 已显示页面名，插件桅头改工作区品牌避免标题重复；独立打开保留页面名。
+      if (window.maibot) {
+        $('page-title').textContent = '群聊分析';
+        const tagline = $('page-tagline');
+        tagline.textContent = tagline.textContent.replace(/^群聊分析\s*·\s*/, '');
+      }
+      tagHostComponents();
+      void start();
+    })();
+  </script>
+</body>
+</html>

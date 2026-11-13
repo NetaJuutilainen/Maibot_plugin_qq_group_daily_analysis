@@ -8,7 +8,8 @@
     /* 宿主注入 --maibot-* 时跟随宿主主题（modern / millennium / future-retro × 明暗），
        独立打开时回退到原有配色；语义色 ok/warn/danger 宿主未提供对应文字色，保留自有。 */
     :root { color-scheme: light dark; --bg: var(--maibot-background, #f5f7fa); --panel: var(--maibot-surface, #fff); --ink: var(--maibot-foreground, #202b3c); --muted: var(--maibot-muted, #637084); --line: var(--maibot-border, #dce3ec); --accent: var(--maibot-primary, #315eb5); --accent-ink: var(--maibot-primary-foreground, #fff); --soft: var(--maibot-soft, #edf3ff); --radius: var(--maibot-radius, 12px); --danger: #b63838; --ok: #1a7f37; --ok-soft: #e1f0e5; --warn: #9a6700; --warn-soft: #fff1cc; --danger-soft: #fbe9e9; }
-    html.dark { --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; }
+    html.dark { color-scheme: dark; --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; }
+    :root[data-dashboard-style]:not(.dark) { color-scheme: light; }
     @media (prefers-color-scheme: dark) {
       :root { --bg: var(--maibot-background, #141a23); --panel: var(--maibot-surface, #1c2430); --ink: var(--maibot-foreground, #e6ebf3); --muted: var(--maibot-muted, #a4b1c4); --line: var(--maibot-border, #364254); --accent: var(--maibot-primary, #9abaff); --accent-ink: var(--maibot-primary-foreground, #10141c); --soft: var(--maibot-soft, #25334c); }
       :root:not([data-dashboard-style]) { --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; }
@@ -36,6 +37,8 @@
     :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
     label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
     input, select { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); }
+    /* 原生下拉弹层行强制用页面面/字色：宿主 bridge 未必设 color-scheme，暗色下避免白底浅字。 */
+    select option, select optgroup { background-color: var(--panel); color: var(--ink); }
     .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
     .header { margin-bottom: 20px; }
     .muted, .hint { color: var(--muted); font-size: 13px; }
@@ -101,7 +104,7 @@
 <body class="maibot-page">
   <main id="main">
     <header class="header">
-      <div><h1>漫画廊</h1><p class="muted">群聊分析 · 把日报画成四格漫画 / 单幅海报（经麦麦绘图协作）</p></div>
+      <div><h1 id="page-title">漫画廊</h1><p class="muted" id="page-tagline">群聊分析 · 把日报画成四格漫画 / 单幅海报（经麦麦绘图协作）</p></div>
       <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span><button id="library-link" type="button" disabled>报告库</button><button id="overview-link" type="button" disabled>分析总览</button></div>
     </header>
     <div id="notice" class="notice" role="status" aria-live="polite">正在等待 MaiBot 页面桥就绪…</div>
@@ -115,6 +118,7 @@
         <button id="draw" class="primary" type="button" data-mutation data-action="draw" disabled>开始画漫画</button>
       </div>
       <p class="hint">需要该日已有日报存档（先在报告库或 /日报 生成）；日期留空为今天。绘图消耗麦麦绘图的额度，成图自动发往所选群；同群同时只跑一个任务。</p>
+      <p class="hint"><span id="rotation-info">轮换：关闭</span> <button id="rotation-reset" type="button" disabled>重置轮换进度</button></p>
     </section>
 
     <section class="panel" aria-labelledby="recover-title">
@@ -135,6 +139,22 @@
       <p id="refs-hint" class="hint">最多 4 张，每张 8 MiB 以内的静态 PNG / JPEG / WebP。是否附带参考图由插件设置「群聊漫画 → 附带参考图」决定。</p>
       <input id="ref-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
       <div id="refs" class="refs"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="char-title">
+      <div class="section-heading"><h2 id="char-title">角色方案</h2><span id="char-state" class="muted">—</span></div>
+      <div class="fields">
+        <label>当前角色<select id="character-active" disabled><option value="">不用角色方案</option></select></label>
+        <label>编辑对象<select id="character-edit" disabled><option value="">新建方案</option></select></label>
+      </div>
+      <div class="fields">
+        <label>名称<input id="char-name" maxlength="40" placeholder="如：麦麦 / 原创角色" disabled></label>
+        <label>人设<input id="char-persona" maxlength="400" placeholder="角色性格 / 外观描述" disabled></label>
+      </div>
+      <label>场景提示<input id="char-scene" maxlength="400" placeholder="场景 / 画风补充提示" disabled></label>
+      <div id="char-refs" class="buttons" aria-label="为该方案勾选参考图"></div>
+      <div class="buttons"><button id="char-save" class="primary" type="button" disabled>保存方案</button><button id="char-delete" class="danger" type="button" disabled>删除方案</button></div>
+      <p class="hint">每日随机角色在插件设置开启；开启后当天首次生成随机选一个方案并固定全天。勾选的参考图随该方案附带（优先于全局参考图开关）。</p>
     </section>
 
     <section aria-labelledby="gallery-title">
@@ -201,6 +221,9 @@
       let comicGroups = [];
       let overviewGroups = [];
       let styleEntries = [{ key: 'four_panel', label: '四格漫画' }, { key: 'poster', label: '单幅海报' }];
+      let characterEntries = [];
+      let refRows = [];
+      let charStamp = null;
       let returnFocus = null;
       let refReturnFocus = null;
       const blobURLs = new Set();
@@ -313,7 +336,7 @@
       }
 
       function mutationButton(label, name, args, invalid = false) {
-        const button = element('button', label, name === 'delete_comic' || name === 'delete_ref' ? 'danger' : '');
+        const button = element('button', label, name === 'delete_comic' || name === 'delete_ref' || name === 'forget_request' ? 'danger' : '');
         button.type = 'button';
         button.dataset.mutation = 'true';
         button.dataset.invalid = String(invalid);
@@ -336,9 +359,12 @@
 
       async function performAction(name, args, label) {
         if (!state.ready || state.disposed || state.actionBusy) return;
-        if (name !== 'delete_ref' && name !== 'rename_ref' && !validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
+        if (name !== 'delete_ref' && name !== 'rename_ref' && name !== 'forget_request' && name !== 'rotation_reset'
+            && name !== 'character_save' && name !== 'character_delete' && name !== 'character_set_active'
+            && !validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
         if ((name === 'comic_resend' || name === 'delete_comic') && !validRevision(args.revision)) { notice('存档版本缺失，请刷新列表后重试。', true); return; }
         if ((name === 'delete_ref' || name === 'rename_ref') && (typeof args.ref_id !== 'string' || !REF_ID.test(args.ref_id))) { notice('参考图标识无效。', true); return; }
+        if (name === 'forget_request' && (typeof args.request_id !== 'string' || !args.request_id)) { notice('恢复记录标识无效。', true); return; }
         state.actionBusy = true;
         syncControls();
         notice(`${label}：请在宿主确认框中确认（如有），正在等待结果…`);
@@ -353,6 +379,16 @@
             deleted = result.deleted === true;
             notice(deleted ? (name === 'delete_comic' ? '已删除所选漫画存档，当日日报保留。' : '已删除参考图。') : '未删除，可能已更新或不存在；请刷新后重试。', !deleted);
             if (deleted && name === 'delete_comic') closeModal();
+          } else if (name === 'forget_request') {
+            deleted = result.deleted === true;
+            notice(deleted ? '已删除该恢复记录。' : `未删除：${text(result.message)}`, !deleted);
+          } else if (name === 'character_save' || name === 'character_set_active') {
+            notice(result.saved === true ? text(result.message || '已保存。') : `未保存：${text(result.message)}`, result.saved !== true);
+          } else if (name === 'character_delete') {
+            deleted = result.deleted === true;
+            notice(deleted ? '已删除角色方案。' : `未删除：${text(result.message)}`, !deleted);
+          } else if (name === 'rotation_reset') {
+            notice(result.reset === true ? '已重置轮换进度。' : `未重置：${text(result.message)}`, result.reset !== true);
           } else {
             const accepted = result.accepted === true;
             notice(`${accepted ? '已接受' : '未接受'}：${text(result.message || result.status)}${accepted ? ' 请查看任务状态；接受不代表已完成。' : ''}`, !accepted);
@@ -409,13 +445,19 @@
         const rows = [];
         for (const entry of entries) {
           if (!object(entry) || !validGroup(entry.group_id) || !validDay(entry.day)) continue;
+          if (typeof entry.request_id !== 'string' || !entry.request_id) continue;
           const row = element('div', undefined, 'task');
           const copy = element('div', undefined, 'task-copy');
           copy.append(element('strong', `${text(entry.group_name || entry.group_id, 100)} · ${entry.day} · ${text(styleLabel(entry.style), 40)} · ${text(BOOK_STATUS_NAMES[entry.status] || entry.status, 40)}`));
           copy.append(element('p', `请求键 ${text(entry.request_id, 90)} · 记录于 ${text(entry.created_at)}`, 'muted'));
           if (entry.error) copy.append(element('p', text(entry.error, 600), 'task-error'));
           row.append(copy);
-          row.append(mutationButton('恢复进度', 'comic_resume', { group_id: entry.group_id, day: entry.day }, !state.enabled || !state.drawpicAvailable));
+          const actions = element('div', undefined, 'buttons');
+          actions.append(
+            mutationButton('恢复进度', 'comic_resume', { group_id: entry.group_id, day: entry.day }, !state.enabled || !state.drawpicAvailable),
+            mutationButton('删除', 'forget_request', { request_id: entry.request_id }, !state.enabled)
+          );
+          row.append(actions);
           rows.push(row);
         }
         $('recoverable').replaceChildren(...(rows.length ? rows : [element('p', '没有待恢复的请求。', 'muted')]));
@@ -497,6 +539,52 @@
         input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); submit(); } });
       }
 
+      function renderCharRefs() {
+        const editId = $('character-edit').value;
+        const scheme = characterEntries.find(c => c.id === editId);
+        const checked = new Set(scheme ? scheme.ref_ids || [] : []);
+        const wrap = $('char-refs');
+        wrap.replaceChildren(...refRows.map(ref => {
+          const label = element('label', undefined, 'badge');
+          const box = document.createElement('input');
+          box.type = 'checkbox';
+          box.value = ref.ref_id;
+          box.checked = checked.has(ref.ref_id);
+          box.disabled = !state.ready || !state.enabled;
+          label.append(box, document.createTextNode(' ' + text(ref.name || ref.ref_id, 40)));
+          return label;
+        }));
+        if (!refRows.length) wrap.replaceChildren(element('span', '暂无参考图，可先在上方上传。', 'muted'));
+      }
+
+      function loadCharForm() {
+        const editId = $('character-edit').value;
+        const scheme = characterEntries.find(c => c.id === editId);
+        $('char-name').value = scheme ? scheme.name || '' : '';
+        $('char-persona').value = scheme ? scheme.persona || '' : '';
+        $('char-scene').value = scheme ? scheme.scene_prompt || '' : '';
+        $('char-delete').disabled = !state.ready || !state.enabled || !editId;
+        renderCharRefs();
+      }
+
+      function renderCharacters(result) {
+        characterEntries = (Array.isArray(result.characters) ? result.characters : []).filter(object);
+        const active = typeof result.active_character === 'string' ? result.active_character : '';
+        const activeSel = $('character-active');
+        const prevActive = activeSel.value;
+        activeSel.replaceChildren(new Option('不用角色方案', ''), ...characterEntries.map(c => new Option(text(c.name || c.id, 40), c.id)));
+        activeSel.value = characterEntries.some(c => c.id === prevActive) ? prevActive : active;
+        const editSel = $('character-edit');
+        const prevEdit = editSel.value;
+        editSel.replaceChildren(new Option('新建方案', ''), ...characterEntries.map(c => new Option(text(c.name || c.id, 40), c.id)));
+        editSel.value = characterEntries.some(c => c.id === prevEdit) ? prevEdit : '';
+        $('char-state').textContent = result.daily_random_character ? '每日随机角色已开启'
+          : (active ? `当前：${text((characterEntries.find(c => c.id === active) || {}).name || active, 40)}` : '未启用角色方案');
+        const enabled = state.ready && state.enabled;
+        for (const id of ['character-active', 'character-edit', 'char-name', 'char-persona', 'char-scene', 'char-save']) $(id).disabled = !enabled;
+        loadCharForm();
+      }
+
       async function loadOverview() {
         if (!state.ready || state.disposed || state.overviewBusy) return;
         state.overviewBusy = true;
@@ -518,11 +606,22 @@
           replaceOptions($('draw-style'), styleEntries, null, 'key', 'label');
           $('draw-style').value = styleEntries.some(item => object(item) && item.key === selectedStyle) ? selectedStyle
             : (typeof result.default_style === 'string' && styleEntries.some(item => object(item) && item.key === result.default_style) ? result.default_style : 'four_panel');
+          const rot = object(result.rotation) ? result.rotation : null;
+          const modeNames = { off: '关闭', sequential: '顺序', random: '随机', shuffle: '洗牌' };
+          const lasts = rot && object(rot.progress)
+            ? Object.values(rot.progress).map(p => object(p) ? p.last : null).filter(Boolean) : [];
+          $('rotation-info').textContent = rot
+            ? `轮换：${modeNames[rot.mode] || rot.mode} · 池 ${text((rot.pool || []).length)} 套${lasts.length ? ` · 上次 ${text(lasts[lasts.length - 1])}` : ''}`
+            : '轮换：关闭';
+          $('rotation-reset').disabled = !state.ready || !rot || rot.mode === 'off';
           $('active-count').textContent = `活跃任务：${text(result.active_count)}`;
           $('task-status').textContent = `${text(result.status)} · 更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
           renderOperations(Array.isArray(result.operations) ? result.operations : []);
           renderRecoverable(Array.isArray(result.recoverable) ? result.recoverable : []);
           const refs = Array.isArray(result.refs) ? result.refs : [];
+          refRows = refs.filter(object);
+          const cstamp = JSON.stringify([result.characters, result.active_character, result.daily_random_character]);
+          if (cstamp !== charStamp) { charStamp = cstamp; renderCharacters(result); }
           const stamp = JSON.stringify([result.total, result.today_count, refs.map(ref => object(ref) ? ref.ref_id : null),
             (Array.isArray(result.recoverable) ? result.recoverable : []).map(entry => object(entry) ? [entry.request_id, entry.status] : null),
             (Array.isArray(result.operations) ? result.operations : []).filter(object).filter(operation => TERMINAL.has(operation.status)).map(operation => [operation.group_id, operation.status, operation.finished_at])]);
@@ -853,6 +952,14 @@
       $('previous').addEventListener('click', () => { void loadComics(state.page - 1); });
       $('next').addEventListener('click', () => { void loadComics(state.page + 1); });
       $('refresh').addEventListener('click', () => { void loadComics(state.page); void loadOverview(); });
+      $('rotation-reset').addEventListener('click', () => { void performAction('rotation_reset', { scope: 'all' }, '重置轮换进度'); });
+      $('character-active').addEventListener('change', () => { void performAction('character_set_active', { id: $('character-active').value }, '切换角色方案'); });
+      $('character-edit').addEventListener('change', loadCharForm);
+      $('char-save').addEventListener('click', () => {
+        const refIds = [...$('char-refs').querySelectorAll('input:checked')].map(input => input.value).join(',');
+        void performAction('character_save', { id: $('character-edit').value, name: $('char-name').value, persona: $('char-persona').value, scene_prompt: $('char-scene').value, ref_ids: refIds }, '保存角色方案');
+      });
+      $('char-delete').addEventListener('click', () => { void performAction('character_delete', { id: $('character-edit').value }, '删除角色方案'); });
       $('draw-group').addEventListener('change', syncControls);
       $('draw').addEventListener('click', () => {
         void performAction('draw', { group_id: $('draw-group').value, day: $('draw-day').value, style: $('draw-style').value }, '画漫画');
@@ -953,6 +1060,12 @@
           $('comics').replaceChildren(element('p', '无法连接宿主，请在 MaiBot WebUI 中重新打开漫画廊。', 'empty'));
           notice(`连接失败：${text(error.message)}`, true);
         }
+      }
+      // 内嵌时宿主 header 已显示页面名，插件桅头改工作区品牌避免标题重复；独立打开保留页面名。
+      if (window.maibot) {
+        $('page-title').textContent = '群聊分析';
+        const tagline = $('page-tagline');
+        tagline.textContent = tagline.textContent.replace(/^群聊分析\s*·\s*/, '');
       }
       tagHostComponents();
       void start();

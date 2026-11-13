@@ -8,7 +8,8 @@
     /* 宿主注入 --maibot-* 时跟随宿主主题（modern / millennium / future-retro × 明暗），
        独立打开时回退到原有配色；语义色 ok/warn/danger 宿主未提供对应文字色，保留自有。 */
     :root { color-scheme: light dark; --bg: var(--maibot-background, #f5f7fa); --panel: var(--maibot-surface, #fff); --ink: var(--maibot-foreground, #202b3c); --muted: var(--maibot-muted, #637084); --line: var(--maibot-border, #dce3ec); --accent: var(--maibot-primary, #315eb5); --accent-ink: var(--maibot-primary-foreground, #fff); --soft: var(--maibot-soft, #edf3ff); --radius: var(--maibot-radius, 12px); --danger: #b63838; --ok: #1a7f37; --ok-soft: #e1f0e5; --warn: #9a6700; --warn-soft: #fff1cc; --danger-soft: #fbe9e9; }
-    html.dark { --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; }
+    html.dark { color-scheme: dark; --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; }
+    :root[data-dashboard-style]:not(.dark) { color-scheme: light; }
     @media (prefers-color-scheme: dark) {
       :root { --bg: var(--maibot-background, #141a23); --panel: var(--maibot-surface, #1c2430); --ink: var(--maibot-foreground, #e6ebf3); --muted: var(--maibot-muted, #a4b1c4); --line: var(--maibot-border, #364254); --accent: var(--maibot-primary, #9abaff); --accent-ink: var(--maibot-primary-foreground, #10141c); --soft: var(--maibot-soft, #25334c); }
       :root:not([data-dashboard-style]) { --danger: #ffaaaa; --ok: #7ee2a8; --ok-soft: #1c3527; --warn: #e3b341; --warn-soft: #3a2f14; --danger-soft: #3d2226; }
@@ -35,6 +36,8 @@
     :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
     label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
     input, select { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); }
+    /* 原生下拉弹层行强制用页面面/字色：宿主 bridge 未必设 color-scheme，暗色下避免白底浅字。 */
+    select option, select optgroup { background-color: var(--panel); color: var(--ink); }
     .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
     .header { margin-bottom: 20px; }
     .muted, .hint { color: var(--muted); font-size: 13px; }
@@ -83,7 +86,7 @@
 <body class="maibot-page">
   <main id="main">
     <header class="header">
-      <div><h1>分析总览</h1><p class="muted">群聊分析 · 报告统计、任务状态与近七天消息量</p></div>
+      <div><h1 id="page-title">分析总览</h1><p class="muted" id="page-tagline">群聊分析 · 报告统计、任务状态与近七天消息量</p></div>
       <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span><button id="library-link" type="button" disabled>报告库</button><button id="gallery-link" type="button" disabled>漫画廊</button><button id="refresh" type="button" disabled>刷新</button></div>
     </header>
     <div id="notice" class="notice" role="status" aria-live="polite">正在等待 MaiBot 页面桥就绪…</div>
@@ -414,6 +417,12 @@
           $('recent').replaceChildren(element('p', '无法连接宿主，请在 MaiBot WebUI 中重新打开分析总览。', 'empty'));
           notice(`连接失败：${text(error.message)}`, true);
         }
+      }
+      // 内嵌时宿主 header 已显示页面名，插件桅头改工作区品牌避免标题重复；独立打开保留页面名。
+      if (window.maibot) {
+        $('page-title').textContent = '群聊分析';
+        const tagline = $('page-tagline');
+        tagline.textContent = tagline.textContent.replace(/^群聊分析\s*·\s*/, '');
       }
       tagHostComponents();
       void start();

@@ -208,6 +208,13 @@ class ComicRequestBookTest(unittest.TestCase):
         self.assertEqual(entry['group_id'], '123')
         self.book.update('comic-missing00000', status='running')
 
+    def test_forget_removes_entry_and_persists(self):
+        self.record('comic-abcdef123456')
+        self.assertTrue(self.book.forget('comic-abcdef123456'))
+        self.assertIsNone(self.book.get('comic-abcdef123456'))
+        self.assertFalse(self.book.forget('comic-abcdef123456'))
+        self.assertEqual(comic.ComicRequestBook(self.path).recoverable(), [])
+
     def test_latest_and_recoverable_filters(self):
         self.record('comic-aaaaaaaaaaaa', day='2026-11-10')
         self.record('comic-bbbbbbbbbbbb')
@@ -307,6 +314,17 @@ class StoryboardTest(unittest.TestCase):
         self.assertIn('参考附图', poster)
         huge = {'title': 't', 'panels': [{'scene': 's' * 20000}]}
         self.assertLessEqual(len(comic.build_draw_prompt(huge, 'poster', '群', '2026-11-11')), 16000)
+
+    def test_all_styles_carry_art_and_panel_count(self):
+        for key, meta in comic.COMIC_STYLES.items():
+            self.assertTrue(meta.get('art'), key)
+            self.assertTrue(meta.get('kind'), key)
+            board = comic.fallback_storyboard(ANALYSIS, '测试群', meta['panels'])
+            self.assertEqual(len(board['panels']), meta['panels'])
+            prompt = comic.build_draw_prompt(board, key, '测试群', '2026-11-11')
+            self.assertIn(meta['art'][:12], prompt)
+            story = comic.storyboard_prompt(ANALYSIS, '测试群', '2026-11-11', key)
+            self.assertIn(meta['kind'], story)
 
 
 if __name__ == '__main__':

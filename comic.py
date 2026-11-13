@@ -35,8 +35,29 @@ RECOVERABLE_STATUSES = frozenset({"submitting", "unknown", "pending", "running",
 TERMINAL_BOOK_STATUSES = frozenset({"completed", "failed", "rejected", "cancelled", "not_accepted"})
 
 COMIC_STYLES = {
-    "four_panel": {"label": "四格漫画", "panels": 4},
-    "poster": {"label": "单幅海报", "panels": 1},
+    "four_panel": {"label": "四格漫画", "panels": 4,
+                   "kind": "四格漫画（从上到下四个格子）",
+                   "art": "竖版四格漫画（4-koma），从上到下依次排列四个等大格子，格子之间留白色分隔，"
+                          "日系轻松画风，线条干净，色彩明快，人物表情夸张有趣。"},
+    "poster": {"label": "单幅海报", "panels": 1,
+               "kind": "单幅海报插画",
+               "art": "单幅竖版海报插画，日系轻松画风，构图完整，色彩明快，顶部留出标题文字区域。"},
+    "pixel_rpg": {"label": "像素RPG冒险日志", "panels": 4,
+                  "kind": "像素风四格冒险日志（四个格子）",
+                  "art": "复古像素 RPG 游戏截图风四格漫画，16-bit 像素颗粒、对话框与任务日志边框，"
+                         "俯视角冒险场景，配色鲜明，每格像一帧游戏画面。"},
+    "scrapbook": {"label": "手账剪贴簿", "panels": 4,
+                  "kind": "手账剪贴四格（四个拼贴格子）",
+                  "art": "手账剪贴簿风四格拼贴，拍立得相框、纸胶带、贴纸与手写旁白，暖色纸张底纹，"
+                         "温馨治愈，格与格之间错落排布。"},
+    "showa": {"label": "复古昭和画报", "panels": 4,
+              "kind": "昭和复古画报四格",
+              "art": "复古昭和怪谈画报风四格，网点纸质感、粗黑描边、泛黄纸张与竖排标题字，"
+                     "戏剧化构图与夸张表情，怀旧印刷感。"},
+    "ukiyoe": {"label": "浮世绘单幅", "panels": 1,
+               "kind": "浮世绘锦绘单幅",
+               "art": "浮世绘锦绘风单幅竖版插画，木版线条、平涂色块、云纹与波浪边饰，"
+                      "江户町人见闻录构图，顶部留标题落款区域。"},
 }
 
 
@@ -254,6 +275,13 @@ class ComicRequestBook:
                     entry[key] = fields[key]
             self._save()
 
+    def forget(self, request_id: str) -> bool:
+        with self._lock:
+            if self._entries.pop(request_id, None) is None:
+                return False
+            self._save()
+            return True
+
     def get(self, request_id: str) -> dict | None:
         with self._lock:
             entry = self._entries.get(request_id)
@@ -333,7 +361,7 @@ def storyboard_prompt(analysis: dict, group_name: str, day: str, style_key: str)
     titles = "、".join(f"{t.get('name') or ''}「{t.get('title') or ''}」" for t in (analysis.get("titles") or [])[:3] if isinstance(t, dict))
     quality = analysis.get("quality") or {}
     summary = str(quality.get("summary") or "")[:120] if isinstance(quality, dict) else ""
-    kind = "四格漫画（从上到下四个格子）" if panel_count == 4 else "单幅海报插画"
+    kind = COMIC_STYLES[style_key].get("kind") or ("四格漫画（从上到下四个格子）" if panel_count == 4 else "单幅海报插画")
     return (
         f"请把群聊「{group_name}」{day} 的日报素材改编成{kind}的分镜脚本。\n"
         f"今日话题：{topics or '日常闲聊'}\n今日称号：{titles or '无'}\n金句：\n{quotes or '无'}\n"
@@ -353,11 +381,7 @@ def build_draw_prompt(storyboard: dict, style_key: str, group_name: str, day: st
     lines = [f"群聊「{group_name}」{day} 的每日漫画，标题：{storyboard.get('title') or ''}。"]
     if with_refs:
         lines.append("参考附图中的角色形象与画风，保持角色外观一致。")
-    if style_key == "four_panel":
-        lines.append("竖版四格漫画（4-koma），从上到下依次排列四个等大格子，格子之间留白色分隔，"
-                     "日系轻松画风，线条干净，色彩明快，人物表情夸张有趣。")
-    else:
-        lines.append("单幅竖版海报插画，日系轻松画风，构图完整，色彩明快，顶部留出标题文字区域。")
+    lines.append(COMIC_STYLES[style_key].get("art") or COMIC_STYLES["four_panel"]["art"])
     for index, panel in enumerate(storyboard.get("panels") or [], 1):
         segment = f"第{index}格：{panel.get('scene') or ''}"
         if panel.get("caption"):

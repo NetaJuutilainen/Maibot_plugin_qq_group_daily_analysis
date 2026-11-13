@@ -235,6 +235,48 @@
             "name": {"type": "string", "max_length": 40}
           }
         },
+        "forget_request": {
+          "api": "comic_forget",
+          "version": "1",
+          "confirmation": "仅删除这条本地恢复记录（不取消远端绘图任务、不删除已存档成品）。确认删除？",
+          "parameters": {
+            "request_id": {"type": "string", "required": true, "max_length": 32}
+          }
+        },
+        "rotation_reset": {
+          "api": "comic_rotation_reset",
+          "version": "1",
+          "confirmation": "重置漫画风格轮换进度（只清进度，不删除任何存档）。确认重置？",
+          "parameters": {
+            "scope": {"type": "string", "required": true, "max_length": 128}
+          }
+        },
+        "character_save": {
+          "api": "comic_character_save",
+          "version": "1",
+          "parameters": {
+            "id": {"type": "string", "max_length": 32},
+            "name": {"type": "string", "max_length": 40},
+            "persona": {"type": "string", "max_length": 400},
+            "scene_prompt": {"type": "string", "max_length": 400},
+            "ref_ids": {"type": "string", "max_length": 200}
+          }
+        },
+        "character_delete": {
+          "api": "comic_character_delete",
+          "version": "1",
+          "confirmation": "删除该漫画角色方案（不删除参考图文件与任何存档）。确认删除？",
+          "parameters": {
+            "id": {"type": "string", "required": true, "max_length": 32}
+          }
+        },
+        "character_set_active": {
+          "api": "comic_character_set_active",
+          "version": "1",
+          "parameters": {
+            "id": {"type": "string", "max_length": 32}
+          }
+        },
         "cancel": {
           "api": "cancel",
           "version": "1",
@@ -276,6 +318,42 @@
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128}
           }
+        }
+      }
+    },
+    {
+      "id": "stats-data",
+      "mode": "custom",
+      "title": "统计与数据",
+      "description": "消息/报告趋势（48小时/7/14/30天）与存储分区明细、报告存档批量删除、运行时缓存清理。",
+      "placement": "workspace",
+      "icon": "database",
+      "entry": "webui/stats_data.html",
+      "layout": "viewport",
+      "queries": {
+        "stats": {
+          "api": "stats",
+          "version": "1",
+          "parameters": {
+            "range_days": {"type": "integer", "minimum": 1, "maximum": 30}
+          }
+        },
+        "storage": {"api": "storage", "version": "1"}
+      },
+      "actions": {
+        "storage_delete": {
+          "api": "storage_delete",
+          "version": "1",
+          "confirmation": "批量删除所选报告存档（连带当日漫画），不删除任何群消息。此操作不可撤销，确认删除？",
+          "parameters": {
+            "keys": {"type": "string", "required": true, "max_length": 8000}
+          }
+        },
+        "cache_clear": {
+          "api": "cache_clear",
+          "version": "1",
+          "confirmation": "清理运行时缓存（头像/水印/相册临时文件，可自动重建），不影响报告存档。确认清理？",
+          "parameters": {}
         }
       }
     }

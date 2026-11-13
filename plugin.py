@@ -1013,13 +1013,50 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 if line.strip() in COMIC_STYLES]
         return pool or list(COMIC_STYLES)
 
+    def _comic_prefs(self) -> dict:
+        try:
+            data = json.loads((Path(self.ctx.paths.data_dir) / "comic_ui_prefs.json").read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_comic_prefs(self, prefs: dict) -> None:
+        path = Path(self.ctx.paths.data_dir) / "comic_ui_prefs.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
+
+    def _eff_rotation(self) -> tuple[str, str]:
+        ccfg = self._comic_cfg()
+        prefs = self._comic_prefs()
+        return (str(prefs.get("style_rotation") or ccfg.style_rotation),
+                str(prefs.get("rotation_scope") or ccfg.rotation_scope))
+
+    def _eff_daily_random(self) -> bool:
+        prefs = self._comic_prefs()
+        if "daily_random_character" in prefs:
+            return bool(prefs["daily_random_character"])
+        return bool(self._comic_cfg().daily_random_character)
+
+    @API("comic_prefs_set", version="1")
+    async def webui_comic_prefs_set(self, style_rotation: str = "", rotation_scope: str = "",
+                                    daily_random_character: bool | None = None) -> dict:
+        prefs = self._comic_prefs()
+        if style_rotation in ("off", "sequential", "random", "shuffle"):
+            prefs["style_rotation"] = style_rotation
+        if rotation_scope in ("global", "group"):
+            prefs["rotation_scope"] = rotation_scope
+        if daily_random_character is not None:
+            prefs["daily_random_character"] = bool(daily_random_character)
+        self._save_comic_prefs(prefs)
+        return {"saved": True, "message": "已保存漫画偏好"}
+
     def _pick_comic_style(self, group_id: str) -> str:
         ccfg = self._comic_cfg()
-        mode = ccfg.style_rotation
+        mode, scope = self._eff_rotation()
         if mode not in ("sequential", "random", "shuffle"):
             return ccfg.style if ccfg.style in COMIC_STYLES else "four_panel"
         pool = self._rotation_pool()
-        key = group_id if ccfg.rotation_scope == "group" else "global"
+        key = group_id if scope == "group" else "global"
         data = self._load_rotation()
         prog = data.get(key) or {}
         if mode == "random":
@@ -1042,8 +1079,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         return style
 
     def _rotation_state(self) -> dict:
-        ccfg = self._comic_cfg()
-        return {"mode": ccfg.style_rotation, "scope": ccfg.rotation_scope,
+        mode, scope = self._eff_rotation()
+        return {"mode": mode, "scope": scope,
                 "pool": self._rotation_pool(), "progress": self._load_rotation()}
 
     @API("comic_rotation_reset", version="1")
@@ -1085,7 +1122,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         rows = self._comic_characters()
         if not rows:
             return None
-        if ccfg.daily_random_character:
+        if self._eff_daily_random():
             path = Path(self.ctx.paths.data_dir) / "comic_character_daily.json"
             today = date.today().isoformat()
             try:
@@ -3334,7 +3371,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "rotation": self._rotation_state(),
             "characters": self._comic_characters(),
             "active_character": ccfg.active_character,
-            "daily_random_character": bool(ccfg.daily_random_character),
+            "daily_random_character": self._eff_daily_random(),
+            "prefs": {"style_rotation": self._eff_rotation()[0], "rotation_scope": self._eff_rotation()[1],
+                      "daily_random_character": self._eff_daily_random()},
             "use_reference_images": bool(ccfg.use_reference_images),
             "total": listing["total"], "today_count": daily["total"],
             "groups": [{"group_id": gid, "group_name": str(chat.get("name") or gid)[:200]}
@@ -4242,6 +4281,48 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         return {"range_days": range_days,
                 "days": [{"day": day, "messages": messages[day], "reports": reports[day]} for day in days],
                 "total_messages": sum(messages.values()), "total_reports": sum(reports.values())}
+
+    @API("token_stats", version="1")
+    async def webui_token_stats(self, range_days: int = 7) -> dict:
+        range_days = max(1, min(int(range_days), 30))
+        out = {"available": False, "range_days": range_days, "trend": None, "model_pie": [], "module_pie": []}
+        try:
+            trend = await self.ctx.call_capability("statistics.local.token_trend", days=range_days, bucket="day")
+            dist_model = await self.ctx.call_capability("statistics.local.token_distribution", days=range_days, group_by="model")
+            dist_module = await self.ctx.call_capability("statistics.local.token_distribution", days=range_days, group_by="module")
+        except Exception as exc:
+            self.ctx.logger.warning("[stats] 宿主统计能力不可用: %s", type(exc).__name__)
+            return out
+        if not (isinstance(trend, dict) and trend.get("success")):
+            return out
+        series = trend.get("series") or {}
+        vb = series.get("values_by_key") or {}
+        out["available"] = True
+        out["trend"] = {"timestamps": series.get("timestamps") or [],
+                        "total": vb.get("total_tokens") or [], "prompt": vb.get("prompt_tokens") or [],
+                        "completion": vb.get("completion_tokens") or [], "requests": vb.get("request_count") or [],
+                        "sum_total": series.get("total") or 0}
+        for key, dist in (("model_pie", dist_model), ("module_pie", dist_module)):
+            if isinstance(dist, dict) and dist.get("success"):
+                pies = (dist.get("distribution") or {}).get("pies") or []
+                out[key] = (pies[0].get("data") if pies else []) or []
+        return out
+
+    @API("events", version="1")
+    async def webui_events(self, limit: int = 50) -> dict:
+        events = []
+        for job in self._jobs.snapshot():
+            events.append({"time": job.get("finished_at") or job.get("started_at") or job.get("created_at") or "",
+                           "kind": job.get("kind") or "task",
+                           "label": f"{job.get('kind') or 'task'} · {job.get('group_id') or ''} · {job.get('status') or ''}",
+                           "status": job.get("status") or ""})
+        catalog = await asyncio.to_thread(self._report_store._catalog)
+        for row in catalog[:100]:
+            events.append({"time": row.get("created_at") or "", "kind": "report",
+                           "label": f"报告 · {row.get('group_name') or row.get('group_id')} · {row.get('day')}",
+                           "status": "completed"})
+        events.sort(key=lambda e: str(e["time"]), reverse=True)
+        return {"events": events[:max(1, min(int(limit), 100))]}
 
     @staticmethod
     def _dir_usage(path: Path) -> dict:

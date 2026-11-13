@@ -386,6 +386,28 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual((await self.p.webui_storage_delete(keys))['deleted'], 1)
         self.assertIn('cleared', await self.p.webui_cache_clear())
 
+    async def test_comic_prefs_override_rotation_and_daily(self):
+        self.assertTrue((await self.p.webui_comic_prefs_set(style_rotation='sequential', daily_random_character=True))['saved'])
+        self.assertEqual(self.p._eff_rotation()[0], 'sequential')
+        self.assertTrue(self.p._eff_daily_random())
+        self.assertEqual(self.p._pick_comic_style('123'), 'four_panel')
+        self.assertTrue((await self.p.webui_comic_prefs_set(style_rotation='off', daily_random_character=False))['saved'])
+        self.assertFalse(self.p._eff_daily_random())
+
+    async def test_token_stats_and_events(self):
+        async def cap(name, **kw):
+            if name == 'statistics.local.token_trend':
+                return {'success': True, 'series': {'timestamps': ['2026-11-14'], 'values_by_key': {
+                    'total_tokens': [100], 'prompt_tokens': [50], 'completion_tokens': [50], 'request_count': [1]}, 'total': 100}}
+            if name == 'statistics.local.token_distribution':
+                return {'success': True, 'distribution': {'pies': [{'data': [{'name': 'm', 'value': 100}]}]}}
+            return {}
+        with patch.object(self.p._ctx, 'call_capability', AsyncMock(side_effect=cap)):
+            r = await self.p.webui_token_stats(7)
+        self.assertTrue(r['available'])
+        self.assertEqual(r['model_pie'][0]['name'], 'm')
+        self.assertIn('events', await self.p.webui_events(10))
+
     async def test_comic_resend_and_delete_guards(self):
         self.save_daily()
         meta = self.save_comic()

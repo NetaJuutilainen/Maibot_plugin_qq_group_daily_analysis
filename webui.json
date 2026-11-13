@@ -240,7 +240,7 @@
           "version": "1",
           "confirmation": "仅删除这条本地恢复记录（不取消远端绘图任务、不删除已存档成品）。确认删除？",
           "parameters": {
-            "request_id": {"type": "string", "required": true, "max_length": 32}
+            "request_id": {"type": "string", "required": true, "max_length": 80}
           }
         },
         "rotation_reset": {
@@ -275,6 +275,15 @@
           "version": "1",
           "parameters": {
             "id": {"type": "string", "max_length": 32}
+          }
+        },
+        "comic_prefs_set": {
+          "api": "comic_prefs_set",
+          "version": "1",
+          "parameters": {
+            "style_rotation": {"type": "string", "max_length": 16},
+            "rotation_scope": {"type": "string", "max_length": 16},
+            "daily_random_character": {"type": "boolean"}
           }
         },
         "cancel": {
@@ -338,7 +347,21 @@
             "range_days": {"type": "integer", "minimum": 1, "maximum": 30}
           }
         },
-        "storage": {"api": "storage", "version": "1"}
+        "storage": {"api": "storage", "version": "1"},
+        "token_stats": {
+          "api": "token_stats",
+          "version": "1",
+          "parameters": {
+            "range_days": {"type": "integer", "minimum": 1, "maximum": 30}
+          }
+        },
+        "events": {
+          "api": "events",
+          "version": "1",
+          "parameters": {
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+          }
+        }
       },
       "actions": {
         "storage_delete": {

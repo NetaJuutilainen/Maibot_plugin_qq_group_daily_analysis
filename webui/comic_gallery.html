@@ -38,7 +38,7 @@
     label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
     input, select { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); }
     /* 原生下拉弹层行强制用页面面/字色：宿主 bridge 未必设 color-scheme，暗色下避免白底浅字。 */
-    select option, select optgroup { background-color: var(--panel); color: var(--ink); }
+    select option, select optgroup { background-color: inherit; color: inherit; }
     .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
     .header { margin-bottom: 20px; }
     .muted, .hint { color: var(--muted); font-size: 13px; }
@@ -119,6 +119,11 @@
       </div>
       <p class="hint">需要该日已有日报存档（先在报告库或 /日报 生成）；日期留空为今天。绘图消耗麦麦绘图的额度，成图自动发往所选群；同群同时只跑一个任务。</p>
       <p class="hint"><span id="rotation-info">轮换：关闭</span> <button id="rotation-reset" type="button" disabled>重置轮换进度</button></p>
+      <div class="fields">
+        <label>风格轮换<select id="rotation-mode" disabled><option value="off">关闭</option><option value="sequential">顺序</option><option value="random">随机</option><option value="shuffle">洗牌</option></select></label>
+        <label>轮换进度范围<select id="rotation-scope" disabled><option value="global">全局</option><option value="group">按群</option></select></label>
+        <label>每日随机角色<select id="daily-random" disabled><option value="off">关闭</option><option value="on">开启</option></select></label>
+      </div>
     </section>
 
     <section class="panel" aria-labelledby="recover-title">
@@ -361,6 +366,7 @@
         if (!state.ready || state.disposed || state.actionBusy) return;
         if (name !== 'delete_ref' && name !== 'rename_ref' && name !== 'forget_request' && name !== 'rotation_reset'
             && name !== 'character_save' && name !== 'character_delete' && name !== 'character_set_active'
+            && name !== 'comic_prefs_set'
             && !validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
         if ((name === 'comic_resend' || name === 'delete_comic') && !validRevision(args.revision)) { notice('存档版本缺失，请刷新列表后重试。', true); return; }
         if ((name === 'delete_ref' || name === 'rename_ref') && (typeof args.ref_id !== 'string' || !REF_ID.test(args.ref_id))) { notice('参考图标识无效。', true); return; }
@@ -382,7 +388,7 @@
           } else if (name === 'forget_request') {
             deleted = result.deleted === true;
             notice(deleted ? '已删除该恢复记录。' : `未删除：${text(result.message)}`, !deleted);
-          } else if (name === 'character_save' || name === 'character_set_active') {
+          } else if (name === 'character_save' || name === 'character_set_active' || name === 'comic_prefs_set') {
             notice(result.saved === true ? text(result.message || '已保存。') : `未保存：${text(result.message)}`, result.saved !== true);
           } else if (name === 'character_delete') {
             deleted = result.deleted === true;
@@ -614,6 +620,11 @@
             ? `轮换：${modeNames[rot.mode] || rot.mode} · 池 ${text((rot.pool || []).length)} 套${lasts.length ? ` · 上次 ${text(lasts[lasts.length - 1])}` : ''}`
             : '轮换：关闭';
           $('rotation-reset').disabled = !state.ready || !rot || rot.mode === 'off';
+          const prefs = object(result.prefs) ? result.prefs : {};
+          if (document.activeElement !== $('rotation-mode')) $('rotation-mode').value = prefs.style_rotation || 'off';
+          if (document.activeElement !== $('rotation-scope')) $('rotation-scope').value = prefs.rotation_scope || 'global';
+          if (document.activeElement !== $('daily-random')) $('daily-random').value = prefs.daily_random_character ? 'on' : 'off';
+          for (const id of ['rotation-mode', 'rotation-scope', 'daily-random']) $(id).disabled = !state.ready || !state.enabled;
           $('active-count').textContent = `活跃任务：${text(result.active_count)}`;
           $('task-status').textContent = `${text(result.status)} · 更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
           renderOperations(Array.isArray(result.operations) ? result.operations : []);
@@ -960,6 +971,9 @@
         void performAction('character_save', { id: $('character-edit').value, name: $('char-name').value, persona: $('char-persona').value, scene_prompt: $('char-scene').value, ref_ids: refIds }, '保存角色方案');
       });
       $('char-delete').addEventListener('click', () => { void performAction('character_delete', { id: $('character-edit').value }, '删除角色方案'); });
+      $('rotation-mode').addEventListener('change', () => { void performAction('comic_prefs_set', { style_rotation: $('rotation-mode').value }, '保存轮换设置'); });
+      $('rotation-scope').addEventListener('change', () => { void performAction('comic_prefs_set', { rotation_scope: $('rotation-scope').value }, '保存轮换范围'); });
+      $('daily-random').addEventListener('change', () => { void performAction('comic_prefs_set', { daily_random_character: $('daily-random').value === 'on' }, '保存每日随机角色'); });
       $('draw-group').addEventListener('change', syncControls);
       $('draw').addEventListener('click', () => {
         void performAction('draw', { group_id: $('draw-group').value, day: $('draw-day').value, style: $('draw-style').value }, '画漫画');
@@ -1061,12 +1075,27 @@
           notice(`连接失败：${text(error.message)}`, true);
         }
       }
-      // 内嵌时宿主 header 已显示页面名，插件桅头改工作区品牌避免标题重复；独立打开保留页面名。
-      if (window.maibot) {
-        $('page-title').textContent = '群聊分析';
-        const tagline = $('page-tagline');
-        tagline.textContent = tagline.textContent.replace(/^群聊分析\s*·\s*/, '');
-      }
+      // 内嵌检测不依赖 window.maibot 就绪时机（宿主 bridge 写 data-dashboard-style）；
+      // 并按 body 背景亮度强制 color-scheme，保证原生下拉弹层暗色下不发白。
+      const titleEl = $('page-title'), tagEl = $('page-tagline');
+      const pageTitle = titleEl.textContent, pageTag = tagEl.textContent;
+      const syncChrome = () => {
+        const embedded = !!document.documentElement.dataset.dashboardStyle;
+        titleEl.textContent = embedded ? '群聊分析' : pageTitle;
+        tagEl.textContent = embedded ? pageTag.replace(/^群聊分析\s*·\s*/, '') : pageTag;
+        const bg = getComputedStyle(document.body).backgroundColor;
+        let m = bg.match(/^color\(srgb\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)/);
+        let lum = m ? 0.2126 * +m[1] + 0.7152 * +m[2] + 0.0722 * +m[3] : null;
+        if (lum === null) {
+          m = bg.match(/\d+(\.\d+)?/g);
+          if (m && m.length >= 3) lum = (0.2126 * +m[0] + 0.7152 * +m[1] + 0.0722 * +m[2]) / 255;
+        }
+        if (lum !== null) document.documentElement.style.colorScheme = lum < 0.5 ? 'dark' : 'light';
+      };
+      syncChrome();
+      new MutationObserver(syncChrome).observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-dashboard-style'] });
+      new MutationObserver(syncChrome).observe(document.body, { childList: true });
+      addEventListener('maibot:context', syncChrome);
       tagHostComponents();
       void start();
     })();

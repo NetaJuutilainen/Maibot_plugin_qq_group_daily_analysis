@@ -37,7 +37,7 @@
     label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
     input, select { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); }
     /* 原生下拉弹层行强制用页面面/字色：宿主 bridge 未必设 color-scheme，暗色下避免白底浅字。 */
-    select option, select optgroup { background-color: var(--panel); color: var(--ink); }
+    select option, select optgroup { background-color: inherit; color: inherit; }
     .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
     .header { margin-bottom: 20px; }
     .muted, .hint { color: var(--muted); font-size: 13px; }
@@ -418,12 +418,27 @@
           notice(`连接失败：${text(error.message)}`, true);
         }
       }
-      // 内嵌时宿主 header 已显示页面名，插件桅头改工作区品牌避免标题重复；独立打开保留页面名。
-      if (window.maibot) {
-        $('page-title').textContent = '群聊分析';
-        const tagline = $('page-tagline');
-        tagline.textContent = tagline.textContent.replace(/^群聊分析\s*·\s*/, '');
-      }
+      // 内嵌检测不依赖 window.maibot 就绪时机（宿主 bridge 写 data-dashboard-style）；
+      // 并按 body 背景亮度强制 color-scheme，保证原生下拉弹层暗色下不发白。
+      const titleEl = $('page-title'), tagEl = $('page-tagline');
+      const pageTitle = titleEl.textContent, pageTag = tagEl.textContent;
+      const syncChrome = () => {
+        const embedded = !!document.documentElement.dataset.dashboardStyle;
+        titleEl.textContent = embedded ? '群聊分析' : pageTitle;
+        tagEl.textContent = embedded ? pageTag.replace(/^群聊分析\s*·\s*/, '') : pageTag;
+        const bg = getComputedStyle(document.body).backgroundColor;
+        let m = bg.match(/^color\(srgb\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)/);
+        let lum = m ? 0.2126 * +m[1] + 0.7152 * +m[2] + 0.0722 * +m[3] : null;
+        if (lum === null) {
+          m = bg.match(/\d+(\.\d+)?/g);
+          if (m && m.length >= 3) lum = (0.2126 * +m[0] + 0.7152 * +m[1] + 0.0722 * +m[2]) / 255;
+        }
+        if (lum !== null) document.documentElement.style.colorScheme = lum < 0.5 ? 'dark' : 'light';
+      };
+      syncChrome();
+      new MutationObserver(syncChrome).observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-dashboard-style'] });
+      new MutationObserver(syncChrome).observe(document.body, { childList: true });
+      addEventListener('maibot:context', syncChrome);
       tagHostComponents();
       void start();
     })();

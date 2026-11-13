@@ -45,7 +45,9 @@
     "chat.get_avatar",
     "webui.claim_upload",
     "api.call",
-    "api.get"
+    "api.get",
+    "statistics.local.token_trend",
+    "statistics.local.token_distribution"
   ],
   "i18n": {
     "default_locale": "zh-CN"

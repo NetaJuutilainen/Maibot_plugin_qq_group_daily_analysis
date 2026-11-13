@@ -26,11 +26,12 @@
     h2 { font-size: 17px; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
     button, input, select { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: calc(var(--radius) * .6); background: var(--panel); padding: 8px 12px; }
     button { cursor: pointer; min-height: 38px; }
-    button:hover:not(:disabled) { border-color: var(--accent); background: var(--soft); }
     button:disabled { cursor: not-allowed; opacity: .48; }
     button.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
-    button.primary:hover:not(:disabled) { filter: brightness(.94); background: var(--accent); }
     button.danger { color: var(--danger); }
+    /* 宿主主题下按钮悬停交给宿主注入的 brightness；这里的底色/描边变化只在独立打开时生效。 */
+    :root:not([data-dashboard-style]) button:hover:not(:disabled) { border-color: var(--accent); background: var(--soft); }
+    :root:not([data-dashboard-style]) button.primary:hover:not(:disabled) { filter: brightness(.94); background: var(--accent); }
     :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
     label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
     input, select { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); }
@@ -67,6 +68,14 @@
     .bar-value { font-size: 12px; color: var(--muted); }
     .bar-fill { width: 100%; max-width: 56px; background: var(--accent); border-radius: calc(var(--radius) * .35) calc(var(--radius) * .35) 0 0; min-height: 2px; }
     .bar-day { font-size: 12px; color: var(--muted); white-space: nowrap; }
+    /* 挂 maibot-card/button/input/select 后由宿主注入采样外观（阴影/描边/纹理/字体）；
+       这里按主题补宿主卡片装饰与标题尺度。 */
+    :root[data-dashboard-style='millennium'] .panel.maibot-card h2 { letter-spacing: .14em; font-weight: 700; }
+    :root[data-dashboard-style='future-retro'] .panel.maibot-card { position: relative; isolation: isolate; overflow: hidden; }
+    :root[data-dashboard-style='future-retro'] .panel.maibot-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 8px; background: var(--maibot-foreground); z-index: 0; }
+    :root[data-dashboard-style='future-retro'] .panel.maibot-card::after { content: ""; position: absolute; right: -1px; bottom: -1px; border-style: solid; border-width: 0 0 22px 22px; border-color: transparent transparent var(--maibot-foreground) transparent; z-index: 0; }
+    :root[data-dashboard-style='future-retro'] .panel.maibot-card > * { position: relative; z-index: 1; }
+    :root[data-dashboard-style='future-retro'] h1 { font-size: clamp(1.8rem, 2.1vw, 2.25rem); line-height: 1.08; font-weight: 800; letter-spacing: 0; }
     @media (max-width: 900px) { .fields { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 580px) { main { padding: 14px; } .fields, .stats { grid-template-columns: 1fr; } .chart { gap: 5px; } .task { align-items: flex-start; } }
   </style>
@@ -142,7 +151,20 @@
         const node = document.createElement(tag);
         if (value !== undefined) node.textContent = text(value);
         if (className) node.className = className;
+        hostClass(node);
         return node;
+      };
+      // 宿主组件类：让宿主注入的采样外观（阴影/描边/纹理/字体）落到控件上。齐边缩略图除外。
+      const hostClass = node => {
+        if (node.tagName === 'BUTTON' && !node.classList.contains('thumbnail')) {
+          node.classList.add('maibot-button');
+          if (node.classList.contains('primary')) node.classList.add('maibot-button-primary');
+        } else if (node.tagName === 'INPUT' && node.type !== 'file') node.classList.add('maibot-input');
+        else if (node.tagName === 'SELECT') node.classList.add('maibot-select');
+      };
+      const tagHostComponents = () => {
+        for (const node of document.querySelectorAll('button, input, select')) hostClass(node);
+        for (const node of document.querySelectorAll('.panel, .modal')) node.classList.add('maibot-card');
       };
       const notice = (message, error = false) => {
         if (state.disposed) return;
@@ -393,6 +415,7 @@
           notice(`连接失败：${text(error.message)}`, true);
         }
       }
+      tagHostComponents();
       void start();
     })();
   </script>

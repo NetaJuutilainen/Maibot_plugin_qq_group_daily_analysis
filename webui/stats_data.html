@@ -70,6 +70,17 @@
     .share-bar { height: 8px; background: var(--accent); border-radius: 4px; }
     .share-val { font-size: 12px; color: var(--muted); min-width: 70px; text-align: right; }
     .shares { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 12px; }
+    .pie-wrap { display: flex; align-items: center; gap: 12px; }
+    .pie-wrap svg { flex: none; width: 110px; height: 110px; }
+    .pie-legend { list-style: none; margin: 0; padding: 0; min-width: 0; font-size: 12px; }
+    .pie-legend li { display: flex; align-items: center; gap: 6px; margin: 3px 0; color: var(--muted); }
+    .pie-legend .sw { flex: none; width: 9px; height: 9px; border-radius: 2px; }
+    .pie-legend .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pie-legend .vl { margin-left: auto; color: var(--ink); }
+    .line-box { flex: 1; height: 100%; min-width: 0; }
+    .line-box svg { width: 100%; height: 100%; display: block; }
+    .line-legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .line-legend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; }
     .bar-fill.stack { background: transparent; display: flex; flex-direction: column; }
     .bar-seg { width: 100%; }
     .bar-seg.p { background: var(--accent); }
@@ -91,7 +102,7 @@
   <main>
     <header class="header">
       <div id="masthead"><h1 id="page-title">统计与数据</h1><p class="muted" id="page-tagline">群聊分析 · 消息/报告趋势与存储管理</p></div>
-      <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span></div>
+      <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span><button id="overview-link" type="button" disabled>分析总览</button><button id="library-link" type="button" disabled>报告库</button><button id="gallery-link" type="button" disabled>漫画廊</button></div>
     </header>
     <div id="notice" class="notice" role="status" aria-live="polite">正在等待 MaiBot 页面桥就绪…</div>
 
@@ -110,30 +121,31 @@
     </section>
 
     <section class="panel" aria-labelledby="token-title">
-      <div class="section-heading"><h2 id="token-title">Token 消耗与模型占比</h2><span id="token-state" class="muted">—</span></div>
+      <div class="section-heading"><h2 id="token-title">Token 消耗与占比</h2><span id="token-state" class="muted">—</span></div>
       <dl class="stats">
         <div class="stat"><dt>区间总 Token</dt><dd id="tok-total">—</dd></div>
         <div class="stat"><dt>输入 / 输出</dt><dd id="tok-io">—</dd></div>
         <div class="stat"><dt>LLM 调用次数</dt><dd id="tok-calls">—</dd></div>
         <div class="stat"><dt>今日调用成功率</dt><dd id="tok-rate">—</dd></div>
-        <div class="stat"><dt>今日平均耗时</dt><dd id="tok-avg">—</dd></div>
         <div class="stat"><dt>今日活跃群</dt><dd id="tok-groups">—</dd></div>
       </dl>
-      <div class="buttons" role="group" aria-label="趋势视图切换">
+      <div class="buttons" role="group" aria-label="指标切换">
         <button id="trend-token" type="button" class="primary">Token 量</button>
         <button id="trend-calls" type="button">调用次数</button>
-        <button id="trend-table" type="button">表格</button>
       </div>
-      <div id="token-chart" class="chart" role="img" aria-label="Token 消耗柱状图，等待数据"></div>
+      <div class="buttons" role="group" aria-label="图表类型">
+        <button id="chart-line" type="button" class="primary">折线</button>
+        <button id="chart-bar" type="button">柱状</button>
+        <button id="chart-table" type="button">表格</button>
+      </div>
+      <div id="token-chart" class="chart" role="img" aria-label="Token 趋势图，等待数据"></div>
       <div id="token-table" class="table-wrap" hidden></div>
       <div class="shares">
-        <div><h3>模型占比</h3><div id="model-share"></div></div>
-        <div><h3>任务 / 模块占比</h3><div id="module-share"></div></div>
-        <div><h3>服务商占比</h3><div id="provider-share"></div></div>
+        <div><h3>模型占比</h3><div id="model-share" class="pie-wrap"></div></div>
+        <div><h3>任务 / 模块占比</h3><div id="module-share" class="pie-wrap"></div></div>
+        <div><h3>服务商占比</h3><div id="provider-share" class="pie-wrap"></div></div>
       </div>
-      <h3>今日按任务 Token 明细（本插件调用账本）</h3>
-      <div id="task-table" class="table-wrap"></div>
-      <p class="hint">趋势 / 占比来自宿主本机统计（statistics_model_hourly，覆盖全宿主）；明细 / 成功率 / 耗时来自本插件自记调用账本（llm_usage.json，保留 30 天）。宿主未提供时趋势降级为不可用。</p>
+      <p class="hint">趋势 / 占比来自宿主本机统计（statistics_model_hourly，覆盖全宿主 LLM 调用）；成功率 / 活跃群来自本插件账本与统计。宿主未提供时趋势降级为不可用。</p>
     </section>
 
     <section class="panel" aria-labelledby="timeline-title">
@@ -154,7 +166,7 @@
     'use strict';
     (() => {
       const $ = id => document.getElementById(id);
-      const state = { ready: false, disposed: false, busy: false, tokenMode: 'token', tokenData: null };
+      const state = { ready: false, disposed: false, busy: false, tokenMode: 'token', chartType: 'line', tokenData: null };
       let bridge;
       let queue = Promise.resolve();
       const text = (v, limit = 200) => {
@@ -218,32 +230,92 @@
         } catch (e) { notice(`统计刷新失败：${text(e.message)}`, true); }
       }
 
-      function renderShare(el, items) {
-        const rows = Array.isArray(items) ? items.filter(i => i && typeof i === 'object') : [];
-        const max = Math.max(1, ...rows.map(i => Number(i.value) || 0));
-        el.replaceChildren(...(rows.length ? rows.map(i => {
-          const row = element('div', undefined, 'share-row');
-          row.append(element('span', i.name, 'share-label'));
-          const track = element('div', undefined, 'share-track');
-          const bar = element('div', undefined, 'share-bar');
-          bar.style.width = Math.max(2, Math.round((Number(i.value) || 0) / max * 100)) + '%';
-          track.append(bar);
-          row.append(track);
-          row.append(element('span', (Number(i.value) || 0).toLocaleString(), 'share-val'));
-          return row;
-        }) : [element('p', '暂无数据', 'muted')]));
+      const PIE_COLORS = ['#315eb5', '#e07b39', '#2a9d8f', '#b5484d', '#7b5ea7', '#c9a227', '#4a8fe0', '#6b7f8f'];
+      const svgEl = (tag, attrs) => {
+        const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        for (const k in attrs) n.setAttribute(k, attrs[k]);
+        return n;
+      };
+
+      function renderPie(el, items) {
+        const rows = (Array.isArray(items) ? items : []).filter(i => i && typeof i === 'object' && (Number(i.value) || 0) > 0);
+        const total = rows.reduce((s, i) => s + (Number(i.value) || 0), 0);
+        if (!rows.length || !total) { el.replaceChildren(element('p', '暂无数据', 'muted')); return; }
+        const svg = svgEl('svg', { viewBox: '0 0 42 42', role: 'img', 'aria-label': '占比饼图' });
+        let offset = 25;
+        rows.forEach((i, idx) => {
+          const pct = (Number(i.value) || 0) / total * 100;
+          svg.append(svgEl('circle', { cx: 21, cy: 21, r: 15.9155, fill: 'none',
+            stroke: PIE_COLORS[idx % PIE_COLORS.length], 'stroke-width': 7,
+            'stroke-dasharray': `${pct} ${100 - pct}`, 'stroke-dashoffset': offset }));
+          offset -= pct;
+        });
+        const legend = element('ul', undefined, 'pie-legend');
+        rows.forEach((i, idx) => {
+          const li = element('li');
+          const sw = element('span', undefined, 'sw');
+          sw.style.background = PIE_COLORS[idx % PIE_COLORS.length];
+          li.append(sw, element('span', i.name, 'nm'),
+            element('span', `${(Number(i.value) || 0).toLocaleString()} · ${Math.round((Number(i.value) || 0) / total * 100)}%`, 'vl'));
+          legend.append(li);
+        });
+        el.replaceChildren(svg, legend);
+      }
+
+      function renderLine(chart, ts, series) {
+        const W = 600, H = 200, PL = 46, PB = 26, PT = 10, PR = 10;
+        const max = Math.max(1, ...series.flatMap(s => s.values.map(v => Number(v) || 0)));
+        const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img' });
+        for (let g = 0; g <= 4; g++) {
+          const y = PT + (H - PT - PB) * g / 4;
+          svg.append(svgEl('line', { x1: PL, x2: W - PR, y1: y, y2: y, stroke: 'currentColor', 'stroke-opacity': .15, 'stroke-width': 1 }));
+          const label = svgEl('text', { x: PL - 6, y: y + 4, 'text-anchor': 'end', 'font-size': 10, fill: 'currentColor', 'fill-opacity': .6 });
+          label.textContent = Math.round(max * (1 - g / 4)).toLocaleString();
+          svg.append(label);
+        }
+        const n = Math.max(1, ts.length - 1);
+        const px = i => PL + (W - PL - PR) * (ts.length === 1 ? 0.5 : i / n);
+        const py = v => PT + (H - PT - PB) * (1 - (Number(v) || 0) / max);
+        series.forEach(s => {
+          svg.append(svgEl('polyline', { fill: 'none', stroke: s.color, 'stroke-width': 2,
+            points: s.values.map((v, i) => `${px(i)},${py(v)}`).join(' ') }));
+          s.values.forEach((v, i) => svg.append(svgEl('circle', { cx: px(i), cy: py(v), r: 2.5, fill: s.color })));
+        });
+        const step = Math.max(1, Math.ceil(ts.length / 7));
+        ts.forEach((day, i) => {
+          if (i % step) return;
+          const t = svgEl('text', { x: px(i), y: H - 8, 'text-anchor': 'middle', 'font-size': 10, fill: 'currentColor', 'fill-opacity': .6 });
+          t.textContent = String(day).slice(5, 10);
+          svg.append(t);
+        });
+        const box = element('div', undefined, 'line-box');
+        box.append(svg);
+        const legend = element('div', undefined, 'line-legend');
+        series.forEach(s => {
+          const item = element('span');
+          const sw = element('span', undefined, 'sw');
+          sw.style.background = s.color;
+          item.append(sw, document.createTextNode(s.name));
+          legend.append(item);
+        });
+        chart.replaceChildren(box, legend);
+        chart.style.display = 'block';
       }
 
       function renderTrend() {
         const r = state.tokenData;
-        const mode = state.tokenMode;
+        const mode = state.tokenMode, type = state.chartType;
         $('trend-token').classList.toggle('primary', mode === 'token');
         $('trend-calls').classList.toggle('primary', mode === 'calls');
-        $('trend-table').classList.toggle('primary', mode === 'table');
+        $('chart-line').classList.toggle('primary', type === 'line');
+        $('chart-bar').classList.toggle('primary', type === 'bar');
+        $('chart-table').classList.toggle('primary', type === 'table');
         const chart = $('token-chart'), table = $('token-table');
+        chart.style.display = '';
+        chart.style.height = type === 'line' ? 'auto' : '';
         if (!r || !r.trend) { chart.replaceChildren(element('p', '宿主未提供 Token 统计。', 'muted')); table.hidden = true; return; }
         const t = r.trend, ts = t.timestamps || [];
-        if (mode === 'table') {
+        if (type === 'table') {
           chart.hidden = true; table.hidden = false;
           const tb = element('table');
           const head = element('tr');
@@ -261,6 +333,16 @@
           return;
         }
         chart.hidden = false; table.hidden = true;
+        if (type === 'line') {
+          const series = mode === 'calls'
+            ? [{ name: '调用次数', color: PIE_COLORS[0], values: t.requests || [] }]
+            : [{ name: '总 Token', color: PIE_COLORS[0], values: t.total || [] },
+               { name: '输入', color: PIE_COLORS[2], values: t.prompt || [] },
+               { name: '输出', color: PIE_COLORS[1], values: t.completion || [] }];
+          renderLine(chart, ts, series);
+          chart.setAttribute('aria-label', mode === 'calls' ? '调用次数折线图' : 'Token 消耗折线图（总/输入/输出）');
+          return;
+        }
         const vals = mode === 'calls' ? (t.requests || []) : (t.total || []);
         const max = Math.max(1, ...vals.map(v => Number(v) || 0));
         chart.replaceChildren(...(ts.length ? ts.map((day, i) => {
@@ -283,23 +365,6 @@
         chart.setAttribute('aria-label', mode === 'calls' ? '调用次数柱状图' : 'Token 消耗堆叠柱状图（输入+输出）');
       }
 
-      function renderTaskTable(tasks) {
-        const rows = Array.isArray(tasks) ? tasks : [];
-        const tb = element('table');
-        const head = element('tr');
-        ['来源 / 任务', '调用 (成功)', 'Prompt', 'Completion', '总 Token', '平均耗时'].forEach(h => head.append(element('th', h)));
-        tb.append(head);
-        for (const t of rows) {
-          const tr = element('tr');
-          tr.append(element('td', `plugin/${t.task}`), element('td', `${t.calls} (${t.success})`),
-            element('td', (t.prompt || 0).toLocaleString()), element('td', (t.completion || 0).toLocaleString()),
-            element('td', (t.total || 0).toLocaleString()),
-            element('td', t.calls ? Math.round(t.ms / t.calls) + ' ms' : '—'));
-          tb.append(tr);
-        }
-        $('task-table').replaceChildren(...(rows.length ? [tb] : [element('p', '今日本插件暂无 LLM 调用记录。', 'empty')]));
-      }
-
       async function loadToken() {
         if (!state.ready || state.disposed) return;
         const range = Number($('range').value) || 7;
@@ -309,14 +374,12 @@
           state.tokenData = r;
           const cards = (r && r.cards) || {};
           $('tok-rate').textContent = cards.success_rate === null || cards.success_rate === undefined ? '—' : cards.success_rate + '%';
-          $('tok-avg').textContent = cards.avg_ms ? cards.avg_ms + ' ms' : '—';
           $('tok-groups').textContent = text(cards.active_groups);
-          renderTaskTable(r && r.tasks);
-          renderShare($('provider-share'), r && r.provider_pie);
+          renderPie($('provider-share'), r && r.provider_pie);
           if (!r || r.available !== true || !r.trend) {
-            $('token-state').textContent = '宿主统计不可用（明细仍可用）';
+            $('token-state').textContent = '宿主统计不可用';
             $('tok-total').textContent = '—'; $('tok-io').textContent = '—'; $('tok-calls').textContent = '—';
-            renderShare($('model-share'), []); renderShare($('module-share'), []);
+            renderPie($('model-share'), []); renderPie($('module-share'), []);
             renderTrend();
             return;
           }
@@ -326,8 +389,8 @@
           $('tok-total').textContent = Math.round(Number(t.sum_total) || sum(t.total)).toLocaleString();
           $('tok-io').textContent = `${Math.round(sum(t.prompt)).toLocaleString()} / ${Math.round(sum(t.completion)).toLocaleString()}`;
           $('tok-calls').textContent = Math.round(sum(t.requests)).toLocaleString();
-          renderShare($('model-share'), r.model_pie);
-          renderShare($('module-share'), r.module_pie);
+          renderPie($('model-share'), r.model_pie);
+          renderPie($('module-share'), r.module_pie);
           renderTrend();
         } catch (e) { $('token-state').textContent = 'Token 统计刷新失败'; }
       }
@@ -393,6 +456,7 @@
         $('refresh-storage').disabled = !state.ready || state.busy;
         $('refresh-events').disabled = !state.ready || state.busy;
         $('range').disabled = !state.ready || state.busy;
+        for (const id of ['overview-link', 'library-link', 'gallery-link']) $(id).disabled = !state.ready || state.busy;
       }
 
       async function performAction(name, args, label) {
@@ -434,9 +498,16 @@
       $('range').addEventListener('change', () => { void loadStats(); void loadToken(); });
       $('trend-token').addEventListener('click', () => { state.tokenMode = 'token'; renderTrend(); });
       $('trend-calls').addEventListener('click', () => { state.tokenMode = 'calls'; renderTrend(); });
-      $('trend-table').addEventListener('click', () => { state.tokenMode = 'table'; renderTrend(); });
+      $('chart-line').addEventListener('click', () => { state.chartType = 'line'; renderTrend(); });
+      $('chart-bar').addEventListener('click', () => { state.chartType = 'bar'; renderTrend(); });
+      $('chart-table').addEventListener('click', () => { state.chartType = 'table'; renderTrend(); });
       $('refresh-stats').addEventListener('click', () => { void loadStats(); void loadToken(); });
       $('refresh-events').addEventListener('click', () => { void loadEvents(); });
+      for (const [id, page] of [['overview-link', 'overview'], ['library-link', 'report-library'], ['gallery-link', 'comic-gallery']]) {
+        $(id).addEventListener('click', async () => {
+          try { await call('navigate', page); } catch (e) { notice(`跳转失败：${text(e.message)}`, true); }
+        });
+      }
       $('refresh-storage').addEventListener('click', () => { void loadStorage(); });
       $('storage-table').addEventListener('change', syncButtons);
       $('delete-selected').addEventListener('click', () => {

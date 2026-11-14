@@ -87,7 +87,7 @@
   <main id="main">
     <header class="header">
       <div id="masthead"><h1 id="page-title">分析总览</h1><p class="muted" id="page-tagline">群聊分析 · 报告统计、任务状态与近七天消息量</p></div>
-      <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span><button id="library-link" type="button" disabled>报告库</button><button id="gallery-link" type="button" disabled>漫画廊</button><button id="refresh" type="button" disabled>刷新</button></div>
+      <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span><button id="library-link" type="button" disabled>报告库</button><button id="gallery-link" type="button" disabled>漫画廊</button><button id="stats-link" type="button" disabled>统计与数据</button><button id="refresh" type="button" disabled>刷新</button></div>
     </header>
     <div id="notice" class="notice" role="status" aria-live="polite">正在等待 MaiBot 页面桥就绪…</div>
 
@@ -196,7 +196,7 @@
 
       function syncControls() {
         const locked = !state.ready || state.actionBusy;
-        for (const id of ['generate-group', 'generate-day', 'generate-theme', 'refresh', 'library-link', 'gallery-link']) $(id).disabled = locked;
+        for (const id of ['generate-group', 'generate-day', 'generate-theme', 'refresh', 'library-link', 'gallery-link', 'stats-link']) $(id).disabled = locked;
         for (const button of document.querySelectorAll('[data-mutation]')) {
           const busy = button.dataset.action !== 'cancel' && state.busyGroups.has(button.dataset.group);
           button.disabled = locked || busy;
@@ -384,6 +384,10 @@
       $('gallery-link').addEventListener('click', async () => {
         try { await call('navigate', 'comic-gallery'); }
         catch (error) { if (!(error instanceof StaleRequest)) notice(`无法打开漫画廊：${text(error.message)}`, true); }
+      });
+      $('stats-link').addEventListener('click', async () => {
+        try { await call('navigate', 'stats-data'); }
+        catch (error) { if (!(error instanceof StaleRequest)) notice(`无法打开统计与数据：${text(error.message)}`, true); }
       });
       function dispose() {
         if (state.disposed) return;

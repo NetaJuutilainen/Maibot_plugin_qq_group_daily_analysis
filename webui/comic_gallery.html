@@ -105,7 +105,7 @@
   <main id="main">
     <header class="header">
       <div id="masthead"><h1 id="page-title">漫画廊</h1><p class="muted" id="page-tagline">群聊分析 · 把日报画成四格漫画 / 单幅海报（经麦麦绘图协作）</p></div>
-      <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span><button id="library-link" type="button" disabled>报告库</button><button id="overview-link" type="button" disabled>分析总览</button></div>
+      <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span><button id="library-link" type="button" disabled>报告库</button><button id="overview-link" type="button" disabled>分析总览</button><button id="stats-link" type="button" disabled>统计与数据</button></div>
     </header>
     <div id="notice" class="notice" role="status" aria-live="polite">正在等待 MaiBot 页面桥就绪…</div>
 
@@ -303,7 +303,7 @@
 
       function syncControls() {
         const locked = !state.ready || state.actionBusy;
-        for (const id of ['draw-group', 'draw-day', 'draw-style', 'filter-group', 'filter-search', 'filter-sort', 'date-from', 'date-to', 'apply-filter', 'refresh', 'library-link', 'overview-link']) $(id).disabled = locked;
+        for (const id of ['draw-group', 'draw-day', 'draw-style', 'filter-group', 'filter-search', 'filter-sort', 'date-from', 'date-to', 'apply-filter', 'refresh', 'library-link', 'overview-link', 'stats-link']) $(id).disabled = locked;
         for (const button of document.querySelectorAll('[data-mutation]')) {
           const busy = button.dataset.action !== 'cancel' && state.busyGroups.has(button.dataset.group);
           button.disabled = locked || button.dataset.invalid === 'true' || busy;
@@ -1011,6 +1011,10 @@
       $('overview-link').addEventListener('click', async () => {
         try { await call('navigate', 'overview'); }
         catch (error) { if (!(error instanceof StaleRequest)) notice(`无法打开总览：${text(error.message)}`, true); }
+      });
+      $('stats-link').addEventListener('click', async () => {
+        try { await call('navigate', 'stats-data'); }
+        catch (error) { if (!(error instanceof StaleRequest)) notice(`无法打开统计与数据：${text(error.message)}`, true); }
       });
       $('close-modal').addEventListener('click', closeModal);
       $('overlay').addEventListener('click', event => { if (event.target === $('overlay')) closeModal(); });

@@ -38,7 +38,7 @@
     label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
     input, select { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); }
     /* 原生下拉弹层行强制用页面面/字色：宿主 bridge 未必设 color-scheme，暗色下避免白底浅字。 */
-    select option, select optgroup { background-color: inherit; color: inherit; }
+    select option, select optgroup { background-color: var(--bg); color: var(--ink); }
     .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
     .header { margin-bottom: 20px; }
     .muted, .hint { color: var(--muted); font-size: 13px; }

@@ -57,6 +57,10 @@
 - **幂等恢复**：请求键先落盘再提交；回执未知保留原键，「恢复进度」只读查证绝不换键重画；已存档未发送只补发。
 - 日报发送成功后可对联动群**自动追加漫画**；`/漫画` 命令手动触发。
 
+漫画成品示例（四格风格示意）：
+
+![漫画示例](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/comic-sample.jpg)
+
 ### 统计与数据
 
 ![统计与数据](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-stats.png)
@@ -69,9 +73,11 @@
 
 跟随 MaiBot 仪表盘 **modern / 千禧 / 未来复古** × 明暗实时切换（背景/面板/按钮/字体/纹理均由宿主注入），独立打开时回退自有配色。
 
-| 千禧 | 未来复古 · 暗 |
-|:--:|:--:|
-| ![千禧](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-theme-millennium.png) | ![未来复古暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-theme-retro-dark.png) |
+| 风格 | 明 | 暗 |
+|:--:|:--:|:--:|
+| modern | ![modern 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-modern-light.png) | ![modern 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-modern-dark.png) |
+| 千禧 | ![千禧 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-millennium-light.png) | ![千禧 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-stats.png) |
+| 未来复古 | ![未来复古 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-retro-light.png) | ![未来复古 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-retro-dark.png) |
 
 ---
 
@@ -239,9 +245,17 @@ flowchart TD
 
 本项目是以下开源项目的 **MaiBot 移植重构版**，按 MIT 保留原版权声明：
 
-- [SXP-Simon/astrbot_plugin_qq_group_daily_analysis](https://github.com/SXP-Simon/astrbot_plugin_qq_group_daily_analysis) — MIT, Copyright (c) 2025 Helian Nuits（分析维度、12 套主题模板、人格标签映射、群相册思路来自原版；`art_nouveau`/`maria`/`deepseek_maid` 自上游 v5.8.4 移植）
-- [AstrBotDevs/astrbot-t2i-service](https://github.com/AstrBotDevs/astrbot-t2i-service) — 云端文转图渲染服务
+- **上游插件**：[SXP-Simon/astrbot_plugin_qq_group_daily_analysis](https://github.com/SXP-Simon/astrbot_plugin_qq_group_daily_analysis)  
+  MIT License, Copyright (c) 2025 Helian Nuits  
+  分析维度、12 套主题模板、人格标签映射、群相册思路来自原版；  
+  `art_nouveau` / `maria` / `deepseek_maid` 三套自上游 v5.8.4 移植。
+- **云端渲染服务**：[AstrBotDevs/astrbot-t2i-service](https://github.com/AstrBotDevs/astrbot-t2i-service)  
+  云端文转图渲染服务。
+- **字体素材**：霞鹜文楷（LXGW WenKai）、Noto Color Emoji  
+  SIL OFL 1.1 许可。
+- **本移植版**：MIT License, Copyright (c) 2026 NetaJuutilainenP
 
-字体：霞鹜文楷（LXGW WenKai）、Noto Color Emoji，SIL OFL 1.1。本移植版：MIT, Copyright (c) 2026 NetaJuutilainenP。
-
-> ⚠️ 完整逐项第三方许可见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)：上游代码与 12 套模板 MIT；`deepseek_maid` 角色美术 CC BY-NC-SA 4.0（署名链：上善无形/ZipZipPipe/StuGRua）；`atri`/`bluearchive`/`hatsunemiku`/`maria` 角色 IP 归原作者，非商业同人使用。
+> ⚠️ 完整逐项第三方许可见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)。  
+> 上游代码与 12 套模板：**MIT**；  
+> `deepseek_maid` 角色美术：**CC BY-NC-SA 4.0**（署名链：上善无形 / ZipZipPipe / StuGRua）；  
+> `atri` / `bluearchive` / `hatsunemiku` / `maria` 角色 IP 归原作者，本项目与上游一样属非商业同人使用。

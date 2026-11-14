@@ -95,14 +95,14 @@
     :root[data-dashboard-style='future-retro'] .panel.maibot-card::after { content: ""; position: absolute; right: -1px; bottom: -1px; border-style: solid; border-width: 0 0 22px 22px; border-color: transparent transparent var(--maibot-foreground) transparent; z-index: 0; }
     :root[data-dashboard-style='future-retro'] .panel.maibot-card > * { position: relative; z-index: 1; }
     :root[data-dashboard-style='future-retro'] h1 { font-size: clamp(1.8rem, 2.1vw, 2.25rem); line-height: 1.08; font-weight: 800; letter-spacing: 0; }
-    @media (max-width: 580px) { main { padding: 14px; } .fields, .stats { grid-template-columns: 1fr; } }
+    @media (max-width: 580px) { main { padding: 14px; } .fields, .stats, .shares { grid-template-columns: 1fr; } .line-legend { flex-wrap: wrap; } }
   </style>
 </head>
 <body class="maibot-page">
   <main>
     <header class="header">
       <div id="masthead"><h1 id="page-title">统计与数据</h1><p class="muted" id="page-tagline">群聊分析 · 消息/报告趋势与存储管理</p></div>
-      <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span><button id="overview-link" type="button" disabled>分析总览</button><button id="library-link" type="button" disabled>报告库</button><button id="gallery-link" type="button" disabled>漫画廊</button></div>
+      <div class="buttons"><span id="connection" class="badge warn">正在连接宿主</span><button id="library-link" type="button" disabled>报告库</button><button id="gallery-link" type="button" disabled>漫画廊</button></div>
     </header>
     <div id="notice" class="notice" role="status" aria-live="polite">正在等待 MaiBot 页面桥就绪…</div>
 
@@ -113,7 +113,10 @@
         <button id="refresh-stats" type="button" disabled>刷新统计</button>
       </div>
       <dl class="stats">
-        <div class="stat"><dt>区间消息数</dt><dd id="stat-messages">—</dd></div>
+        <div class="stat"><dt>今日报告</dt><dd id="stat-today">—</dd></div>
+        <div class="stat"><dt>最近生成</dt><dd id="stat-last">—</dd></div>
+        <div class="stat"><dt>今日消息数</dt><dd id="stat-messages">—</dd></div>
+        <div class="stat"><dt>区间消息数</dt><dd id="stat-range-messages">—</dd></div>
         <div class="stat"><dt>区间报告数</dt><dd id="stat-reports">—</dd></div>
         <div class="stat"><dt>日均消息</dt><dd id="stat-avg">—</dd></div>
       </dl>
@@ -204,6 +207,17 @@
         return (n / 1048576).toFixed(1) + ' MB';
       };
 
+      async function loadToday() {
+        if (!state.ready || state.disposed) return;
+        try {
+          const r = await call('query', 'overview');
+          if (state.disposed) return;
+          $('stat-today').textContent = text(r.today_count);
+          $('stat-last').textContent = text(r.last_generated);
+          $('stat-messages').textContent = text(r.message_count);
+        } catch (e) { /* 今日概览失败不阻断统计页 */ }
+      }
+
       async function loadStats() {
         if (!state.ready || state.disposed) return;
         const range = Number($('range').value) || 7;
@@ -211,7 +225,7 @@
         try {
           const r = await call('query', 'stats', { range_days: range });
           if (state.disposed) return;
-          $('stat-messages').textContent = text(r.total_messages);
+          $('stat-range-messages').textContent = text(r.total_messages);
           $('stat-reports').textContent = text(r.total_reports);
           $('stat-avg').textContent = text(Math.round((Number(r.total_messages) || 0) / Math.max(1, (r.days || []).length)));
           const days = Array.isArray(r.days) ? r.days : [];
@@ -456,7 +470,7 @@
         $('refresh-storage').disabled = !state.ready || state.busy;
         $('refresh-events').disabled = !state.ready || state.busy;
         $('range').disabled = !state.ready || state.busy;
-        for (const id of ['overview-link', 'library-link', 'gallery-link']) $(id).disabled = !state.ready || state.busy;
+        for (const id of ['library-link', 'gallery-link']) $(id).disabled = !state.ready || state.busy;
       }
 
       async function performAction(name, args, label) {
@@ -484,6 +498,7 @@
           $('connection').className = 'badge ok';
           notice('已连接。统计与存储数据就绪。');
           syncButtons();
+          await loadToday();
           await loadStats();
           await loadToken();
           await loadEvents();
@@ -501,9 +516,9 @@
       $('chart-line').addEventListener('click', () => { state.chartType = 'line'; renderTrend(); });
       $('chart-bar').addEventListener('click', () => { state.chartType = 'bar'; renderTrend(); });
       $('chart-table').addEventListener('click', () => { state.chartType = 'table'; renderTrend(); });
-      $('refresh-stats').addEventListener('click', () => { void loadStats(); void loadToken(); });
+      $('refresh-stats').addEventListener('click', () => { void loadToday(); void loadStats(); void loadToken(); });
       $('refresh-events').addEventListener('click', () => { void loadEvents(); });
-      for (const [id, page] of [['overview-link', 'overview'], ['library-link', 'report-library'], ['gallery-link', 'comic-gallery']]) {
+      for (const [id, page] of [['library-link', 'report-library'], ['gallery-link', 'comic-gallery']]) {
         $(id).addEventListener('click', async () => {
           try { await call('navigate', page); } catch (e) { notice(`跳转失败：${text(e.message)}`, true); }
         });

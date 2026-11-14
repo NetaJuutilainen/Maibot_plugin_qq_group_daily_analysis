@@ -277,7 +277,7 @@ class DeclarationTest(unittest.TestCase):
             self.assertFalse(metadata['public'])
 
     def test_custom_page_does_not_require_form_or_download_permissions(self):
-        for entry in ('report_library.html', 'comic_gallery.html', 'overview.html'):
+        for entry in ('report_library.html', 'comic_gallery.html', 'stats_data.html'):
             page = (ROOT / 'webui' / entry).read_text(encoding='utf-8')
             self.assertNotIn('<form', page)
             self.assertNotIn('type="submit"', page)
@@ -314,18 +314,16 @@ class DeclarationTest(unittest.TestCase):
         sys.modules[schema_spec.name] = schema
         schema_spec.loader.exec_module(schema)
         extension = schema.load_webui_extension(ROOT)
-        self.assertEqual(len(extension.pages), 4)
+        self.assertEqual(len(extension.pages), 3)
         self.assertEqual(extension.schema_version, 2)
+        self.assertNotIn('overview', [p.id for p in extension.pages])
         stats = next(p for p in extension.pages if p.id == 'stats-data')
         self.assertEqual(stats.mode, 'custom')
         self.assertEqual(stats.entry, 'webui/stats_data.html')
+        self.assertEqual(stats.placement, 'sidebar')
+        self.assertIn('overview', stats.queries)
         self.assertEqual(set(stats.actions), {'storage_delete', 'cache_clear'})
         self.assertTrue(stats.actions['storage_delete'].confirmation)
-        overview = next(p for p in extension.pages if p.id == 'overview')
-        self.assertEqual(overview.mode, 'custom')
-        self.assertEqual(overview.entry, 'webui/overview.html')
-        self.assertEqual(set(overview.actions), {'trigger', 'cancel'})
-        self.assertTrue(overview.actions['trigger'].confirmation)
         gallery = next(p for p in extension.pages if p.id == 'comic-gallery')
         self.assertIn('image_upload', extension.required_capabilities)
         upload = gallery.uploads['ref']

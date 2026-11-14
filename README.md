@@ -1,201 +1,86 @@
 # 群聊每日分析
 
-> 每天自动给群聊生成一份图文日报：**高光话题**、**神人称号**、**金句宝藏瓶**、**聊天质量锐评**。
-> 12 套主题皮肤、本地零外发渲染（可选云端加速）、可自动上传 QQ 群相册。
+> 每天自动给群聊生成一份图文日报：**高光话题**、**神人称号**、**金句宝藏瓶**、**聊天质量锐评**；
+> 还能把日报画成**四格漫画 / 单幅海报**，并提供 **WebUI 控制台**（报告库 / 漫画廊 / 统计与数据）与 **LLM 原生工具**。
+> 12 套日报主题、12 套漫画风格、本地零外发渲染（可选云端加速）、自动上传 QQ 群相册、跟随 MaiBot 宿主三套 UI 风格。
 
-本插件是 AstrBot 插件 [astrbot_plugin_qq_group_daily_analysis](https://github.com/SXP-Simon/astrbot_plugin_qq_group_daily_analysis) 的 MaiBot 移植重构版。
+本插件是 AstrBot 插件 [astrbot_plugin_qq_group_daily_analysis](https://github.com/SXP-Simon/astrbot_plugin_qq_group_daily_analysis) 的 **MaiBot 移植重构版**（MIT）。当前版本 **1.6.0**。
 
 ---
 
-## 一、它长什么样
+## 一、功能总览
 
-日报由四块内容 + 一张活跃度图组成：
-
-| 板块 | 内容 |
+| 块 | 能力 |
 |---|---|
-| 🗓 高光话题 | LLM 提炼当日主要话题，提到群友时自动渲染「头像+昵称」小胶囊 |
-| 🎖 神人称号 | 给活跃群友发称号 + 人格标签（sbti/mbti/acgti 三套可切），带头像与人格水印 |
-| 💬 金句宝藏瓶 | 当日金句原文 + 犀利点评 |
-| 📊 聊天质量锐评 | 维度占比 + 点评 + 总结金句 |
-
-> 各主题的**板块标题文案与排版不同**（例如 ATRI 主题显示为「高光记忆碎片」「亚托莉的宝藏瓶」等），内容一致。
-
-统计口径是**生成时刻往前 24 小时**（可跨天），从宿主数据库补拉消息重建，不依赖机器人是否整日在线。
+| 日报分析 | 话题 / 称号 / 金句 / 锐评四板块；人格标签 sbti/mbti/acgti；滚动 24h 统计（跨天、不依赖整日在线） |
+| 日报输出 | 12 套主题本地渲染（断网、三档降级）；可选云端加速；可选 HTML 直发群文件；自动上传群相册 |
+| 漫画生成 | 12 套风格 + 顺序/随机/洗牌轮换；多角色方案 + 每日随机角色；参考图管理；经麦麦绘图(drawpic)协作；幂等恢复不重画 |
+| WebUI 控制台 | 报告库（筛选/预览/重发/零Token重绘/删除/生成/取消）；漫画廊；统计与数据（趋势/Token 审计/存储管理） |
+| 统计与 Token | 48h/7/14/30 天趋势（折线/堆叠柱/表格）；模型/任务/服务商占比饼图；事件时间线；存储分区与批量删除、缓存清理 |
+| LLM 原生工具 | 自然语言「查报告」（只读、脱敏、0 额外额度）；管理员「触发分析」（异步受理） |
+| 宿主主题适配 | 跟随 MaiBot 仪表盘 modern / 千禧 / 未来复古 × 明暗实时切换，无需刷新 |
 
 ---
 
 ## 二、三分钟上手
 
-1. **安装**：把本插件目录放进 MaiBot 的 `plugins/` 下，重启或在插件管理里加载。
+1. **安装**：把本插件目录放进 MaiBot 的 `plugins/` 下，重启或在插件管理里加载（需宿主 ≥1.3.19、SDK ≥2.12.0）。
 2. **填群白名单**：插件设置 → 日报设置 → 「群白名单」，每行一个群号（留空 = 所有群）。
-3. **开定时**：日报设置 → 打开「每日日报开关」，设置「日报发送小时/分钟」（默认 22:00），可在「定时日报群列表」限定只给部分群发。
-4. **手动试一次**：群里发 `/日报`（管理员可用，管理员名单可配）。生成约 2~6 分钟，完成后自动发图。
+3. **开定时**：日报设置 → 打开「每日日报开关」，设置发送小时/分钟；可用「定时日报群列表」限定部分群。
+4. **手动试一次**：群里发 `/日报`（管理员名单可配）。生成约 2~6 分钟，完成后自动发图。
 
-> 机器人若在定时点之后才启动/重载，插件会**自动补发**当天日报，不会漏。
-
----
-
-## 三、常用配置
-
-### 日报设置
-| 配置 | 说明 |
-|---|---|
-| 群白名单 | 每行一个群号；留空 = 所有群 |
-| 命令管理员 | 每行一个 QQ 号；留空 = 所有人可用 `/日报` |
-| 每日日报开关 / 发送小时 / 分钟 | 定时生成时间 |
-| 定时日报群列表 | 每行一个群号；留空 = 白名单内全部活跃群 |
-| 默认日报主题 | 12 套皮肤，详见「四、主题一览」 |
-| 按群指定主题 | 每行 `群号=主题`，优先于默认主题 |
-| 手动日报计入当天已发 | 开启后手动 `/日报` 当天定时不再重复发 |
-
-### 分析设置
-| 配置 | 说明 |
-|---|---|
-| 四类分析开关 | 话题 / 称号 / 金句 / 锐评，可单独关闭 |
-| 最大话题数 / 称号数 / 金句数 | 每块内容上限 |
-| 生成日报最低消息数 | 低于此数不发（默认 150） |
-| 统计机器人自身发言 | **默认关闭**。开启后日报重建 24 小时数据时会同时纳入机器人自己的发言，详见下方说明 |
-| 人格标签展示模式 | `sbti`（整活版）/ `mbti`（标准版）/ `acgti`（二次元角色） |
-| 称号卡水印透明度 / 尺寸模式 | 人格水印图样式（默认 0.12 / contain） |
-| 分析用模型任务名 | 默认 `auto`（跟随宿主默认任务），也可填 `utils` / `replyer` 等 |
-| LLM 全局并发上限 | 多群同时生成时的闸门，防止触发模型限流 |
-| 日报输出形态 | `image` = 渲染成图片（默认）；`html` = 直接上传 HTML 到群文件（零渲染开销） |
-| 启用云端渲染（第三方数据出口） | **默认关闭**。开启后日报内容会发到第三方 t2i 服务，详见「六、工作原理」的隐私说明 |
-| 云端渲染分辨率档位 | `normal`（1.0x，1080 宽，默认）/ `high`（1.3x）/ `ultra`（1.8x）；仅在开启云端渲染时生效 |
-
-<details>
-<summary><b>「统计机器人自身发言」到底统计什么？</b></summary>
-
-**默认关闭**，此时口径完全不变：机器人自己的发言不进任何统计。
-
-开启后，日报在**生成前重建最近 24 小时数据**时，会一并读取宿主数据库里保存的机器人消息，
-使其进入消息数、参与人数、小时分布、话题、称号、金句等分析输入。
-
-几点需要知道：
-
-- **真正生效的是「数据库重建」这条路径。** 实时接收统计同样受此开关约束，但机器人主动发出的消息
-  走的是出站链路（不经入站 Hook），所以历史统计以生成日报前的数据库重建为准；
-- **只放开「机器人」这一项过滤**：命令消息、转发消息仍按原规则过滤，文本采样上限照旧生效；
-- **纳入 ≠ 一定被选中**：开关保证这些消息进入候选，不保证模型一定把机器人选为称号或金句；
-- **长回复基本进不了金句**：金句采样与展示上限均为 300 字，机器人较长的回复通常只计入条数与字数；
-- **旧报告不会自动变**：已生成的日报图片是快照，要看到效果需要重新生成；
-- **宿主没保存的历史找不回来**：插件只能读宿主数据库里已有的内容。
-
-</details>
-
-
-### 群相册上传
-
-**NapCat 与 SnowLuma 两个适配器都支持**（走的是同一个 OneBot v11 相册接口：`get_qun_album_list` / `upload_image_to_qun_album`）。
-
-| 配置 | 说明 |
-|---|---|
-| 日报生成后上传群相册 | **NapCat / SnowLuma 均支持**；失败不影响正常发图 |
-| 默认相册名称 | 留空 = 第一个相册 |
-| 按群指定相册 | 每行 `群号=相册名`，优先于默认 |
-| 协议端 HTTP API 地址 | NapCat / SnowLuma 通用，例如 `http://127.0.0.1:3002`（SnowLuma 默认 `3002`） |
-| 协议端访问令牌 | 留空表示无需鉴权。NapCat 填 `network.httpServers[].token`；SnowLuma 填 `networks.httpServers[].accessToken` |
-
-### 分析提示词
-四个板块的提示词都可改（支持 `${max_topics}` `${messages_text}` 等变量），另有「分析人设描述」可注入人设口吻。
-
-### 官方 QQ 机器人（QQ 开放平台）
-
-**v1.4.0 起支持**，无需任何配置。判定方式很简单：群里来的 `user_id` 是纯数字就是普通 QQ 号（NapCat / SnowLuma 等），
-是一串 32 位大小写字母数字（如 `2C9FD5BC5264B1C0999D8F47C5E809F8`）就是官方 QQ 机器人的 **OpenID**。
-
-| 能力 | 纯数字 QQ 号 | 官方 QQ 机器人 OpenID |
-|---|---|---|
-| 群友头像 | 直接走 `q1.qlogo.cn` | 走宿主 `chat.get_avatar` 能力 → 官方适配器按 AppID + OpenID 取头像 |
-| 群友昵称 | 群名片 → 昵称 → QQ 号 | 消息里的昵称；取不到时显示「群友 + OpenID 后 6 位」，如 `群友E809F8` |
-| 群名 / 活跃统计 / 话题 / 称号 / 金句 | 完全一致 | 完全一致 |
-
-> 官方 QQ 适配器自宿主 **MaiBot 1.4.0** 起内置，因此官 Q 场景需要宿主 **1.4.0 及以上**；
-> 而 `chat.get_avatar` 头像能力本身自宿主 **1.3.2** 起即提供。更低版本仍可加载本插件，
-> 只是 OpenID 群友会退回默认灰色头像（不会报错、不影响日报其他部分）。
-> 官方 QQ 开放平台不提供「按 OpenID 查群成员资料」的接口，因此昵称只能来自入站消息本身；
-> 若个别群友昵称始终为空，就会稳定显示成「群友XXXXXX」形式。
+> 机器人在定时点之后才启动/重载时会**自动补发**当天日报，不会漏。
 
 ---
 
-### WebUI 报告库（v1.5.0）
+## 三、WebUI 控制台（1.6.0）
 
-需要宿主 **≥1.3.19**、SDK **≥2.12.0**。顶部「群聊分析」工作区提供报告库，设置侧栏提供总览。
+顶部「群聊分析」工作区提供三个页面，顶部按钮可互相跳转；页面跟随宿主 UI 风格与明暗。
 
-- 生成的报告自动存入 `data/plugins/maibot-plugin-qq-group-daily-analysis/reports/<群>/<日期>/`，插件更新不覆盖存档；旧版已经发出的报告不会自动补录。
-- 按群和日期筛选，另支持关键词搜索（群名/群号/日期/主题）、类型筛选与新旧排序；点击缩略图查看原图；「重发」只发送成品，不重新分析；「删除」仅删选中存档，不删除聊天消息。HTML 直发模式只存 HTML，仍可重发到群文件。
-- 详情内「换主题重绘」对齐原版免 Token 重绘：用已存分析与渲染上下文重新出图并替换存档，不消耗模型额度、不发群；旧版存档或上下文过大未保存时该按钮置灰，仅可重发/重新生成。渲染上下文（含消息摘录）仅服务端用于重绘，不经任何 WebUI 查询暴露，随报告保留期一并清理。
-- 「生成」会调用模型并发往所选群；今天使用过去 24 小时统计，历史日期必须仍有统计桶。相同群和日期重新生成会替换原存档。
-- 总览的运行状态和取消仅覆盖 **WebUI 发起的操作**；命令、定时任务尚未统一任务化。取消不会撤回已经提交的模型请求、完成的存档或发送。
-- 日报设置 `archive_retention_days` 默认 **90 天**，启动时清理，设为 **0** 可关闭自动清理。
-- 当前宿主沙箱不允许页面直接下载，因此下载按钮禁用；漫画和参考图上传留待后续版本。
+### 报告库
 
-## 四、主题一览（12 套）
+![报告库](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-report-library.png)
 
-所有主题都包含**同样的四块内容**（话题 / 称号 / 金句 / 锐评）+ 24 小时活跃度图 + Token 消耗页脚，
-差别在于**配色、字体、排版，以及每个板块的标题文案**。
+- 报告自动存入 `data/plugins/maibot-plugin-qq-group-daily-analysis/reports/<群>/<日期>/`，插件更新不覆盖存档。
+- 按群/日期筛选 + 关键词搜索 + 类型筛选 + 排序；缩略图点开看原图（分块拼装、自然尺寸）。
+- **重发**只发成品不重新分析；**换主题重绘**用已存分析免 Token 重新出图替换存档；**删除**仅删存档不删聊天消息。
+- **生成**调用模型并发往所选群（今天=滚动24h，历史日需仍有统计桶）；**后台任务**统一覆盖 WebUI/命令/定时/联动四来源，可取消。
+- 保留期 `archive_retention_days` 默认 90 天（0=不清理）。沙箱不允许页面直接下载，下载按钮禁用。
 
-| 主题 key | 名称 | 风格与主色 | 板块文案特色 |
-|---|---|---|---|
-| `atri` | ATRI | 浅蓝紫 `#8fc5ff` `#dcd3ff`，霞鹜文楷，附亚托莉立绘装饰 | 亚托莉的群聊观测日志 / 心跳潮汐 / 高亮记忆碎片 / 神人名片颁发 / 亚托莉的宝藏瓶 / 亚托莉观测报告 / 能量解析雷达 |
-| `bluearchive` | BlueArchive | 蔚蓝 `#3593f3` + 青紫多彩，阿洛娜主题 | 阿洛娜的今日群聊速报 / 老师，这是今天的作战报告！/ 24H 活跃轨迹 / 今日话题 Topics / 群贤毕至 Bible Quotes / 群友画像 Portraits / Sensei Report |
-| `hatsunemiku` | 初音未来 | 葱绿 `#39C5BB` + 粉 `#F8BBD0`，科技面板风 | 群聊日常分析看板 / HATSUNE MIKU v4X / 分析日志 // / 今日消息数 / 24小时活动 / 话题总结 / 今日圣经 / Miku 综合点评 |
-| `hack` | 黑客帝国 | 黑底橙字 `#ff9900`，等宽终端风 | Night Mode Analysis Portal / `~/analysis` / `$ ai --summary` / `const stats = {...}` / `ls ./topics` / `grep -r "golden_quotes"` / `[SYSTEM_SUMMARY]` |
-| `retro_futurism` | 复古未来 | 米白 `#F8F4E8` + 荧光绿 `#00FF41`，CRT 终端风 | Retro Futurism Daily Export / 累计消息数量 / 参与者计数 / 文本总字数 / 活跃序列 SCAN / ACTIVITY_SPECTRUM / TOPICS_MODULE / TITLES_MODULE / QUOTES_MODULE |
-| `scrapbook` | 剪贴簿 | 点阵纸 + 手写体，卡通调色板 | 五彩斑斓的一天，来看看群里发生了什么吧！/ ✨ Highlight Time（此刻，世界色彩斑斓）/ 24H 活跃轨迹 / 统计邮票 / 群贤毕至 Bible Quotes |
-| `spring_festival` | 新春 | 宣纸底 + 红金 `#b71c1c` `#ffca28`，书法字体 | 🧧 春节特供日报 🧧 / —— 岁在丙午 —— / 巅峰时刻 / 🏮 鸿运齐天 · 众友云集 🏮 / 核心话题回顾 / 活跃时序图 / 群友风云榜 / 每日金句回响 |
-| `simple` | 简约 | 灰白极简，内置素材最少 | Simple Report / 群聊日报 / 基础统计 / 活跃度图表 / 群圣经 / 热门话题 / 群友称号 |
-| `format` | 格式报告 | 白底蓝字 `#007bff`，正式文档风 | 群聊日常分析报告 / 基础统计 / 24小时活跃度分布 / 群聊质量分析 EXECUTIVE SUMMARY / 群圣经 / 热门话题 / 群友称号 |
-| `art_nouveau` | 新艺术运动 | 羊皮纸底 + 森林绿 `#2d5016` × 复古金 `#c9a227`，穆夏式圣光光环、流动藤蔓与罗马碑铭体 | 群聊风雅漫步 CHRONICLES OF NATURAL HARMONY / 廿四小时走势 · 24-Hour Rhythm / 核心热议话题 · Selected Topics / 群芳雅鉴 / 精选金句回响 · 观察锐评 / 整体洞察华章 · 群聊综合评述 / 四象核心数据 |
-| `maria` | 圣母在上 | 羊皮纸底 + 古金 `#d4a94a` + 墨绿 `#38553f` + 酒红 `#9e3447`，莉莉安女子学园茶会风，三蔷薇徽章与圣母像 | 莉莉安茶会 · 今日群聊公报 BULLETIN DU SALON DES ROSES / 钟楼时刻 · 24小时作息 / 核心议题 · 花语拾遗（红白黄三色蔷薇分卷）/ 学园名册 · 淑女风采 / 今日金句 · 蔷薇私语 / 学园庭园的省察 · 总评纪要 |
-| `deepseek_maid` | DeepSeek 鲸鱼女仆娘 | 白底 + 蓝紫渐变 `#4860a8` `#4878c0`，可换表情（睁眼/闭眼）的女仆娘立绘与铁盆 | 大肥鱼值班室 DAILY LOG / 工作便签 / 鱼塘今日收获 / 摸鱼雷达 / 今日话题（别急，上下文还在）/ 今日鱼塘图鉴 / 今日名言收藏（嗯哼，这样啊）/ 铁盆防御 · 鱼塘锐评 / 今日交班 |
+### 漫画廊
 
-**怎么切换**：
+![漫画廊](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-comic-gallery.png)
 
-- 全局换肤：日报设置 → 「默认日报主题」选一个；
-- 分群换肤：日报设置 → 「按群指定主题」，每行 `群号=主题`，优先于默认主题；
-- 临时指定：群里发 `/日报 scrapbook`（主题名即上表的 key）。
+- 把当日日报画成**四格漫画 / 单幅海报**等 12 套风格；LLM 分镜 → 经**麦麦绘图(drawpic)协作**出图 → 发群 + 存档 + 可选群相册。
+- **风格轮换**（顺序/随机/洗牌）+ **多角色方案**（独立人设/场景/参考图）+ **每日随机角色**，均可在页面开关。
+- **参考图**上传（宿主压缩 4096）/重命名/灯箱放大/删除；绘图时附带以固定角色形象与画风。
+- **幂等恢复**：请求键先落盘再提交；回执未知保留原键，「恢复进度」只读查证绝不换键重画；已存档未发送只补发。
+- 日报发送成功后可对联动群**自动追加漫画**；`/漫画` 命令手动触发。
 
-> 深色主题（`hack` / `retro_futurism`）下，称号卡的人格水印会自动切换混合模式以保持可见。
+### 统计与数据
 
-### 主题预览
+![统计与数据](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-stats.png)
 
-下面是这 12 套主题的**真实渲染结果**（由本插件渲染管线实际出图，非设计稿）。
-缩略图截取每张日报的顶部区域（宽 260px），**点击图片可看 1000px 完整长图**；每套的一句话风格见表格下方的清单。
+- 今日概览（今日报告/最近生成/今日消息）+ 48h/7/14/30 天消息/报告趋势。
+- **Token 审计**：总/输入/输出/调用次数/成功率/活跃群；趋势**折线 / 堆叠柱 / 表格**三态；**模型 / 任务模块 / 服务商**占比饼图（宿主本机统计）。
+- **事件时间线** + **存储管理**（分区明细、报告批量删除、运行时缓存清理）。
 
-|**ATRI** · `atri`|**BlueArchive** · `bluearchive`|**初音未来** · `hatsunemiku`|
-|:--:|:--:|:--:|
-|[![ATRI 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/atri.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/atri.jpg)|[![BlueArchive 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/bluearchive.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/bluearchive.jpg)|[![初音未来 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/hatsunemiku.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hatsunemiku.jpg)|
+### 宿主主题适配
 
-|**黑客帝国** · `hack`|**复古未来** · `retro_futurism`|**剪贴簿** · `scrapbook`|
-|:--:|:--:|:--:|
-|[![黑客帝国 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/hack.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hack.jpg)|[![复古未来 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/retro_futurism.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/retro_futurism.jpg)|[![剪贴簿 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/scrapbook.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/scrapbook.jpg)|
+跟随 MaiBot 仪表盘 **modern / 千禧 / 未来复古** × 明暗实时切换（背景/面板/按钮/字体/纹理均由宿主注入），独立打开时回退自有配色。
 
-|**新春** · `spring_festival`|**简约** · `simple`|**格式报告** · `format`|
-|:--:|:--:|:--:|
-|[![新春 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/spring_festival.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/spring_festival.jpg)|[![简约 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/simple.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/simple.jpg)|[![格式报告 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/format.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/format.jpg)|
+| 千禧 | 未来复古 · 暗 |
+|:--:|:--:|
+| ![千禧](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-theme-millennium.png) | ![未来复古暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-theme-retro-dark.png) |
 
-|**新艺术运动** · `art_nouveau`|**圣母在上** · `maria`|**鲸鱼女仆娘** · `deepseek_maid`|
-|:--:|:--:|:--:|
-|[![新艺术运动 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/art_nouveau.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/art_nouveau.jpg)|[![圣母在上 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/maria.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/maria.jpg)|[![鲸鱼女仆娘 主题预览](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/deepseek_maid.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/deepseek_maid.jpg)|
+---
 
-- `atri` — **ATRI** · 深海水族箱 · 群青气泡
-- `bluearchive` — **BlueArchive** · 教室黑板 · 粉笔便利贴
-- `hatsunemiku` — **初音未来** · 青绿电子 · 波形荧光
-- `hack` — **黑客帝国** · 终端绿字 · 黑底扫描
-- `retro_futurism` — **复古未来** · 米黄镀铬 · 太空梦
-- `scrapbook` — **剪贴簿** · 手账拼贴 · 胶带纸片
-- `spring_festival` — **新春** · 红金年味 · 灯笼窗花
-- `simple` — **简约** · 极简白底 · 大留白
-- `format` — **格式报告** · 商务排版 · 表格结构
-- `art_nouveau` — **新艺术运动** · 羊皮纸藤蔓 · 穆夏烫金
-- `maria` — **圣母在上** · 学园茶会 · 三蔷薇徽
-- `deepseek_maid` — **鲸鱼女仆娘** · 蓝白打工 · 摸鱼雷达
+## 四、LLM 原生工具
 
-> 图片使用 jsDelivr 镜像的**绝对外链**，因此 MaiBot WebUI 的插件详情页与 GitHub 页面上都能正常显示。
-> （WebUI 以自身站点为基准解析相对路径，写成 `assets/previews/…` 会 404；
-> 它也不渲染 README 里的原始 HTML，故此处只用标准 markdown 表格 + 图片语法。）
-> `art_nouveau` / `maria` / `deepseek_maid` 三套模板与素材移植自上游 AstrBot 插件，各自的许可条款见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)（其中 `deepseek_maid` 的角色形象为 CC BY-NC-SA 4.0）。
+| 工具 | 说明 |
+|---|---|
+| `group_daily_report_lookup` | 自然语言查历史日报（今天/昨天/N天前/日期 + 群名/群号），只读返回紧凑 Markdown，ID 脱敏、40000 字截断，**0 额外模型额度** |
+| `group_daily_analysis_trigger` | 管理员异步触发本群日报：受理即返回凭证，后台完成后自动发群；普通成员被引导改用查报告 |
 
 ---
 
@@ -205,129 +90,158 @@
 |---|---|
 | `/日报` | 生成本群当日日报（约 2~6 分钟，完成后自动发送） |
 | `/日报 主题名` | 指定主题生成，例如 `/日报 scrapbook` |
+| `/漫画` | 把本群今日日报画成漫画（需当日已有日报存档且启用群聊漫画） |
 
 ---
 
-## 六、工作原理（想调优再看）
+## 六、常用配置
 
-```
-消息收集（Hook 实时统计）
-   └─ 生成时：从数据库补拉「往前 24h」消息 → 重建统计桶（排除转发消息）
-        └─ 四路 LLM 分析并行（话题 / 称号 / 金句 / 锐评）
-             └─ 渲染：服务器本地三档（默认）
-                        └─ 可选：开启「云端渲染」后走 云端外链 PNG → 云端外链 JPEG → 云端内联 JPEG
-                  └─ 发送图片 → （可选）上传群相册
-```
+### 日报设置
+| 配置 | 说明 |
+|---|---|
+| 群白名单 / 命令管理员 | 每行一个群号 / QQ 号；留空 = 所有群 / 所有人 |
+| 每日日报开关 / 发送小时 / 分钟 / 定时日报群列表 | 定时生成时间与范围 |
+| 默认日报主题 / 按群指定主题 | 12 套皮肤；`群号=主题` 优先于默认 |
+| 手动日报计入当天已发 | 开启后手动 `/日报` 当天定时不再重复发 |
+| 日报输出形态 | `image` 渲染成图（默认）/ `html` 直发群文件 |
+| 启用云端渲染 / 分辨率档位 | **默认关闭**；开启=把日报内容交给第三方 t2i，见「八、工作原理」 |
 
-**渲染默认在服务器本地完成（零数据外发）**：本地渲染三档依次降级（1.5x → 1.0x → 精简档；超时直落精简档），素材与字体全部内联进 HTML（v1.3.0 起阻塞式外链字体样式表已全部摘除），渲染阶段**完全断网**——不依赖任何外部站点，也不需要把群聊内容交给任何第三方。页面加载 2 秒后自动暂停全部动画，弱机渲染负载显著降低。长聊天记录会自动分段分析再合并，单段失败不影响整体。
+### 分析设置
+| 配置 | 说明 |
+|---|---|
+| 四类分析开关 / 最大话题·称号·金句数 | 板块开关与上限 |
+| 生成日报最低消息数 | 低于此数不发（默认 150） |
+| 统计机器人自身发言 | **默认关闭**；开启后重建 24h 数据时纳入机器人自己的发言（只放开机器人过滤，命令/转发仍过滤；纳入≠必被选中；旧报告不自动变） |
+| 人格标签展示模式 | `sbti` 整活 / `mbti` 标准 / `acgti` 二次元 |
+| 分析用模型任务名 / LLM 全局并发上限 | 默认 `auto`；并发闸门防限流 |
 
-**云端渲染是可选项，默认关闭**：在配置里打开「启用云端渲染（第三方数据出口）」后，插件会优先把整份日报 HTML **POST 到你在「云端 t2i 服务地址」里填的第三方服务**（默认值是社区公共 t2i 实例）。这一步会把以下内容发送到该服务：
+### 群相册上传
+NapCat 与 SnowLuma 均支持（同一 OneBot v11 相册接口）。配置：生成后上传开关、默认相册名、按群指定相册、协议端 HTTP API 地址与访问令牌（NapCat `network.httpServers[].token`；SnowLuma `networks.httpServers[].accessToken`，默认端口 3002）。失败不影响发图。
 
-- 群聊消息样本、群友昵称、QQ 号（用户 ID）
-- 内联进 HTML 的头像图片数据
-- 日报全文（话题、称号、金句、锐评等分析结果）
-
-也就是说，**开启云端渲染 = 把群聊数据交给第三方**。只有在你自己部署并信任该 t2i 服务（或明确接受公共实例的隐私风险）时才建议开启；追求零外发请保持关闭。插件对该服务的请求使用标准 TLS 证书校验，不会关闭证书验证。
+### 分析提示词 / 官方 QQ 机器人
+四板块提示词可改（支持 `${max_topics}` `${messages_text}` 等变量）+ 分析人设注入。官方 QQ 机器人（OpenID）自宿主 1.4.0 起无需配置支持：头像走 `chat.get_avatar`，昵称取入站消息（取不到显示「群友+OpenID后6位」）。
 
 ---
 
-## 七、常见问题
+## 七、主题一览（12 套）
 
-<details open>
+所有主题含同样四块内容 + 24h 活跃度图 + Token 页脚，差别在配色/字体/排版/板块文案。
+
+| key | 名称 | 风格 |
+|---|---|---|
+| `atri` | ATRI | 浅蓝紫 · 霞鹜文楷 · 亚托莉立绘 |
+| `bluearchive` | BlueArchive | 蔚蓝+青紫 · 阿洛娜 |
+| `hatsunemiku` | 初音未来 | 葱绿+粉 · 科技面板 |
+| `hack` | 黑客帝国 | 黑底橙字 · 等宽终端 |
+| `retro_futurism` | 复古未来 | 米白+荧光绿 · CRT |
+| `scrapbook` | 剪贴簿 | 点阵纸+手写体 · 卡通 |
+| `spring_festival` | 新春 | 宣纸+红金 · 书法 |
+| `simple` | 简约 | 灰白极简 |
+| `format` | 格式报告 | 白底蓝字 · 正式文档 |
+| `art_nouveau` | 新艺术运动 | 羊皮纸+森林绿×复古金 · 穆夏 |
+| `maria` | 圣母在上 | 羊皮纸+古金墨绿酒红 · 学园茶会 |
+| `deepseek_maid` | 鲸鱼女仆娘 | 白底蓝紫渐变 · 女仆娘立绘 |
+
+**切换**：全局「默认日报主题」；分群「按群指定主题」(`群号=主题`)；临时 `/日报 主题名`。深色主题下人格水印自动切换混合模式。
+
+### 主题预览（真实渲染结果）
+
+缩略图截顶部区域，点击看 1000px 完整长图。
+
+|**ATRI**|**BlueArchive**|**初音未来**|
+|:--:|:--:|:--:|
+|[![ATRI](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/atri.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/atri.jpg)|[![BlueArchive](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/bluearchive.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/bluearchive.jpg)|[![初音未来](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/hatsunemiku.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hatsunemiku.jpg)|
+
+|**黑客帝国**|**复古未来**|**剪贴簿**|
+|:--:|:--:|:--:|
+|[![黑客帝国](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/hack.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hack.jpg)|[![复古未来](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/retro_futurism.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/retro_futurism.jpg)|[![剪贴簿](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/scrapbook.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/scrapbook.jpg)|
+
+|**新春**|**简约**|**格式报告**|
+|:--:|:--:|:--:|
+|[![新春](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/spring_festival.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/spring_festival.jpg)|[![简约](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/simple.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/simple.jpg)|[![格式报告](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/format.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/format.jpg)|
+
+|**新艺术运动**|**圣母在上**|**鲸鱼女仆娘**|
+|:--:|:--:|:--:|
+|[![新艺术运动](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/art_nouveau.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/art_nouveau.jpg)|[![圣母在上](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/maria.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/maria.jpg)|[![鲸鱼女仆娘](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/deepseek_maid.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/deepseek_maid.jpg)|
+
+> 图片用 jsDelivr 镜像绝对外链（WebUI 详情页与 GitHub 都能显示；相对路径在 WebUI 会 404）。
+> `art_nouveau`/`maria`/`deepseek_maid` 模板与素材移植自上游，许可见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)（`deepseek_maid` 角色形象 CC BY-NC-SA 4.0）。
+
+---
+
+## 八、工作原理
+
+```mermaid
+flowchart TD
+  A[群消息 Hook 实时统计] --> B[生成时: 数据库补拉往前24h 重建统计桶]
+  B --> C[四路 LLM 并行: 话题/称号/金句/锐评]
+  C --> D{输出形态}
+  D -->|image 默认| E[本地渲染 三档降级 断网]
+  D -->|html| F[HTML 直发群文件]
+  E --> G[发群 + 可选群相册]
+  F --> G
+  C --> H[存档 reports/群/日期/]
+  G --> H
+  H --> I[WebUI 报告库: 预览/重发/零Token重绘/删除]
+  C --> J[漫画: LLM 分镜 → drawpic 协作出图]
+  J --> K[发群 + 存档 + 可选相册]
+  I --> L[WebUI 统计与数据 / LLM 工具]
+  H --> L
+```
+
+**本地渲染默认零外发**：素材与字体全部内联进 HTML，渲染阶段完全断网，三档依次降级（1.5x→1.0x→精简），页面 2 秒自静止降低弱机负载；长记录自动分段分析再合并。
+
+**云端渲染可选、默认关闭**：开启后整份日报 HTML 会 POST 到你填的第三方 t2i 服务，包含群聊样本/昵称/QQ 号/头像/日报全文。**开启=把群聊数据交给第三方**；追求零外发请保持关闭，或指向自建实例。请求使用标准 TLS 校验。
+
+---
+
+## 九、常见问题
+
+<details>
 <summary><b>1. 提示「过去 24 小时只有 X 条消息（不足 N 条）」？</b></summary>
 
-统计口径是**滚动 24 小时**的真实消息数，低于「生成日报最低消息数」就跳过。
-到插件设置 → 分析设置里调低该阈值即可。
+统计口径是滚动 24h 真实消息数，低于「生成日报最低消息数」就跳过；到分析设置调低阈值。
 </details>
 
-<details open>
+<details>
 <summary><b>2. 定时到点却没发？</b></summary>
 
-- 检查「每日日报开关」和「日报发送小时/分钟」是否已开启、时间是否正确；
-- 若机器人在定时点**之后**才启动/重载，会在启动后自动补发（日志里能看到「立即补发日报」）；
-- 同一群当天已经发过（含手动 `/日报`），则跳过——可在设置里关闭「手动日报计入当天已发」。
+检查开关与时间；定时点之后才启动/重载会自动补发；同群当天已发（含手动）则跳过（可关「手动日报计入当天已发」）。
 </details>
 
-<details open>
-<summary><b>3. 图片里的 emoji 显示成方块？</b></summary>
+<details>
+<summary><b>3. 图片 emoji 显示方块？</b></summary>
 
-插件已内嵌彩色 emoji 字体（Noto Color Emoji 分段），本地渲染还会优先使用系统 Segoe UI Emoji。
-若仍异常，请把渲染日志发出来。
+已内嵌彩色 emoji 字体（Noto Color Emoji 分段），本地渲染优先系统 Segoe UI Emoji；仍异常请发渲染日志。
 </details>
 
-<details open>
+<details>
 <summary><b>4. 群相册上传失败？</b></summary>
 
-- 确认「协议端 HTTP API 地址」与「协议端访问令牌」填写正确，两个适配器都能用：
-  - **NapCat**：令牌在 `napcat/config/onebot11_<QQ号>.json` → `network.httpServers[].token`；
-  - **SnowLuma**：令牌在 `modules/SnowLuma/config/onebot_<QQ号>.json` → `networks.httpServers[].accessToken`
-    （HTTP 服务默认监听 `3002`，需确认该端口已开启）；
-- 日志里出现 `HTTP Error 403: Forbidden` = 协议端开了鉴权但令牌没填/填错，插件会直接提示你去填；
-- 日志里出现 `connection refused` = 协议端 HTTP 服务没开，或端口填错（不要填 WebSocket 端口）；
-- 相册名要**完全一致**；严格模式开启时，指定相册不存在会直接跳过（不会误传到默认相册）；
-- 想让它找不到时自动用第一个相册，把「严格模式」关掉即可。
-- ⚠️ **「协议端 HTTP API 地址」与「云端 t2i 服务地址」指向哪里，数据就会发往哪里**：请只填写你
-  自己信任的地址（默认值指向本机 NapCat / SnowLuma / 社区公共 t2i 实例，前者安全；后者属于第三方数据出口，
-  开启即意味着把群聊数据交给该服务，见「六、工作原理」）。
+核对协议端 HTTP API 地址与令牌（NapCat `network.httpServers[].token`；SnowLuma `networks.httpServers[].accessToken`，端口默认 3002）；403=令牌没填/错，connection refused=HTTP 服务没开或填了 WebSocket 端口；相册名需完全一致（严格模式不存在则跳过）。⚠ 地址指向哪里数据就发往哪里，只填信任的地址。
 </details>
 
-<details open>
-<summary><b>5. 想换皮肤 / 每个群不同风格？</b></summary>
+<details>
+<summary><b>5. 生成慢 / 某板块空 / 弱机卡顿？</b></summary>
 
-改「默认日报主题」即可全局换肤；想让不同群用不同主题，用「按群指定主题」（每行 `群号=主题`），或临时用 `/日报 主题名`。
-12 套主题的风格与文案差异见「四、主题一览」。
-深色主题（hack / retro_futurism）下，人格水印会自动切换混合模式以保持可见。
+2~6 分钟属正常；`E_TIMEOUT` 换更快模型任务或调大超时；板块空但调用成功多为模型返回对象包裹数组（已自动兼容）。弱机：渲染缩放调 1.0、宿主并发渲染调 1、或改 `html` 直发跳过渲染；2GB 内存注意渲染浏览器约 300MB 易触发 swap。
 </details>
 
-<details open>
-<summary><b>6. 生成很慢 / 某个板块空着？</b></summary>
+<details>
+<summary><b>6. 群聊数据会不会被发到第三方？</b></summary>
 
-- 生成约 2~6 分钟属正常（四路 LLM 分析并行 + 渲染）；
-- 若日志出现 `LLM 调用异常: E_TIMEOUT`，是所选模型太慢——换个更快的「分析用模型任务名」，或调大「LLM 分析超时」；
-- 若话题/称号为空但日志显示「调用成功」，通常是模型返回了对象包裹的数组，本插件已自动兼容。
-</details>
-
-<details open>
-<summary><b>6.5 服务器配置低（2 核 2 GB）时渲染卡顿 / 负载飙高？</b></summary>
-
-v1.3.0 已内置弱机减负（页面 2 秒自静止 + 渲染等待缩到 3 秒 + 超时直落精简档 + 渲染断网）。
-如果还想再压，按性价比依次：
-
-- 插件侧「日报渲染缩放」调到 `1.0`（光栅像素量降到 44%，清晰度略降）；
-- 宿主侧 WebUI → 插件运行时 → 浏览器渲染：**并发渲染数调 1**、渲染超时适当调小（如 8 秒，让单档尽快失败进降级）；
-- 极端情况把「日报输出形态」改成 `html` 直发群文件，完全跳过图片渲染；
-- 2 GB 内存机器注意：渲染浏览器约占 300 MB，与宿主/协议端叠加易触发 swap 抖动（表现为整机卡死而非单纯慢），有条件加 swap 或升配。
-</details>
-
-<details open>
-<summary><b>7. 群聊数据会不会被发到第三方？</b></summary>
-
-**默认不会。** 日报渲染默认在服务器本地完成，素材全部内联，不向任何外部服务发送群聊内容。
-
-只有在你手动打开「启用云端渲染（第三方数据出口）」后，插件才会把整份日报 HTML POST 到「云端 t2i 服务地址」所指向的**第三方服务**，其中包含群聊消息样本、群友昵称、QQ 号、头像与日报全文。
-如果你在意隐私，请保持该开关关闭；或把它指向你自己部署的 t2i 实例。详见「六、工作原理」。
+**默认不会**（本地渲染、素材内联）。仅手动开启「云端渲染」后才把日报 HTML 发给所填 t2i 服务；在意隐私请保持关闭或指向自建实例。详见「八、工作原理」。
 </details>
 
 ---
 
-## 八、致谢与许可
+## 十、致谢与许可
 
-本项目是以下开源项目的 **MaiBot 移植重构版**，按 MIT 许可保留原版权声明：
+本项目是以下开源项目的 **MaiBot 移植重构版**，按 MIT 保留原版权声明：
 
-- [SXP-Simon/astrbot_plugin_qq_group_daily_analysis](https://github.com/SXP-Simon/astrbot_plugin_qq_group_daily_analysis)
-  — MIT License, Copyright (c) 2025 Helian Nuits
-  （分析维度、全部 12 套主题模板、人格标签映射、群相册上传思路均来自原版；
-  其中 `art_nouveau` / `maria` / `deepseek_maid` 三套为后续从上游 v5.8.4 移植，
-  `deepseek_maid` 的角色形象另有 CC BY-NC-SA 4.0 约束，详见 `THIRD-PARTY-NOTICES.md`）
+- [SXP-Simon/astrbot_plugin_qq_group_daily_analysis](https://github.com/SXP-Simon/astrbot_plugin_qq_group_daily_analysis) — MIT, Copyright (c) 2025 Helian Nuits（分析维度、12 套主题模板、人格标签映射、群相册思路来自原版；`art_nouveau`/`maria`/`deepseek_maid` 自上游 v5.8.4 移植）
 - [AstrBotDevs/astrbot-t2i-service](https://github.com/AstrBotDevs/astrbot-t2i-service) — 云端文转图渲染服务
 
-字体素材：霞鹜文楷（LXGW WenKai）、Noto Color Emoji，均为 SIL OFL 1.1 许可。
+字体：霞鹜文楷（LXGW WenKai）、Noto Color Emoji，SIL OFL 1.1。本移植版：MIT, Copyright (c) 2026 NetaJuutilainenP。
 
-本移植版：MIT License, Copyright (c) 2026 NetaJuutilainenP
-
-> ⚠️ **完整且逐项的第三方许可清单见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)**。
-> 简要说：上游代码与全部 12 套模板为 **MIT**；`deepseek_maid` 的**角色美术为 CC BY-NC-SA 4.0**
-> （非商业 + 相同方式共享，署名链：上善无形 / ZipZipPipe / StuGRua）；
-> `atri` / `bluearchive` / `hatsunemiku` / `maria` 主题中的角色形象，其 IP 归原作者，
-> 本项目与上游一样属非商业同人使用。
-
+> ⚠️ 完整逐项第三方许可见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)：上游代码与 12 套模板 MIT；`deepseek_maid` 角色美术 CC BY-NC-SA 4.0（署名链：上善无形/ZipZipPipe/StuGRua）；`atri`/`bluearchive`/`hatsunemiku`/`maria` 角色 IP 归原作者，非商业同人使用。

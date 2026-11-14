@@ -406,6 +406,18 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
             r = await self.p.webui_token_stats(7)
         self.assertTrue(r['available'])
         self.assertEqual(r['model_pie'][0]['name'], 'm')
+        self.assertEqual(len(r['provider_pie']), 1)
+        self.p._record_llm_usage({'success': True, 'model_name': 'm', 'prompt_tokens': 10,
+                                  'completion_tokens': 5, 'total_tokens': 15}, 'utils', 1.5)
+        self.p._record_llm_usage({'success': False, 'model_name': 'm', 'prompt_tokens': 1,
+                                  'completion_tokens': 0, 'total_tokens': 1}, 'utils', 0.5)
+        with patch.object(self.p._ctx, 'call_capability', AsyncMock(side_effect=cap)):
+            r2 = await self.p.webui_token_stats(7)
+        self.assertEqual(r2['tasks'][0]['task'], 'utils')
+        self.assertEqual(r2['tasks'][0]['calls'], 2)
+        self.assertEqual(r2['tasks'][0]['success'], 1)
+        self.assertEqual(r2['cards']['calls_today'], 2)
+        self.assertEqual(r2['cards']['success_rate'], 50.0)
         self.assertIn('events', await self.p.webui_events(10))
 
     async def test_comic_resend_and_delete_guards(self):

@@ -69,6 +69,11 @@
     .share-track { flex: 1; background: var(--soft); border-radius: 4px; height: 8px; overflow: hidden; }
     .share-bar { height: 8px; background: var(--accent); border-radius: 4px; }
     .share-val { font-size: 12px; color: var(--muted); min-width: 70px; text-align: right; }
+    .shares { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 12px; }
+    .bar-fill.stack { background: transparent; display: flex; flex-direction: column; }
+    .bar-seg { width: 100%; }
+    .bar-seg.p { background: var(--accent); }
+    .bar-seg.c { background: var(--muted); }
     .tasks { max-height: 320px; overflow-y: auto; margin-top: 12px; }
     .task { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 8px 0; }
     .task-copy { min-width: 0; overflow-wrap: anywhere; }
@@ -110,13 +115,25 @@
         <div class="stat"><dt>区间总 Token</dt><dd id="tok-total">—</dd></div>
         <div class="stat"><dt>输入 / 输出</dt><dd id="tok-io">—</dd></div>
         <div class="stat"><dt>LLM 调用次数</dt><dd id="tok-calls">—</dd></div>
+        <div class="stat"><dt>今日调用成功率</dt><dd id="tok-rate">—</dd></div>
+        <div class="stat"><dt>今日平均耗时</dt><dd id="tok-avg">—</dd></div>
+        <div class="stat"><dt>今日活跃群</dt><dd id="tok-groups">—</dd></div>
       </dl>
+      <div class="buttons" role="group" aria-label="趋势视图切换">
+        <button id="trend-token" type="button" class="primary">Token 量</button>
+        <button id="trend-calls" type="button">调用次数</button>
+        <button id="trend-table" type="button">表格</button>
+      </div>
       <div id="token-chart" class="chart" role="img" aria-label="Token 消耗柱状图，等待数据"></div>
-      <div class="fields">
+      <div id="token-table" class="table-wrap" hidden></div>
+      <div class="shares">
         <div><h3>模型占比</h3><div id="model-share"></div></div>
         <div><h3>任务 / 模块占比</h3><div id="module-share"></div></div>
+        <div><h3>服务商占比</h3><div id="provider-share"></div></div>
       </div>
-      <p class="hint">Token 数据来自宿主本机统计（statistics_model_hourly），覆盖全宿主 LLM 调用；宿主未提供时本节显示不可用。</p>
+      <h3>今日按任务 Token 明细（本插件调用账本）</h3>
+      <div id="task-table" class="table-wrap"></div>
+      <p class="hint">趋势 / 占比来自宿主本机统计（statistics_model_hourly，覆盖全宿主）；明细 / 成功率 / 耗时来自本插件自记调用账本（llm_usage.json，保留 30 天）。宿主未提供时趋势降级为不可用。</p>
     </section>
 
     <section class="panel" aria-labelledby="timeline-title">
@@ -137,7 +154,7 @@
     'use strict';
     (() => {
       const $ = id => document.getElementById(id);
-      const state = { ready: false, disposed: false, busy: false };
+      const state = { ready: false, disposed: false, busy: false, tokenMode: 'token', tokenData: null };
       let bridge;
       let queue = Promise.resolve();
       const text = (v, limit = 200) => {
@@ -217,17 +234,90 @@
         }) : [element('p', '暂无数据', 'muted')]));
       }
 
+      function renderTrend() {
+        const r = state.tokenData;
+        const mode = state.tokenMode;
+        $('trend-token').classList.toggle('primary', mode === 'token');
+        $('trend-calls').classList.toggle('primary', mode === 'calls');
+        $('trend-table').classList.toggle('primary', mode === 'table');
+        const chart = $('token-chart'), table = $('token-table');
+        if (!r || !r.trend) { chart.replaceChildren(element('p', '宿主未提供 Token 统计。', 'muted')); table.hidden = true; return; }
+        const t = r.trend, ts = t.timestamps || [];
+        if (mode === 'table') {
+          chart.hidden = true; table.hidden = false;
+          const tb = element('table');
+          const head = element('tr');
+          ['日期', '输入', '输出', '总 Token', '调用'].forEach(h => head.append(element('th', h)));
+          tb.append(head);
+          ts.forEach((day, i) => {
+            const tr = element('tr');
+            tr.append(element('td', day), element('td', Math.round(Number(t.prompt[i]) || 0).toLocaleString()),
+              element('td', Math.round(Number(t.completion[i]) || 0).toLocaleString()),
+              element('td', Math.round(Number(t.total[i]) || 0).toLocaleString()),
+              element('td', Math.round(Number(t.requests[i]) || 0).toLocaleString()));
+            tb.append(tr);
+          });
+          table.replaceChildren(tb);
+          return;
+        }
+        chart.hidden = false; table.hidden = true;
+        const vals = mode === 'calls' ? (t.requests || []) : (t.total || []);
+        const max = Math.max(1, ...vals.map(v => Number(v) || 0));
+        chart.replaceChildren(...(ts.length ? ts.map((day, i) => {
+          const bar = element('div', undefined, 'bar');
+          bar.append(element('span', Math.round(Number(vals[i]) || 0).toLocaleString(), 'bar-value'));
+          const fill = element('div', undefined, 'bar-fill' + (mode === 'token' ? ' stack' : ''));
+          fill.style.height = Math.max(2, Math.round((Number(vals[i]) || 0) / max * 100)) + '%';
+          if (mode === 'token') {
+            const tot = Number(t.total[i]) || 0;
+            const c = element('div', undefined, 'bar-seg c');
+            c.style.height = (tot ? (Number(t.completion[i]) || 0) / tot * 100 : 0) + '%';
+            const p = element('div', undefined, 'bar-seg p');
+            p.style.height = (tot ? (Number(t.prompt[i]) || 0) / tot * 100 : 0) + '%';
+            fill.append(c, p);
+          }
+          bar.append(fill);
+          bar.append(element('span', String(day).slice(5, 10), 'bar-day'));
+          return bar;
+        }) : [element('p', '暂无数据', 'muted')]));
+        chart.setAttribute('aria-label', mode === 'calls' ? '调用次数柱状图' : 'Token 消耗堆叠柱状图（输入+输出）');
+      }
+
+      function renderTaskTable(tasks) {
+        const rows = Array.isArray(tasks) ? tasks : [];
+        const tb = element('table');
+        const head = element('tr');
+        ['来源 / 任务', '调用 (成功)', 'Prompt', 'Completion', '总 Token', '平均耗时'].forEach(h => head.append(element('th', h)));
+        tb.append(head);
+        for (const t of rows) {
+          const tr = element('tr');
+          tr.append(element('td', `plugin/${t.task}`), element('td', `${t.calls} (${t.success})`),
+            element('td', (t.prompt || 0).toLocaleString()), element('td', (t.completion || 0).toLocaleString()),
+            element('td', (t.total || 0).toLocaleString()),
+            element('td', t.calls ? Math.round(t.ms / t.calls) + ' ms' : '—'));
+          tb.append(tr);
+        }
+        $('task-table').replaceChildren(...(rows.length ? [tb] : [element('p', '今日本插件暂无 LLM 调用记录。', 'empty')]));
+      }
+
       async function loadToken() {
         if (!state.ready || state.disposed) return;
         const range = Number($('range').value) || 7;
         try {
           const r = await call('query', 'token_stats', { range_days: range });
           if (state.disposed) return;
+          state.tokenData = r;
+          const cards = (r && r.cards) || {};
+          $('tok-rate').textContent = cards.success_rate === null || cards.success_rate === undefined ? '—' : cards.success_rate + '%';
+          $('tok-avg').textContent = cards.avg_ms ? cards.avg_ms + ' ms' : '—';
+          $('tok-groups').textContent = text(cards.active_groups);
+          renderTaskTable(r && r.tasks);
+          renderShare($('provider-share'), r && r.provider_pie);
           if (!r || r.available !== true || !r.trend) {
-            $('token-state').textContent = '宿主统计不可用';
+            $('token-state').textContent = '宿主统计不可用（明细仍可用）';
             $('tok-total').textContent = '—'; $('tok-io').textContent = '—'; $('tok-calls').textContent = '—';
-            $('token-chart').replaceChildren(element('p', '宿主未提供 Token 统计。', 'muted'));
             renderShare($('model-share'), []); renderShare($('module-share'), []);
+            renderTrend();
             return;
           }
           $('token-state').textContent = `近 ${range} 天 · 宿主本机统计`;
@@ -236,19 +326,9 @@
           $('tok-total').textContent = Math.round(Number(t.sum_total) || sum(t.total)).toLocaleString();
           $('tok-io').textContent = `${Math.round(sum(t.prompt)).toLocaleString()} / ${Math.round(sum(t.completion)).toLocaleString()}`;
           $('tok-calls').textContent = Math.round(sum(t.requests)).toLocaleString();
-          const ts = t.timestamps || [], totals = t.total || [];
-          const max = Math.max(1, ...totals.map(v => Number(v) || 0));
-          $('token-chart').replaceChildren(...(ts.length ? ts.map((day, i) => {
-            const bar = element('div', undefined, 'bar');
-            bar.append(element('span', Math.round(Number(totals[i]) || 0).toLocaleString(), 'bar-value'));
-            const fill = element('div', undefined, 'bar-fill');
-            fill.style.height = Math.max(2, Math.round((Number(totals[i]) || 0) / max * 100)) + '%';
-            bar.append(fill);
-            bar.append(element('span', String(day).slice(5, 10), 'bar-day'));
-            return bar;
-          }) : [element('p', '暂无数据', 'muted')]));
           renderShare($('model-share'), r.model_pie);
           renderShare($('module-share'), r.module_pie);
+          renderTrend();
         } catch (e) { $('token-state').textContent = 'Token 统计刷新失败'; }
       }
 
@@ -352,6 +432,9 @@
       }
 
       $('range').addEventListener('change', () => { void loadStats(); void loadToken(); });
+      $('trend-token').addEventListener('click', () => { state.tokenMode = 'token'; renderTrend(); });
+      $('trend-calls').addEventListener('click', () => { state.tokenMode = 'calls'; renderTrend(); });
+      $('trend-table').addEventListener('click', () => { state.tokenMode = 'table'; renderTrend(); });
       $('refresh-stats').addEventListener('click', () => { void loadStats(); void loadToken(); });
       $('refresh-events').addEventListener('click', () => { void loadEvents(); });
       $('refresh-storage').addEventListener('click', () => { void loadStorage(); });

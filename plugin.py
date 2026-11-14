@@ -1691,10 +1691,12 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 kwargs["max_tokens"] = min(base_tokens * (2 ** attempt), 32768)
                 if self._llm_sem is None:
                     self._llm_sem = asyncio.Semaphore(2)
+                a0 = time.monotonic()
                 async with self._llm_sem:  # 全局并发闸门（对齐原版 GlobalRateLimiter）
                     resp = await self.ctx.call_capability(
                         "llm.generate", timeout_ms=acfg.llm_timeout_ms, **kwargs
                     )
+                self._record_llm_usage(resp, model_task or "auto", time.monotonic() - a0)
                 if isinstance(resp, dict) and resp.get("success"):
                     last_output = str(resp.get("response") or "")
                     reasoning = str(resp.get("reasoning") or "")
@@ -4282,30 +4284,81 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 "days": [{"day": day, "messages": messages[day], "reports": reports[day]} for day in days],
                 "total_messages": sum(messages.values()), "total_reports": sum(reports.values())}
 
+    def _load_llm_usage(self) -> list[dict]:
+        try:
+            data = json.loads((Path(self.ctx.paths.data_dir) / "llm_usage.json").read_text(encoding="utf-8"))
+            return [r for r in data if isinstance(r, dict)] if isinstance(data, list) else []
+        except (OSError, ValueError):
+            return []
+
+    def _record_llm_usage(self, resp, task: str, seconds: float) -> None:
+        if not isinstance(resp, dict):
+            return
+        entry = {"ts": datetime.now().isoformat(timespec="seconds"), "source": "plugin",
+                 "task": task or "auto", "model": str(resp.get("model_name") or ""),
+                 "prompt_tokens": int(resp.get("prompt_tokens") or 0),
+                 "completion_tokens": int(resp.get("completion_tokens") or 0),
+                 "total_tokens": int(resp.get("total_tokens") or 0),
+                 "success": bool(resp.get("success")), "ms": int(seconds * 1000)}
+        try:
+            rows = self._load_llm_usage()
+            rows.append(entry)
+            cutoff = (datetime.now() - timedelta(days=30)).isoformat(timespec="seconds")
+            rows = [r for r in rows if str(r.get("ts") or "") >= cutoff][-2000:]
+            path = Path(self.ctx.paths.data_dir) / "llm_usage.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+
     @API("token_stats", version="1")
     async def webui_token_stats(self, range_days: int = 7) -> dict:
         range_days = max(1, min(int(range_days), 30))
-        out = {"available": False, "range_days": range_days, "trend": None, "model_pie": [], "module_pie": []}
+        out = {"available": False, "range_days": range_days, "trend": None,
+               "model_pie": [], "module_pie": [], "provider_pie": [], "tasks": [], "cards": {}}
         try:
             trend = await self.ctx.call_capability("statistics.local.token_trend", days=range_days, bucket="day")
             dist_model = await self.ctx.call_capability("statistics.local.token_distribution", days=range_days, group_by="model")
             dist_module = await self.ctx.call_capability("statistics.local.token_distribution", days=range_days, group_by="module")
+            dist_provider = await self.ctx.call_capability("statistics.local.token_distribution", days=range_days, group_by="provider")
         except Exception as exc:
             self.ctx.logger.warning("[stats] 宿主统计能力不可用: %s", type(exc).__name__)
-            return out
-        if not (isinstance(trend, dict) and trend.get("success")):
-            return out
-        series = trend.get("series") or {}
-        vb = series.get("values_by_key") or {}
-        out["available"] = True
-        out["trend"] = {"timestamps": series.get("timestamps") or [],
-                        "total": vb.get("total_tokens") or [], "prompt": vb.get("prompt_tokens") or [],
-                        "completion": vb.get("completion_tokens") or [], "requests": vb.get("request_count") or [],
-                        "sum_total": series.get("total") or 0}
-        for key, dist in (("model_pie", dist_model), ("module_pie", dist_module)):
-            if isinstance(dist, dict) and dist.get("success"):
-                pies = (dist.get("distribution") or {}).get("pies") or []
-                out[key] = (pies[0].get("data") if pies else []) or []
+            trend = None
+        if isinstance(trend, dict) and trend.get("success"):
+            series = trend.get("series") or {}
+            vb = series.get("values_by_key") or {}
+            out["available"] = True
+            out["trend"] = {"timestamps": series.get("timestamps") or [],
+                            "total": vb.get("total_tokens") or [], "prompt": vb.get("prompt_tokens") or [],
+                            "completion": vb.get("completion_tokens") or [], "requests": vb.get("request_count") or [],
+                            "sum_total": series.get("total") or 0}
+            for key, dist in (("model_pie", dist_model), ("module_pie", dist_module), ("provider_pie", dist_provider)):
+                if isinstance(dist, dict) and dist.get("success"):
+                    pies = (dist.get("distribution") or {}).get("pies") or []
+                    out[key] = (pies[0].get("data") if pies else []) or []
+        rows = await asyncio.to_thread(self._load_llm_usage)
+        today = date.today().isoformat()
+        todays = [r for r in rows if str(r.get("ts") or "").startswith(today)]
+        bytask: dict[str, dict] = {}
+        for r in todays:
+            t = bytask.setdefault(str(r.get("task") or "auto"),
+                                  {"task": str(r.get("task") or "auto"), "calls": 0, "success": 0,
+                                   "prompt": 0, "completion": 0, "total": 0, "ms": 0})
+            t["calls"] += 1
+            t["success"] += 1 if r.get("success") else 0
+            t["prompt"] += int(r.get("prompt_tokens") or 0)
+            t["completion"] += int(r.get("completion_tokens") or 0)
+            t["total"] += int(r.get("total_tokens") or 0)
+            t["ms"] += int(r.get("ms") or 0)
+        out["tasks"] = sorted(bytask.values(), key=lambda t: -t["total"])
+        calls = len(todays)
+        succ = sum(1 for r in todays if r.get("success"))
+        active = sum(1 for c in self._stats.get("chats", {}).values()
+                     if isinstance(c, dict) and today in (c.get("days") or {}))
+        out["cards"] = {"calls_today": calls, "success_today": succ,
+                        "success_rate": round(succ / calls * 100, 1) if calls else None,
+                        "avg_ms": int(sum(int(r.get("ms") or 0) for r in todays) / calls) if calls else 0,
+                        "active_groups": active}
         return out
 
     @API("events", version="1")

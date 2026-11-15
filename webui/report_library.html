@@ -112,6 +112,12 @@
         <button id="generate" class="primary" type="button" data-mutation disabled>立即生成</button>
       </div>
       <p class="hint">日期留空为今天（以服务器日期为准）；当日重建使用滚动24小时，历史日期仅用既有统计，不补造历史。生成会消耗模型额度并发送到所选群。</p>
+      <div class="section-heading"><h3>报告参数</h3><span class="muted">与插件设置页双向同步</span></div>
+      <div class="fields">
+        <label>默认日报主题<select id="cfg-theme" disabled></select></label>
+        <label>按群指定主题<textarea id="cfg-theme-map" rows="2" maxlength="4000" placeholder="每行 群号=主题key" disabled></textarea></label>
+      </div>
+      <p class="hint">按群主题每行「群号=主题key」（如 123456789=hack），优先于默认主题；主题 key 见上方「报告主题」下拉。改完即写回插件设置并热生效。</p>
     </section>
 
     <section class="panel" aria-labelledby="tasks-title">
@@ -240,6 +246,7 @@
         const locked = !state.ready || state.actionBusy;
         for (const id of ['generate-group', 'generate-day', 'generate-theme', 'filter-group', 'filter-search', 'filter-type', 'filter-sort', 'date-from', 'date-to', 'apply-filter', 'refresh', 'gallery-link', 'stats-link']) $(id).disabled = locked;
         $('rerender-theme').disabled = locked || $('rerender').dataset.invalid === 'true';
+        syncReportParamsControls();
         for (const button of document.querySelectorAll('[data-mutation]')) {
           const busy = button.dataset.action !== 'cancel' && state.busyGroups.has(button.dataset.group);
           button.disabled = locked || button.dataset.invalid === 'true' || busy;
@@ -250,6 +257,26 @@
         $('next').disabled = locked || state.page >= state.pages;
         $('page-label').textContent = `第 ${state.page} / ${state.pages} 页`;
       }
+
+      function renderReportParams(view) {
+        const theme = $('cfg-theme');
+        if (document.activeElement !== theme) {
+          const wanted = typeof view.daily_theme === 'string' ? view.daily_theme : '';
+          theme.replaceChildren(...themeEntries.filter(item => object(item) && item.key).map(item => new Option(item.label, item.key)));
+          theme.value = [...theme.options].some(option => option.value === wanted) ? wanted : '';
+        }
+        if (document.activeElement !== $('cfg-theme-map')) $('cfg-theme-map').value = typeof view.theme_by_group === 'string' ? view.theme_by_group : '';
+        syncReportParamsControls();
+      }
+
+      function syncReportParamsControls() {
+        const locked = !state.ready || state.actionBusy;
+        for (const id of ['cfg-theme', 'cfg-theme-map']) $(id).disabled = locked;
+      }
+
+      const saveParam = (label, key, value) => { void performAction('config_save', { section: 'report', key, value }, label); };
+      $('cfg-theme').addEventListener('change', () => saveParam('保存默认日报主题', 'daily_theme', $('cfg-theme').value));
+      $('cfg-theme-map').addEventListener('change', () => saveParam('保存按群指定主题', 'theme_by_group', $('cfg-theme-map').value.trim()));
 
       function replaceOptions(select, entries, placeholder, valueKey, labelKey) {
         const selected = select.value;
@@ -301,8 +328,8 @@
 
       async function performAction(name, args, label) {
         if (!state.ready || state.disposed || state.actionBusy) return;
-        if (!validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
-        if ((name === 'rerun' || name === 'delete') && !validRevision(args.revision)) { notice('存档版本缺失，请刷新列表后重试。', true); return; }
+        if (name !== 'config_save' && !validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
+        if ((name === 'rerun' || name === 'delete') && !validRevision(args.revision)) { notice('存档版本缺失，请刷新后重试。', true); return; }
         if (name === 'rerender' && !themeEntries.some(entry => object(entry) && entry.key === args.theme)) { notice('请选择有效的重绘主题。', true); return; }
         state.actionBusy = true;
         syncControls();
@@ -313,7 +340,9 @@
           const result = await call('action', name, args);
           if (state.disposed) return;
           if (!object(result)) throw new Error('操作响应格式不正确');
-          if (name === 'delete') {
+          if (name === 'config_save') {
+            notice(result.saved === true ? text(result.message || '已保存。') : `未保存：${text(result.message)}`, result.saved !== true);
+          } else if (name === 'delete') {
             deleted = result.deleted === true;
             notice(deleted ? '已删除所选报告存档，群消息未受影响。' : '报告未删除，可能已更新或不存在；请刷新后重试。', !deleted);
             if (deleted) closeModal();
@@ -381,6 +410,7 @@
           renderGroups();
           themeEntries = Array.isArray(result.themes) ? result.themes : [];
           replaceOptions($('generate-theme'), themeEntries, '默认主题', 'key', 'label');
+          renderReportParams(object(result.config_view) ? result.config_view : {});
           $('active-count').textContent = `活跃任务：${text(result.active_count)}`;
           $('task-status').textContent = `${text(result.status)} · 更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
           $('task-progress').value = typeof result.progress === 'number' && Number.isFinite(result.progress) ? Math.max(0, Math.min(100, result.progress)) : 0;

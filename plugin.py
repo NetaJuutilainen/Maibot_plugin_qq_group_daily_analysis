@@ -683,6 +683,11 @@ class ComicSectionConfig(PluginConfigBase):
     comic_caption: str = Field(default="🎨 今日群聊漫画出炉～", description="漫画图片前的提示文字（留空则只发图）")
     album_upload_enabled: bool = Field(default=False, description="漫画发送成功后自动上传到 QQ 群相册（与日报相册开关相互独立；NapCat / SnowLuma 均支持）")
     album_name: str = Field(default="", description="漫画目标群相册名称；留空=跟随日报相册设置（按群指定/默认相册名），严格模式沿用相册设置")
+    album_name_by_group: str = Field(
+        default="",
+        description="漫画按群指定相册名，每行「群号=相册名」；优先于漫画相册名，两者都留空跟随日报相册设置",
+        json_schema_extra={"rows": 4, "placeholder": "123456789=漫画"},
+    )
     groups: str = Field(default="", description="自动联动群列表，每行一个群号；留空=不自动联动", json_schema_extra={"rows": 4})
     llm_model_task: str = Field(default="", description="分镜脚本用模型任务（留空跟随分析设置的默认任务）")
 
@@ -1154,8 +1159,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     _CONFIG_EDITABLE: ClassVar[dict[str, frozenset]] = {
         "comic": frozenset({"storyboard_panels", "comic_caption", "max_wait_seconds",
-                            "album_upload_enabled", "album_name"}),
-        "report": frozenset({"daily_theme"}),
+                            "album_upload_enabled", "album_name_by_group"}),
+        "report": frozenset({"daily_theme", "theme_by_group"}),
     }
 
     def _persist_config_toml(self, section: str, new_cfg) -> None:
@@ -1223,6 +1228,14 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     def _eff_storyboard_panels(self, style_key: str) -> int:
         """分镜数：0=跟随风格预设，1-9=固定格数（配置 storyboard_panels）。"""
         return _effective_panels(style_key, int(self._comic_cfg().storyboard_panels or 0))
+
+    def _comic_album_name_for(self, group_id: str) -> str:
+        """漫画相册名解析：按群指定 > 漫画全局 > 空（空=沿用日报相册解析链）。"""
+        cfg = self._comic_cfg()
+        mapped = str(self._parse_group_map(getattr(cfg, "album_name_by_group", "")).get(str(group_id or "")) or "").strip()
+        if mapped:
+            return mapped
+        return str(cfg.album_name or "").strip()
 
     def _pick_comic_style(self, group_id: str) -> str:
         fixed = self._fixed_style_for(group_id)
@@ -1476,6 +1489,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "comic_caption": {"label": "漫画提示文字", "ui_type": "text", "hint": "漫画图片前附带；留空则只发图"},
             "album_upload_enabled": {"label": "漫画发送后上传群相册", "ui_type": "switch", "hint": "与日报相册开关独立；仅发送成功后上传，失败不影响已发出的漫画"},
             "album_name": {"label": "漫画相册名称", "ui_type": "text", "hint": "留空=跟随日报相册设置；严格模式沿用相册设置"},
+            "album_name_by_group": {"label": "漫画按群指定相册", "ui_type": "textarea", "rows": 4, "hint": "每行「群号=相册名」，优先于漫画相册名；两者留空跟随日报相册设置"},
             "groups": {"label": "自动联动群列表", "ui_type": "textarea", "rows": 4, "hint": "每行一个群号；留空=不自动联动"},
             "llm_model_task": {"label": "分镜模型任务", "ui_type": "select", "choices": [], "hint": "留空跟随分析设置的默认任务"},
             },
@@ -3283,6 +3297,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "groups": [{"group_id": gid, "group_name": str(chat.get("name") or gid)[:200]}
                        for gid, chat in sorted(best.items())][:100],
             "themes": [{"key": key, "label": value["label"]} for key, value in THEME_REGISTRY.items()],
+            "config_view": {"daily_theme": str(self.config.report.daily_theme),
+                            "theme_by_group": str(self.config.report.theme_by_group or "")},
         }
 
     @API("reports", version="1")
@@ -3558,13 +3574,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "prefs": {"style_rotation": self._eff_rotation()[0], "rotation_scope": self._eff_rotation()[1],
                       "daily_random_character": self._eff_daily_random()},
             "style_by_group": self._style_by_group(),
-            "themes": [{"key": key, "label": value["label"]} for key, value in THEME_REGISTRY.items()],
             "config_view": {"storyboard_panels": int(ccfg.storyboard_panels or 0),
                             "comic_caption": ccfg.comic_caption,
                             "max_wait_seconds": int(ccfg.max_wait_seconds or 300),
                             "album_upload_enabled": bool(ccfg.album_upload_enabled),
-                            "album_name": ccfg.album_name,
-                            "daily_theme": str(self.config.report.daily_theme)},
+                            "album_name_by_group": ccfg.album_name_by_group},
             "use_reference_images": bool(ccfg.use_reference_images),
             "total": listing["total"], "today_count": daily["total"],
             "groups": [{"group_id": gid, "group_name": str(chat.get("name") or gid)[:200]}
@@ -3971,7 +3985,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 await self._upload_report_to_album(
                     stream_id, group_id, base64.b64encode(blob).decode("ascii"),
                     stem=self._album_file_stem(stream_id, "漫画", day),
-                    album_name_override=ccfg.album_name, enabled=ccfg.album_upload_enabled)
+                    album_name_override=self._comic_album_name_for(group_id), enabled=ccfg.album_upload_enabled)
             except Exception as exc:
                 self.ctx.logger.warning("[comic] 群相册上传异常: %s", exc)
             return "ok"

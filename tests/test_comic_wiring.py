@@ -463,6 +463,16 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await self.p.webui_config_save('comic', 'storyboard_panels', '0'))['saved'])
         self.assertEqual(self.p._eff_storyboard_panels('ukiyoe'), 1)
         self.assertEqual(self.p._eff_storyboard_panels('four_panel'), 4)
+        # 漫画相册条目式：全局 album_name 退出 WebUI 白名单，按群映射生效
+        self.assertFalse((await self.p.webui_config_save('comic', 'album_name', 'x'))['saved'])
+        self.assertTrue((await self.p.webui_config_save('comic', 'album_name_by_group', '123=漫画'))['saved'])
+        self.assertEqual(self.p._comic_album_name_for('123'), '漫画')
+        self.assertEqual(self.p._comic_album_name_for('456'), '')
+        # 报告参数：theme_by_group 回写并在 overview 暴露
+        self.assertTrue((await self.p.webui_config_save('report', 'theme_by_group', '123=hack'))['saved'])
+        overview = await self.p.webui_overview()
+        self.assertEqual(overview['config_view']['theme_by_group'], '123=hack')
+        self.assertEqual(overview['config_view']['daily_theme'], 'hack')
 
     async def test_token_stats_and_events(self):
         billed = [

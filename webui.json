@@ -294,6 +294,15 @@
             "style": {"type": "string", "max_length": 32}
           }
         },
+        "config_save": {
+          "api": "config_save",
+          "version": "1",
+          "parameters": {
+            "section": {"type": "string", "required": true, "max_length": 32},
+            "key": {"type": "string", "required": true, "max_length": 64},
+            "value": {"type": "string", "max_length": 4000}
+          }
+        },
         "cancel": {
           "api": "cancel",
           "version": "1",

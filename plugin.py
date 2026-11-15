@@ -14,7 +14,9 @@ import time
 import urllib.request
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Literal, cast
+from typing import Any, ClassVar, Dict, Literal, cast, get_args, get_origin
+
+import math
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from maibot_sdk import API, Command, Field, HookHandler, MaiBotPlugin, PluginConfigBase, Tool
@@ -23,9 +25,83 @@ from maibot_sdk.types import HookMode
 from .comic import (
     COMIC_STYLES, DRAWPIC_PLUGIN_ID, RECOVERABLE_STATUSES, ComicRequestBook, DrawpicClient,
     DrawpicError, build_draw_prompt, new_request_id, normalize_storyboard, storyboard_prompt,
+    _effective_panels,
 )
 from .job_manager import JobManager
 from .report_store import ReportStore
+
+
+def _config_scalar_type(annotation: Any) -> str:
+    """配置字段标量类型标签（bool/int/float/str，str 版 Literal 收敛为 str）；非标量返回空串即不可编辑。"""
+    if get_origin(annotation) is Literal:
+        args = get_args(annotation)
+        return "str" if all(isinstance(item, str) for item in args) else ""
+    if annotation is bool:
+        return "bool"
+    if annotation is int:
+        return "int"
+    if annotation is float:
+        return "float"
+    if annotation is str:
+        return "str"
+    return ""
+
+
+def _coerce_config_value(annotation: Any, raw: str) -> tuple[bool, Any]:
+    """把 WebUI 输入的字符串按字段类型强转；(False, 错误信息) 表示拒绝本次修改。"""
+    kind = _config_scalar_type(annotation)
+    text = str(raw).strip()
+    if not kind:
+        return False, "不支持的配置类型"
+    if kind == "bool":
+        lowered = text.lower()
+        if lowered in {"true", "1", "on", "yes", "开", "开启"}:
+            return True, True
+        if lowered in {"false", "0", "off", "no", "关", "关闭"}:
+            return True, False
+        return False, f"布尔值只接受 开启/关闭 或 true/false，收到 {text!r}"
+    if kind == "int":
+        try:
+            return True, int(text)
+        except ValueError:
+            return False, f"需要整数，收到 {text!r}"
+    if kind == "float":
+        try:
+            value = float(text)
+        except ValueError:
+            return False, f"需要数字，收到 {text!r}"
+        if not math.isfinite(value):
+            return False, "数字必须有限"
+        return True, value
+    choices = get_args(annotation) if get_origin(annotation) is Literal else ()
+    if choices and text not in choices:
+        return False, f"取值只能是 {'/'.join(str(item) for item in choices)}，收到 {text!r}"
+    return True, text
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _toml_dump(data: dict[str, Any]) -> str:
+    """最小 TOML 序列化，仅作 tomlkit 缺席时的退化路径（丢弃注释，只写标量与标量列表）。"""
+    lines: list[str] = []
+    for sec_name, sec_data in data.items():
+        if not isinstance(sec_data, dict):
+            continue
+        lines.append(f"\n[{sec_name}]")
+        for key_name, key_value in sec_data.items():
+            if isinstance(key_value, dict):
+                continue
+            if isinstance(key_value, list) and any(isinstance(item, (dict, list)) for item in key_value):
+                continue
+            lines.append(f"{key_name} = {_toml_value(key_value)}")
+    return "\n".join(lines) + "\n"
 
 FONT_MIRROR = "https://tc.ciallo.ccwu.cc"
 DAILY_SAMPLE_MAX = 1000
@@ -596,6 +672,8 @@ class ComicSectionConfig(PluginConfigBase):
     style_rotation: str = Field(default="off", description="风格轮换：off=固定默认 / sequential=顺序循环 / random=每次随机 / shuffle=洗牌一轮不重复")
     rotation_styles: str = Field(default="", description="参与轮换的风格 key，每行一个；留空=全部内置风格", json_schema_extra={"rows": 3})
     rotation_scope: str = Field(default="global", description="轮换进度范围：global=全局共享一份进度 / group=按群独立进度")
+    storyboard_panels: int = Field(default=5, ge=0, le=9,
+                                   description="漫画分镜数：0=跟随风格预设（单幅1格/四格类4格）；1-9=固定格数（5=纵向五格条漫，6=2×3，9=九宫格）")
     active_character: str = Field(default="", description="当前漫画角色方案 id（留空=不用角色方案，沿用全局参考图）；在漫画廊管理")
     daily_random_character: bool = Field(default=False, description="每日随机角色：当天首次生成时随机选一个角色方案并固定一整天")
     drawpic_style: str = Field(default="", description="传给麦麦绘图的风格预设名（留空=绘图插件当前默认风格）")
@@ -681,6 +759,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         self._jobs = JobManager(self._spawn, self.ctx.logger)
         self._comic_book = ComicRequestBook(Path(self.ctx.paths.data_dir) / "comic_requests.json")
         self._drawpic_probe = None
+        self._config_save_lock = asyncio.Lock()
+        self._config_toml_path = ""
         self._stats = self._load_stats()
         self._stats_loaded = True
         try:
@@ -1072,6 +1152,65 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         self._save_comic_prefs(prefs)
         return {"saved": True, "message": f"已{'固定' if style else '恢复跟随全局'}：{gid}"}
 
+    _CONFIG_EDITABLE: ClassVar[dict[str, frozenset]] = {
+        "comic": frozenset({"storyboard_panels", "comic_caption", "max_wait_seconds",
+                            "album_upload_enabled", "album_name"}),
+        "report": frozenset({"daily_theme"}),
+    }
+
+    def _persist_config_toml(self, section: str, new_cfg) -> None:
+        """把修改后的配置写回插件 config.toml；优先 tomlkit 保留注释，缺库时退化重写（麦生活同款语义）。"""
+        path = Path(self._config_toml_path) if self._config_toml_path else Path(__file__).resolve().parent / "config.toml"
+        section_data = new_cfg.model_dump(mode="python").get(section) or {}
+        scalars = {key: value for key, value in section_data.items()
+                   if not isinstance(value, dict)
+                   and not (isinstance(value, list) and any(isinstance(item, (dict, list)) for item in value))}
+        try:
+            import tomlkit
+        except ImportError:
+            path.write_text(_toml_dump(new_cfg.model_dump(mode="python")), encoding="utf-8")
+            return
+        document = tomlkit.parse(path.read_text(encoding="utf-8")) if path.exists() else tomlkit.document()
+        table = document.get(section)
+        if not isinstance(table, tomlkit.items.Table):
+            table = tomlkit.table()
+            document[section] = table
+        for key_name, key_value in scalars.items():
+            table[key_name] = key_value
+        path.write_text(tomlkit.dumps(document), encoding="utf-8")
+
+    @API("config_save", version="1")
+    async def webui_config_save(self, section: str, key: str, value: str) -> dict:
+        """WebUI 配置单键回写：白名单 → 字符串强转 → 全模型校验 → 落盘 config.toml → 热生效。
+
+        与插件设置页读写同一份 config.toml，两边实时同步；宿主监听 config 变更走热更新不重启 Runner。
+        """
+        section = str(section or "").strip()
+        key = str(key or "").strip()
+        if key not in self._CONFIG_EDITABLE.get(section, frozenset()):
+            return {"saved": False, "message": f"不可编辑的配置项: {section}.{key}"}
+        config_class = type(self).get_config_model()
+        info = config_class.model_fields.get(section) if config_class else None
+        section_model = info.annotation if info is not None else None
+        if not (isinstance(section_model, type) and issubclass(section_model, PluginConfigBase)) \
+                or key not in section_model.model_fields:
+            return {"saved": False, "message": f"未知或不可编辑的配置项: {section}.{key}"}
+        ok, coerced = _coerce_config_value(section_model.model_fields[key].annotation, str(value))
+        if not ok:
+            return {"saved": False, "message": f"{section}.{key}: {coerced}"}
+        draft = self.config.model_dump(mode="python")
+        draft[section][key] = coerced
+        try:
+            new_cfg = config_class.model_validate(draft)
+        except Exception as exc:
+            return {"saved": False, "message": f"配置校验未通过: {str(exc)[:160]}"}
+        async with self._config_save_lock:
+            self._persist_config_toml(section, new_cfg)
+            self.set_plugin_config(new_cfg.model_dump(mode="python"))
+        await self.on_config_update("self", self._plugin_config_data or {}, str(new_cfg.plugin.config_version))
+        self.ctx.logger.info("[weekly] WebUI 配置修改 %s.%s -> %r", section, key, coerced)
+        return {"saved": True, "message": f"已保存 {section}.{key}（设置页同步可见）"}
+
     def _style_by_group(self) -> dict:
         data = self._comic_prefs().get("style_by_group")
         return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
@@ -1080,6 +1219,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         """按群固定风格（WebUI「按群风格策略」）；未设置或风格已失效返回空串，走全局轮换。"""
         style = self._style_by_group().get(str(group_id or ""), "")
         return style if style in COMIC_STYLES else ""
+
+    def _eff_storyboard_panels(self, style_key: str) -> int:
+        """分镜数：0=跟随风格预设，1-9=固定格数（配置 storyboard_panels）。"""
+        return _effective_panels(style_key, int(self._comic_cfg().storyboard_panels or 0))
 
     def _pick_comic_style(self, group_id: str) -> str:
         fixed = self._fixed_style_for(group_id)
@@ -1328,6 +1471,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "drawpic_style": {"label": "绘图风格预设名", "ui_type": "text", "hint": "麦麦绘图工作台里的预设名；留空用其当前默认风格"},
             "model": {"label": "绘图模型完整名", "ui_type": "text", "hint": "格式「实例名 / 模型名」；留空用绘图插件默认模型"},
             "max_wait_seconds": {"label": "等待绘图上限（秒）", "ui_type": "number", "min": 60, "max": 3600, "hint": "超时不丢进度，可在漫画廊点「恢复进度」继续"},
+            "storyboard_panels": {"label": "漫画分镜数", "ui_type": "select", "choices": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], "hint": "0=跟随风格预设；5=纵向五格条漫；9=九宫格。WebUI 漫画页「漫画参数」可改并双向同步"},
             "use_reference_images": {"label": "附带参考图", "ui_type": "switch", "hint": "在漫画廊上传角色/画风参考图，最多 4 张；绘图时一并传给麦麦绘图"},
             "comic_caption": {"label": "漫画提示文字", "ui_type": "text", "hint": "漫画图片前附带；留空则只发图"},
             "album_upload_enabled": {"label": "漫画发送后上传群相册", "ui_type": "switch", "hint": "与日报相册开关独立；仅发送成功后上传，失败不影响已发出的漫画"},
@@ -3414,6 +3558,13 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "prefs": {"style_rotation": self._eff_rotation()[0], "rotation_scope": self._eff_rotation()[1],
                       "daily_random_character": self._eff_daily_random()},
             "style_by_group": self._style_by_group(),
+            "themes": [{"key": key, "label": value["label"]} for key, value in THEME_REGISTRY.items()],
+            "config_view": {"storyboard_panels": int(ccfg.storyboard_panels or 0),
+                            "comic_caption": ccfg.comic_caption,
+                            "max_wait_seconds": int(ccfg.max_wait_seconds or 300),
+                            "album_upload_enabled": bool(ccfg.album_upload_enabled),
+                            "album_name": ccfg.album_name,
+                            "daily_theme": str(self.config.report.daily_theme)},
             "use_reference_images": bool(ccfg.use_reference_images),
             "total": listing["total"], "today_count": daily["total"],
             "groups": [{"group_id": gid, "group_name": str(chat.get("name") or gid)[:200]}
@@ -3617,9 +3768,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         resolved["titles"] = [dict(t) for t in analysis.get("titles") or [] if isinstance(t, dict)]
         return resolved
 
-    async def _comic_storyboard(self, analysis: dict, group_name: str, day: str, style: str, extra: str = "") -> dict:
+    async def _comic_storyboard(self, analysis: dict, group_name: str, day: str, style: str, extra: str = "",
+                                panel_count: int = 0) -> dict:
         ccfg = self._comic_cfg()
-        prompt = storyboard_prompt(analysis, group_name, day, style)
+        prompt = storyboard_prompt(analysis, group_name, day, style, panel_count)
         if extra:
             prompt += "\n\n角色与场景设定（只影响画风与角色，不改变素材事实）：\n" + extra
         try:
@@ -3630,7 +3782,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             data = None
         if data is None:
             self.ctx.logger.info("[comic] 分镜使用话题+金句保底拼接")
-        return normalize_storyboard(data, style, analysis, group_name)
+        return normalize_storyboard(data, style, analysis, group_name, panel_count)
 
     async def _comic_pipeline(self, job, stream_id: str, group_id: str, day: str, style: str) -> str:
         ccfg = self._comic_cfg()
@@ -3652,7 +3804,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             extra = ""
             if character:
                 extra = "\n".join(part for part in (character.get("persona"), character.get("scene_prompt")) if part)
-            storyboard = await self._comic_storyboard(analysis, group_name, day, style, extra)
+            storyboard = await self._comic_storyboard(analysis, group_name, day, style, extra,
+                                                      panel_count=self._eff_storyboard_panels(style))
             ref_ids: list[str] = []
             source_images: list[str] = []
             if character and character.get("ref_ids"):
@@ -3661,7 +3814,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             elif ccfg.use_reference_images:
                 job["stage"] = "读取参考图"
                 ref_ids, source_images = await asyncio.to_thread(self._load_ref_images)
-            prompt = build_draw_prompt(storyboard, style, group_name, day, with_refs=bool(source_images))
+            prompt = build_draw_prompt(storyboard, style, group_name, day, with_refs=bool(source_images),
+                                       panel_count=self._eff_storyboard_panels(style))
             task_type = "edit_image" if source_images else "draw"
             job["stage"] = "提交绘图任务"
             # 幂等纪律：请求键先落盘再提交；回执未知保留原键，绝不换键重画

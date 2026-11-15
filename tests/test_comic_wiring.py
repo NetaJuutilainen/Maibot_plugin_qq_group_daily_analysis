@@ -110,6 +110,8 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.p._report_store = module.ReportStore(Path(self.temp.name))
         self.p._comic_book = module.ComicRequestBook(Path(self.temp.name) / 'comic_requests.json')
         self.p._drawpic_probe = None
+        self.p._config_save_lock = asyncio.Lock()
+        self.p._config_toml_path = ''
         self.p._tasks = []
         self.p._jobs = module.JobManager(self.p._spawn, Mock())
         self.p._stats = {'chats': {'stream': {'group_id': '123', 'name': '测试群', 'last_daily': '',
@@ -424,6 +426,43 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await self.p.webui_comic_style_by_group_set('123', ''))['saved'])
         self.assertEqual(self.p._fixed_style_for('123'), '')
         self.assertEqual((await self.p.webui_comic_overview())['style_by_group'], {})
+
+    async def test_storyboard_panels_and_config_save(self):
+        import tomllib
+        tmp = Path(tempfile.mkdtemp())
+        cfg_path = tmp / 'config.toml'
+        cfg_path.write_text('[comic]\nstoryboard_panels = 5 # keepme\n', encoding='utf-8')
+        self.p._config_toml_path = str(cfg_path)
+        # 用户默认 5 格：resolver → 分镜 prompt 与绘图 prompt 都按 5，且清掉单幅措辞
+        self.assertEqual(self.p._eff_storyboard_panels('ukiyoe'), 5)
+        prompt = module.storyboard_prompt({'topics': [], 'quotes': []}, 'G', '2026-11-16', 'ukiyoe', 5)
+        self.assertIn('恰好 5 个画面', prompt)
+        self.assertIn('五格', prompt)
+        draw = module.build_draw_prompt({'title': 't', 'panels': [{'scene': f's{i}'} for i in range(5)]},
+                                        'ukiyoe', 'G', '2026-11-16', panel_count=5)
+        self.assertIn('恰好分为5格', draw)
+        self.assertNotIn('单幅', draw)
+        sb = module.normalize_storyboard({'title': 'x', 'panels': [{'scene': f'p{i}'} for i in range(9)]},
+                                         'ukiyoe', {'topics': [], 'quotes': []}, 'G', 5)
+        self.assertEqual(len(sb['panels']), 5)
+        # config_save：落盘（tomlkit 保留注释）+ 热生效
+        self.assertTrue((await self.p.webui_config_save('comic', 'storyboard_panels', '9'))['saved'])
+        self.assertEqual(self.p._eff_storyboard_panels('ukiyoe'), 9)
+        self.assertIn('# keepme', cfg_path.read_text(encoding='utf-8'))
+        tomllib.loads(cfg_path.read_text(encoding='utf-8'))
+        # 非法值 / 越界 / 白名单外 / 非法枚举 一律拒绝
+        self.assertFalse((await self.p.webui_config_save('comic', 'storyboard_panels', '12'))['saved'])
+        self.assertFalse((await self.p.webui_config_save('comic', 'llm_model_task', 'utils'))['saved'])
+        self.assertFalse((await self.p.webui_config_save('report', 'daily_theme', 'nope'))['saved'])
+        # 枚举与布尔强转 + 热生效
+        self.assertTrue((await self.p.webui_config_save('report', 'daily_theme', 'hack'))['saved'])
+        self.assertEqual(self.p.config.report.daily_theme, 'hack')
+        self.assertTrue((await self.p.webui_config_save('comic', 'album_upload_enabled', 'on'))['saved'])
+        self.assertTrue(self.p._comic_cfg().album_upload_enabled)
+        # 0 = 跟随风格预设
+        self.assertTrue((await self.p.webui_config_save('comic', 'storyboard_panels', '0'))['saved'])
+        self.assertEqual(self.p._eff_storyboard_panels('ukiyoe'), 1)
+        self.assertEqual(self.p._eff_storyboard_panels('four_panel'), 4)
 
     async def test_token_stats_and_events(self):
         billed = [

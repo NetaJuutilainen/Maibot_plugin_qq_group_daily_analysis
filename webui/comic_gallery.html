@@ -127,6 +127,15 @@
       <div class="section-heading"><h3 id="policy-title">按群风格策略</h3><span id="policy-state" class="muted">—</span></div>
       <p class="hint">为单个群固定漫画风格（该群不再走轮换、不消耗轮换进度），其余群跟随上方全局轮换设置；自动联动、/漫画 与 WebUI 均生效。</p>
       <div id="style-policy" class="tasks"><p class="empty">正在连接…</p></div>
+      <div class="section-heading"><h3>漫画参数</h3><span class="muted">与插件设置页双向同步</span></div>
+      <div class="fields">
+        <label>分镜数<select id="cfg-panels" disabled></select></label>
+        <label>默认日报主题<select id="cfg-theme" disabled></select></label>
+        <label>等待上限（秒）<input id="cfg-wait" type="number" min="60" max="3600" disabled></label>
+        <label>漫画文案<input id="cfg-caption" type="text" maxlength="120" disabled></label>
+        <label>相册上传<select id="cfg-album-on" disabled><option value="off">关</option><option value="on">开</option></select></label>
+        <label>漫画相册名<input id="cfg-album-name" type="text" maxlength="100" disabled></label>
+      </div>
     </section>
 
     <section class="panel" aria-labelledby="recover-title">
@@ -331,6 +340,30 @@
         for (const select of document.querySelectorAll('#style-policy select')) select.disabled = locked;
       }
 
+      function renderParams(view, themes) {
+        const panels = $('cfg-panels');
+        if (!panels.options.length) {
+          panels.append(new Option('跟随风格', '0'), ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => new Option(`${n} 格`, String(n))));
+        }
+        if (document.activeElement !== panels) panels.value = String(Number(view.storyboard_panels) || 0);
+        const theme = $('cfg-theme');
+        if (document.activeElement !== theme) {
+          const wanted = typeof view.daily_theme === 'string' ? view.daily_theme : '';
+          theme.replaceChildren(...themes.filter(item => object(item) && item.key).map(item => new Option(text(item.label, 40), item.key)));
+          theme.value = [...theme.options].some(option => option.value === wanted) ? wanted : '';
+        }
+        if (document.activeElement !== $('cfg-wait')) $('cfg-wait').value = String(Number(view.max_wait_seconds) || 300);
+        if (document.activeElement !== $('cfg-caption')) $('cfg-caption').value = typeof view.comic_caption === 'string' ? view.comic_caption : '';
+        if (document.activeElement !== $('cfg-album-on')) $('cfg-album-on').value = view.album_upload_enabled ? 'on' : 'off';
+        if (document.activeElement !== $('cfg-album-name')) $('cfg-album-name').value = typeof view.album_name === 'string' ? view.album_name : '';
+        syncParamsControls();
+      }
+
+      function syncParamsControls() {
+        const locked = !state.ready || state.actionBusy || !state.enabled;
+        for (const id of ['cfg-panels', 'cfg-theme', 'cfg-wait', 'cfg-caption', 'cfg-album-on', 'cfg-album-name']) $(id).disabled = locked;
+      }
+
       function renderStylePolicy(groups, styleByGroup, rot, defaultStyle) {
         const container = $('style-policy');
         const known = (Array.isArray(groups) ? groups : []).filter(object)
@@ -436,7 +469,7 @@
         if (!state.ready || state.disposed || state.actionBusy) return;
         if (name !== 'delete_ref' && name !== 'rename_ref' && name !== 'forget_request' && name !== 'rotation_reset'
             && name !== 'character_save' && name !== 'character_delete' && name !== 'character_set_active'
-            && name !== 'comic_prefs_set'
+            && name !== 'comic_prefs_set' && name !== 'config_save'
             && !validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
         if ((name === 'comic_resend' || name === 'delete_comic') && !validRevision(args.revision)) { notice('存档版本缺失，请刷新列表后重试。', true); return; }
         if ((name === 'delete_ref' || name === 'rename_ref') && (typeof args.ref_id !== 'string' || !REF_ID.test(args.ref_id))) { notice('参考图标识无效。', true); return; }
@@ -458,7 +491,7 @@
           } else if (name === 'forget_request') {
             deleted = result.deleted === true;
             notice(deleted ? '已删除该恢复记录。' : `未删除：${text(result.message)}`, !deleted);
-          } else if (name === 'character_save' || name === 'character_set_active' || name === 'comic_prefs_set' || name === 'comic_style_by_group_set') {
+          } else if (name === 'character_save' || name === 'character_set_active' || name === 'comic_prefs_set' || name === 'comic_style_by_group_set' || name === 'config_save') {
             notice(result.saved === true ? text(result.message || '已保存。') : `未保存：${text(result.message)}`, result.saved !== true);
           } else if (name === 'character_delete') {
             deleted = result.deleted === true;
@@ -693,6 +726,8 @@
             : `轮换：关闭${fixedCount ? ` · ${fixedCount} 群固定` : ''}`;
           renderStylePolicy(overviewGroups, styleByGroup, rot,
             typeof result.default_style === 'string' ? result.default_style : 'four_panel');
+          renderParams(object(result.config_view) ? result.config_view : {},
+            Array.isArray(result.themes) ? result.themes : []);
           $('rotation-reset').disabled = !state.ready || !rot || rot.mode === 'off';
           const prefs = object(result.prefs) ? result.prefs : {};
           if (document.activeElement !== $('rotation-mode')) $('rotation-mode').value = prefs.style_rotation || 'off';
@@ -1048,6 +1083,16 @@
       $('rotation-mode').addEventListener('change', () => { void performAction('comic_prefs_set', { style_rotation: $('rotation-mode').value }, '保存轮换设置'); });
       $('rotation-scope').addEventListener('change', () => { void performAction('comic_prefs_set', { rotation_scope: $('rotation-scope').value }, '保存轮换范围'); });
       $('daily-random').addEventListener('change', () => { void performAction('comic_prefs_set', { daily_random_character: $('daily-random').value === 'on' }, '保存每日随机角色'); });
+      const saveParam = (label, section, key, value) => { void performAction('config_save', { section, key, value }, label); };
+      $('cfg-panels').addEventListener('change', () => saveParam('保存漫画分镜数', 'comic', 'storyboard_panels', $('cfg-panels').value));
+      $('cfg-theme').addEventListener('change', () => saveParam('保存默认日报主题', 'report', 'daily_theme', $('cfg-theme').value));
+      $('cfg-wait').addEventListener('change', () => {
+        const value = Math.round(Number($('cfg-wait').value));
+        if (value >= 60 && value <= 3600) saveParam('保存等待绘图上限', 'comic', 'max_wait_seconds', String(value));
+      });
+      $('cfg-caption').addEventListener('change', () => saveParam('保存漫画文案', 'comic', 'comic_caption', $('cfg-caption').value.trim()));
+      $('cfg-album-on').addEventListener('change', () => saveParam('保存漫画相册上传开关', 'comic', 'album_upload_enabled', $('cfg-album-on').value));
+      $('cfg-album-name').addEventListener('change', () => saveParam('保存漫画相册名', 'comic', 'album_name', $('cfg-album-name').value.trim()));
       $('draw-group').addEventListener('change', syncControls);
       $('draw').addEventListener('click', () => {
         void performAction('draw', { group_id: $('draw-group').value, day: $('draw-day').value, style: $('draw-style').value }, '画漫画');

@@ -84,6 +84,26 @@ COMIC_STYLES = {
                     "悬疑氛围，顶部留标题区域。"},
 }
 
+# 分镜数→布局措辞（storyboard_panels 配置用，与风格预设的固定格数解耦）
+PANEL_LAYOUT = {
+    1: "单幅完整构图",
+    2: "上下两格排列",
+    3: "纵向三格排列",
+    4: "从上到下四个等大格子",
+    5: "纵向五格条漫排列",
+    6: "2×3 六格网格排列",
+    7: "纵向七格条漫排列",
+    8: "2×4 八格网格排列",
+    9: "3×3 九宫格排列",
+}
+
+
+def _effective_panels(style_key: str, panel_count: int) -> int:
+    """0=跟随风格预设；1-9=固定格数。非法值一律回落风格预设。"""
+    if type(panel_count) is int and 1 <= panel_count <= 9:
+        return panel_count
+    return COMIC_STYLES.get(style_key, COMIC_STYLES["four_panel"])["panels"]
+
 
 class DrawpicError(Exception):
     """业务结构化错误或传输失败。code 稳定；retry_query/retry_submit 语义分离，不得混用。"""
@@ -357,9 +377,9 @@ def fallback_storyboard(analysis: dict, group_name: str, panel_count: int) -> di
     return {"title": f"{group_name} 今日群聊漫画", "panels": panels[:panel_count]}
 
 
-def normalize_storyboard(data, style_key: str, analysis: dict, group_name: str) -> dict:
+def normalize_storyboard(data, style_key: str, analysis: dict, group_name: str, panel_count: int = 0) -> dict:
     """校验 LLM 分镜输出；不合法一律回退话题+金句拼接，不让格式问题阻断出图。"""
-    panel_count = COMIC_STYLES[style_key]["panels"]
+    panel_count = _effective_panels(style_key, panel_count)
     if not isinstance(data, dict):
         return fallback_storyboard(analysis, group_name, panel_count)
     title = str(data.get("title") or "").strip()[:60]
@@ -378,20 +398,23 @@ def normalize_storyboard(data, style_key: str, analysis: dict, group_name: str) 
     return {"title": title or f"{group_name} 今日群聊漫画", "panels": panels}
 
 
-def storyboard_prompt(analysis: dict, group_name: str, day: str, style_key: str) -> str:
-    panel_count = COMIC_STYLES[style_key]["panels"]
+def storyboard_prompt(analysis: dict, group_name: str, day: str, style_key: str, panel_count: int = 0) -> str:
+    count = _effective_panels(style_key, panel_count)
     topics = "、".join(str(t.get("topic") or "") for t in (analysis.get("topics") or [])[:5] if isinstance(t, dict))
     quotes = "\n".join(f"- {str(q.get('content') or '')[:120]}" for q in (analysis.get("quotes") or [])[:3] if isinstance(q, dict))
     titles = "、".join(f"{t.get('name') or ''}「{t.get('title') or ''}」" for t in (analysis.get("titles") or [])[:3] if isinstance(t, dict))
     quality = analysis.get("quality") or {}
     summary = str(quality.get("summary") or "")[:120] if isinstance(quality, dict) else ""
-    kind = COMIC_STYLES[style_key].get("kind") or ("四格漫画（从上到下四个格子）" if panel_count == 4 else "单幅海报插画")
+    if count == COMIC_STYLES[style_key]["panels"]:
+        kind = COMIC_STYLES[style_key].get("kind") or ("四格漫画（从上到下四个格子）" if count == 4 else "单幅海报插画")
+    else:
+        kind = f"{count}格漫画（{PANEL_LAYOUT[count]}）"
     return (
         f"请把群聊「{group_name}」{day} 的日报素材改编成{kind}的分镜脚本。\n"
         f"今日话题：{topics or '日常闲聊'}\n今日称号：{titles or '无'}\n金句：\n{quotes or '无'}\n"
         f"整体氛围总结：{summary or '轻松热闹'}\n\n"
         "要求：\n"
-        f"1. 恰好 {panel_count} 个画面（panels），每个画面给出具体可视的场景描述 scene（人物动作、表情、场景道具），"
+        f"1. 恰好 {count} 个画面（panels），每个画面给出具体可视的场景描述 scene（人物动作、表情、场景道具），"
         "风格轻松幽默，日系漫画感；\n"
         "2. 每个画面可附简短旁白 caption 与一句台词 dialogue（没有就留空字符串）；\n"
         "3. 只使用素材里的昵称，不得出现 QQ 号、真实姓名或素材之外的隐私信息；不得编造低俗、血腥或攻击性内容；\n"
@@ -401,11 +424,18 @@ def storyboard_prompt(analysis: dict, group_name: str, day: str, style_key: str)
     )
 
 
-def build_draw_prompt(storyboard: dict, style_key: str, group_name: str, day: str, with_refs: bool = False) -> str:
+def build_draw_prompt(storyboard: dict, style_key: str, group_name: str, day: str, with_refs: bool = False, panel_count: int = 0) -> str:
     lines = [f"群聊「{group_name}」{day} 的每日漫画，标题：{storyboard.get('title') or ''}。"]
     if with_refs:
         lines.append("参考附图中的角色形象与画风，保持角色外观一致。")
-    lines.append(COMIC_STYLES[style_key].get("art") or COMIC_STYLES["four_panel"]["art"])
+    count = _effective_panels(style_key, panel_count)
+    art = COMIC_STYLES[style_key].get("art") or COMIC_STYLES["four_panel"]["art"]
+    if count != COMIC_STYLES[style_key]["panels"]:
+        # 布局以格数配置为准：置顶强指令，并清掉风格文本里与多格直接冲突的「单幅」措辞
+        art = art.replace("单幅", "")
+        lines.append(f"布局要求（优先级最高）：整张图恰好分为{count}格（{PANEL_LAYOUT[count]}），格子之间留白色分隔；"
+                     + ("整图为单幅完整画面，不要分格。" if count == 1 else "下面按顺序给出每格内容，每格一个独立画面。"))
+    lines.append(art)
     for index, panel in enumerate(storyboard.get("panels") or [], 1):
         segment = f"第{index}格：{panel.get('scene') or ''}"
         if panel.get("caption"):

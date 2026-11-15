@@ -39,7 +39,7 @@
 
 ### 报告库
 
-![报告库](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-report-library.png)
+![报告库](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-report-library-dark.png)
 
 - 报告自动存入 `data/plugins/maibot-plugin-qq-group-daily-analysis/reports/<群>/<日期>/`，插件更新不覆盖存档。
 - 按群/日期筛选 + 关键词搜索 + 类型筛选 + 排序；缩略图点开看原图（分块拼装、自然尺寸）。
@@ -49,7 +49,7 @@
 
 ### 漫画廊
 
-![漫画廊](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-comic-gallery.png)
+![漫画廊](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-comic-gallery-dark.png)
 
 - 把当日日报画成**四格漫画 / 单幅海报**等 12 套风格；LLM 分镜 → 经**麦麦绘图(drawpic)协作**出图 → 发群 + 存档 + 可选群相册。
 - **风格轮换**（顺序/随机/洗牌）+ **多角色方案**（独立人设/场景/参考图）+ **每日随机角色**，均可在页面开关。
@@ -57,13 +57,15 @@
 - **幂等恢复**：请求键先落盘再提交；回执未知保留原键，「恢复进度」只读查证绝不换键重画；已存档未发送只补发。
 - 日报发送成功后可对联动群**自动追加漫画**；`/漫画` 命令手动触发。
 
-漫画成品示例（四格风格示意）：
+漫画成品示例（服务器真实生成的四格漫画，缩小展示，其他风格示例后续增补）：
 
-![漫画示例](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/comic-sample.jpg)
+| 四格漫画 | 更多风格 | 更多风格 |
+|:--:|:--:|:--:|
+| <img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/comic-sample-4koma.jpg" width="300" alt="四格漫画示例（真实成品）"> | 待增补 | 待增补 |
 
 ### 统计与数据
 
-![统计与数据](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-stats.png)
+![统计与数据](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-stats-dark.png)
 
 - 今日概览（今日报告/最近生成/今日消息）+ 48h/7/14/30 天消息/报告趋势。
 - **Token 审计**：总/输入/输出/调用次数/成功率/活跃群；趋势**折线 / 堆叠柱 / 表格**三态；**模型 / 任务模块 / 服务商**占比饼图（宿主本机统计）。
@@ -76,7 +78,7 @@
 | 风格 | 明 | 暗 |
 |:--:|:--:|:--:|
 | modern | ![modern 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-modern-light.png) | ![modern 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-modern-dark.png) |
-| 千禧 | ![千禧 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-millennium-light.png) | ![千禧 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-stats.png) |
+| 千禧 | ![千禧 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-millennium-light.png) | ![千禧 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-stats-dark.png) |
 | 未来复古 | ![未来复古 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-retro-light.png) | ![未来复古 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-retro-dark.png) |
 
 ---
@@ -171,6 +173,7 @@ NapCat 与 SnowLuma 均支持（同一 OneBot v11 相册接口）。配置：生
 |[![新艺术运动](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/art_nouveau.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/art_nouveau.jpg)|[![圣母在上](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/maria.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/maria.jpg)|[![鲸鱼女仆娘](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/deepseek_maid.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/deepseek_maid.jpg)|
 
 > 图片用 jsDelivr 镜像绝对外链（WebUI 详情页与 GitHub 都能显示；相对路径在 WebUI 会 404）。
+> CDN 与 GitHub camo 对同一 URL 缓存约一年：**换图必须换文件名**（`-dark` / `-4koma` 后缀即为此），只改内容不换名会被旧缓存挡住。
 > `art_nouveau`/`maria`/`deepseek_maid` 模板与素材移植自上游，许可见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)（`deepseek_maid` 角色形象 CC BY-NC-SA 4.0）。
 
 ---

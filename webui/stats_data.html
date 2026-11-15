@@ -70,12 +70,13 @@
     .share-bar { height: 8px; background: var(--accent); border-radius: 4px; }
     .share-val { font-size: 12px; color: var(--muted); min-width: 70px; text-align: right; }
     .shares { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 12px; }
+    .shares > div { min-width: 0; }
     .pie-wrap { display: flex; align-items: center; gap: 12px; }
     .pie-wrap svg { flex: none; width: 110px; height: 110px; }
     .pie-legend { list-style: none; margin: 0; padding: 0; min-width: 0; font-size: 12px; }
-    .pie-legend li { display: flex; align-items: center; gap: 6px; margin: 3px 0; color: var(--muted); }
+    .pie-legend li { display: flex; align-items: center; gap: 6px; margin: 3px 0; color: var(--muted); min-width: 0; }
     .pie-legend .sw { flex: none; width: 9px; height: 9px; border-radius: 2px; }
-    .pie-legend .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pie-legend .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pie-legend .vl { margin-left: auto; color: var(--ink); }
     .line-box { flex: 1; height: 100%; min-width: 0; }
     .line-box svg { width: 100%; height: 100%; display: block; }
@@ -87,10 +88,13 @@
     .seg button + button { border-left: 1px solid var(--line); }
     .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
     .seg button:disabled { opacity: .45; cursor: not-allowed; }
-    .bar-fill.stack { background: transparent; display: flex; flex-direction: column; }
+    .bar-fill.stack { background: var(--line); display: flex; flex-direction: column; }
     .bar-seg { width: 100%; }
     .bar-seg.p { background: var(--accent); }
     .bar-seg.c { background: var(--muted); }
+    .bar-box { position: relative; display: flex; align-items: flex-end; gap: 10px; height: 170px; padding: 0 4px; }
+    .chart-tip { position: absolute; z-index: 6; pointer-events: none; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); border-radius: calc(var(--radius) * .5); box-shadow: 0 4px 14px rgb(0 0 0 / .18); padding: 6px 10px; font-size: 12px; line-height: 1.55; white-space: nowrap; color: var(--ink); }
+    .chart-tip .tip-day { color: var(--muted); }
     .tasks { max-height: 320px; overflow-y: auto; margin-top: 12px; }
     .task { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 8px 0; }
     .task-copy { min-width: 0; overflow-wrap: anywhere; }
@@ -135,6 +139,7 @@
         <div class="stat"><dt>区间总 Token</dt><dd id="tok-total">—</dd></div>
         <div class="stat"><dt>输入 / 输出</dt><dd id="tok-io">—</dd></div>
         <div class="stat"><dt>LLM 调用次数</dt><dd id="tok-calls">—</dd></div>
+        <div class="stat"><dt>区间总花费</dt><dd id="tok-cost">—</dd></div>
         <div class="stat"><dt>今日调用成功率</dt><dd id="tok-rate">—</dd></div>
         <div class="stat"><dt>今日活跃群</dt><dd id="tok-groups">—</dd></div>
       </dl>
@@ -154,9 +159,9 @@
       <div class="shares">
         <div><h3>模型占比</h3><div id="model-share" class="pie-wrap"></div></div>
         <div><h3>任务 / 模块占比</h3><div id="module-share" class="pie-wrap"></div></div>
-        <div><h3>服务商占比</h3><div id="provider-share" class="pie-wrap"></div></div>
+        <div><h3>花费占比</h3><div id="cost-share" class="pie-wrap"></div></div>
       </div>
-      <p class="hint">趋势 / 占比来自宿主本机统计（statistics_model_hourly，覆盖全宿主 LLM 调用）；成功率 / 活跃群来自本插件账本与统计。宿主未提供时趋势降级为不可用。</p>
+      <p class="hint">趋势 / Token 占比 / 区间卡片来自本插件的 LLM 调用账本（llm_usage.json，保留近 30 天），不含宿主其他模块的消耗；花费与花费占比来自宿主对本插件调用的逐次计费记录，按宿主模型配置的单价（含分时 / 缓存价）估算，非实际账单金额；成功率 / 活跃群来自本插件账本与统计。</p>
     </section>
 
     <section class="panel" aria-labelledby="timeline-title">
@@ -167,6 +172,12 @@
     <section class="panel" aria-labelledby="storage-title">
       <div class="section-heading"><h2 id="storage-title">存储管理</h2><button id="clear-cache" type="button" disabled>清理运行时缓存</button></div>
       <dl class="stats" id="partitions"></dl>
+      <div class="fields">
+        <label>本地存盘<select id="archive-enabled"><option value="on">开启</option><option value="off">关闭</option></select></label>
+        <label>保留天数（0=不自动清理）<input id="retention-days" type="number" min="0" max="3650" step="1"></label>
+      </div>
+      <div class="buttons"><button id="save-retention" type="button" disabled>保存保留天数</button><button id="cleanup-now" type="button" disabled>立即清理过期</button></div>
+      <p class="hint">存盘开关 / 保留天数与设置页同源，此处保存后优先于设置页默认值。关闭存盘后新日报/漫画不再落盘（仍正常发群与上传相册），旧存档保留；过期清理在启动时自动执行，也可在此立即手动清理。</p>
       <p class="hint">勾选报告存档后批量删除（连带当日漫画）；参考图 / 上传暂存 / 缓存分区只读展示，缓存可一键清理（可重建）。</p>
       <div class="buttons"><button id="delete-selected" class="danger" type="button" disabled>删除所选存档</button><button id="refresh-storage" type="button" disabled>刷新存储</button></div>
       <div id="storage-table" class="table-wrap" aria-busy="true"><p class="empty">正在连接…</p></div>
@@ -253,13 +264,14 @@
       }
 
       const PIE_COLORS = ['#315eb5', '#e07b39', '#2a9d8f', '#b5484d', '#7b5ea7', '#c9a227', '#4a8fe0', '#6b7f8f'];
+      const fmtMoney = v => '¥' + (Number(v) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
       const svgEl = (tag, attrs) => {
         const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
         for (const k in attrs) n.setAttribute(k, attrs[k]);
         return n;
       };
 
-      function renderPie(el, items) {
+      function renderPie(el, items, fmt) {
         const rows = (Array.isArray(items) ? items : []).filter(i => i && typeof i === 'object' && (Number(i.value) || 0) > 0);
         const total = rows.reduce((s, i) => s + (Number(i.value) || 0), 0);
         if (!rows.length || !total) { el.replaceChildren(element('p', '暂无数据', 'muted')); return; }
@@ -278,7 +290,7 @@
           const sw = element('span', undefined, 'sw');
           sw.style.background = PIE_COLORS[idx % PIE_COLORS.length];
           li.append(sw, element('span', i.name, 'nm'),
-            element('span', `${(Number(i.value) || 0).toLocaleString()} · ${Math.round((Number(i.value) || 0) / total * 100)}%`, 'vl'));
+            element('span', `${fmt ? fmt(i.value) : (Number(i.value) || 0).toLocaleString()} · ${Math.round((Number(i.value) || 0) / total * 100)}%`, 'vl'));
           legend.append(li);
         });
         el.replaceChildren(svg, legend);
@@ -338,7 +350,7 @@
         const chart = $('token-chart'), table = $('token-table');
         chart.style.display = '';
         chart.style.height = type === 'line' ? 'auto' : '';
-        if (!r || !r.trend) { chart.replaceChildren(element('p', '宿主未提供 Token 统计。', 'muted')); table.hidden = true; return; }
+        if (!r || !r.trend) { chart.replaceChildren(element('p', '暂无调用记录。', 'muted')); table.hidden = true; return; }
         const t = r.trend, ts = t.timestamps || [];
         if (type === 'table') {
           chart.hidden = true; table.hidden = false;
@@ -370,9 +382,13 @@
         }
         const vals = mode === 'calls' ? (t.requests || []) : (t.total || []);
         const max = Math.max(1, ...vals.map(v => Number(v) || 0));
-        chart.replaceChildren(...(ts.length ? ts.map((day, i) => {
+        const num = v => Math.round(Number(v) || 0).toLocaleString();
+        const box = element('div', undefined, 'bar-box');
+        const tip = element('div', undefined, 'chart-tip');
+        tip.hidden = true;
+        const bars = ts.map((day, i) => {
           const bar = element('div', undefined, 'bar');
-          bar.append(element('span', Math.round(Number(vals[i]) || 0).toLocaleString(), 'bar-value'));
+          bar.append(element('span', num(vals[i]), 'bar-value'));
           const fill = element('div', undefined, 'bar-fill' + (mode === 'token' ? ' stack' : ''));
           fill.style.height = Math.max(2, Math.round((Number(vals[i]) || 0) / max * 100)) + '%';
           if (mode === 'token') {
@@ -382,12 +398,45 @@
             const p = element('div', undefined, 'bar-seg p');
             p.style.height = (tot ? (Number(t.prompt[i]) || 0) / tot * 100 : 0) + '%';
             fill.append(c, p);
+            const detail = `${day}：输入 ${num(t.prompt[i])}，输出 ${num(t.completion[i])}，总量 ${num(t.total[i])}，调用 ${num(t.requests[i])}`;
+            bar.tabIndex = 0;
+            bar.setAttribute('aria-label', detail);
+            const show = () => {
+              tip.replaceChildren(element('div', day, 'tip-day'),
+                element('div', `输入 ${num(t.prompt[i])} · 输出 ${num(t.completion[i])}`),
+                element('div', `总量 ${num(t.total[i])} · 调用 ${num(t.requests[i])}`));
+              tip.hidden = false;
+              const half = tip.offsetWidth / 2;
+              tip.style.left = Math.min(Math.max(bar.offsetLeft + bar.offsetWidth / 2, half + 2), Math.max(half + 2, box.clientWidth - half - 2)) + 'px';
+              tip.style.top = (box.clientHeight - fill.offsetHeight - 26 - tip.offsetHeight) + 'px';
+            };
+            const hide = () => { tip.hidden = true; };
+            bar.addEventListener('mouseenter', show);
+            bar.addEventListener('focus', show);
+            bar.addEventListener('mouseleave', hide);
+            bar.addEventListener('blur', hide);
           }
           bar.append(fill);
           bar.append(element('span', String(day).slice(5, 10), 'bar-day'));
           return bar;
-        }) : [element('p', '暂无数据', 'muted')]));
-        chart.setAttribute('aria-label', mode === 'calls' ? '调用次数柱状图' : 'Token 消耗堆叠柱状图（输入+输出）');
+        });
+        box.append(...(bars.length ? bars : [element('p', '暂无数据', 'muted')]), tip);
+        chart.style.display = 'block';
+        chart.style.height = 'auto';
+        if (mode === 'token' && bars.length) {
+          const legend = element('div', undefined, 'line-legend');
+          [['输入', 'var(--accent)'], ['输出', 'var(--muted)']].forEach(([name, color]) => {
+            const item = element('span');
+            const sw = element('span', undefined, 'sw');
+            sw.style.background = color;
+            item.append(sw, document.createTextNode(name));
+            legend.append(item);
+          });
+          chart.replaceChildren(box, legend);
+        } else {
+          chart.replaceChildren(box);
+        }
+        chart.setAttribute('aria-label', mode === 'calls' ? '调用次数柱状图' : 'Token 消耗堆叠柱状图（输入+输出，悬停或聚焦查看明细）');
       }
 
       async function loadToken() {
@@ -400,22 +449,27 @@
           const cards = (r && r.cards) || {};
           $('tok-rate').textContent = cards.success_rate === null || cards.success_rate === undefined ? '—' : cards.success_rate + '%';
           $('tok-groups').textContent = text(cards.active_groups);
-          renderPie($('provider-share'), r && r.provider_pie);
           if (!r || r.available !== true || !r.trend) {
-            $('token-state').textContent = '宿主统计不可用';
-            $('tok-total').textContent = '—'; $('tok-io').textContent = '—'; $('tok-calls').textContent = '—';
-            renderPie($('model-share'), []); renderPie($('module-share'), []);
+            $('token-state').textContent = 'Token 统计不可用';
+            $('tok-total').textContent = '—'; $('tok-io').textContent = '—'; $('tok-calls').textContent = '—'; $('tok-cost').textContent = '—';
+            renderPie($('model-share'), []); renderPie($('module-share'), []); renderPie($('cost-share'), []);
             renderTrend();
             return;
           }
-          $('token-state').textContent = `近 ${range} 天 · 宿主本机统计`;
+          $('token-state').textContent = `近 ${range} 天 · 本插件账本`;
           const t = r.trend;
           const sum = a => (a || []).reduce((x, y) => x + (Number(y) || 0), 0);
           $('tok-total').textContent = Math.round(Number(t.sum_total) || sum(t.total)).toLocaleString();
           $('tok-io').textContent = `${Math.round(sum(t.prompt)).toLocaleString()} / ${Math.round(sum(t.completion)).toLocaleString()}`;
           $('tok-calls').textContent = Math.round(sum(t.requests)).toLocaleString();
+          $('tok-cost').textContent = r.cost_available ? fmtMoney(r.cost_total) : '—';
           renderPie($('model-share'), r.model_pie);
           renderPie($('module-share'), r.module_pie);
+          if (r.cost_available && !(Number(r.cost_total) > 0)) {
+            $('cost-share').replaceChildren(element('p', '区间内调用均免费（模型单价为 0 或未配置）', 'muted'));
+          } else {
+            renderPie($('cost-share'), r.cost_pie, fmtMoney);
+          }
           renderTrend();
         } catch (e) { $('token-state').textContent = 'Token 统计刷新失败'; }
       }
@@ -471,6 +525,13 @@
           $('storage-table').setAttribute('aria-busy', 'false');
           syncButtons();
         } catch (e) { notice(`存储刷新失败：${text(e.message)}`, true); }
+        try {
+          const p = await call('query', 'storage_prefs');
+          if (state.disposed) return;
+          // 自动刷新不覆盖用户正在编辑（聚焦）的控件，避免回填与输入竞态
+          if (document.activeElement !== $('archive-enabled')) $('archive-enabled').value = p.local_archive_enabled ? 'on' : 'off';
+          if (document.activeElement !== $('retention-days')) $('retention-days').value = String(Number.isInteger(p.archive_retention_days) ? p.archive_retention_days : 90);
+        } catch (e) { /* 存储偏好读取失败不阻断存档列表 */ }
       }
 
       function syncButtons() {
@@ -481,6 +542,9 @@
         $('refresh-storage').disabled = !state.ready || state.busy;
         $('refresh-events').disabled = !state.ready || state.busy;
         $('range').disabled = !state.ready || state.busy;
+        $('archive-enabled').disabled = !state.ready || state.busy;
+        $('retention-days').disabled = !state.ready || state.busy;
+        for (const id of ['save-retention', 'cleanup-now']) $(id).disabled = !state.ready || state.busy;
         for (const id of ['library-link', 'gallery-link']) $(id).disabled = !state.ready || state.busy;
       }
 
@@ -541,6 +605,15 @@
         if (keys) void performAction('storage_delete', { keys }, '删除所选存档');
       });
       $('clear-cache').addEventListener('click', () => { void performAction('cache_clear', {}, '清理缓存'); });
+      $('archive-enabled').addEventListener('change', () => {
+        void performAction('storage_prefs_set', { local_archive_enabled: $('archive-enabled').value === 'on' }, '保存存盘开关');
+      });
+      $('save-retention').addEventListener('click', () => {
+        const days = Number($('retention-days').value);
+        if (!Number.isInteger(days) || days < 0 || days > 3650) { notice('保留天数需为 0~3650 的整数（0=不自动清理）', true); return; }
+        void performAction('storage_prefs_set', { archive_retention_days: days }, '保存保留天数');
+      });
+      $('cleanup-now').addEventListener('click', () => { void performAction('storage_cleanup', {}, '清理过期存档'); });
 
       // 内嵌检测不依赖 window.maibot 就绪时机（宿主 bridge 写 data-dashboard-style）；
       // 并按 body 背景亮度强制 color-scheme，保证原生下拉弹层暗色下不发白。

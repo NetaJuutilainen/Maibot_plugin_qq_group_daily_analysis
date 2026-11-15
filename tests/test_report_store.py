@@ -71,7 +71,7 @@ class ReportStoreTest(unittest.TestCase):
         new = self.save(image='')
         self.assertNotEqual(old['revision'], new['revision'])
         self.assertFalse(new['has_image'])
-        self.assertFalse((self.store.root / '123' / DAY / 'report.png').exists())
+        self.assertFalse((self.store.root / '123' / DAY / f'测试群_atri_{DAY}.png').exists())
         with self.assertRaises(ValueError):
             self.store.thumbnail('123', DAY)
         self.assertIn(b'synthetic', self.store.read_bytes('123', DAY, 'html'))
@@ -233,6 +233,42 @@ class ReportStoreTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ReportStore(self.data).list_reports()
 
+    def test_physical_filenames_follow_group_theme_day(self):
+        self.save()
+        directory = self.store.root / '123' / DAY
+        stem = f'测试群_atri_{DAY}'
+        for name in (f'{stem}.png', f'{stem}.html', f'{stem}_thumb.jpg', 'meta.json'):
+            self.assertTrue((directory / name).is_file(), name)
+        self.assertFalse((directory / 'report.png').exists())
+        self.assertEqual(self.store.read_chunk('123', DAY)['filename'], f'{stem}.png')
+        self.assertEqual(self.store.read_chunk('123', DAY, kind='html')['filename'], f'{stem}.html')
+
+    def test_label_sanitization_truncation_and_fallback(self):
+        meta = self.save(group_name='a/b\\c:d*e?f"g<h>i|j  k', theme='')
+        directory = self.store.root / '123' / DAY
+        self.assertTrue((directory / f'a_b_c_d_e_f_g_h_i_j_k_default_{DAY}.html').is_file())
+        self.assertEqual(meta['group_name'], 'a/b\\c:d*e?f"g<h>i|j  k')
+        long_name = '群' * 60
+        self.save(group_name=long_name)
+        self.assertTrue((directory / f"{'群' * 40}_atri_{DAY}.html").is_file())
+        self.save(group_name='')
+        self.assertTrue((directory / f'123_atri_{DAY}.html').is_file())
+
+    def test_legacy_fixed_filenames_still_readable(self):
+        meta = self.save()
+        directory = self.store.root / '123' / DAY
+        stem = f'测试群_atri_{DAY}'
+        for new, legacy in ((f'{stem}.png', 'report.png'), (f'{stem}.html', 'report.html'),
+                            (f'{stem}_thumb.jpg', 'thumb.jpg')):
+            (directory / new).rename(directory / legacy)
+        reopened = ReportStore(self.data)
+        self.assertEqual(reopened.detail('123', DAY)['revision'], meta['revision'])
+        self.assertEqual(reopened.list_reports()['total'], 1)
+        self.assertEqual(reopened.read_bytes('123', DAY, 'image'), base64.b64decode(encoded_image()))
+        self.assertIn(b'synthetic', reopened.read_bytes('123', DAY, 'html'))
+        self.assertTrue(reopened.thumbnail('123', DAY)['data_uri'].startswith('data:image/jpeg;base64,'))
+        self.assertEqual(reopened.read_chunk('123', DAY)['filename'], f'{stem}.png')
+
 
 class ComicStoreTest(unittest.TestCase):
     def setUp(self):
@@ -254,7 +290,7 @@ class ComicStoreTest(unittest.TestCase):
     def test_save_comic_writes_three_files_and_summary_projection(self):
         meta = self.save_comic()
         directory = self.store.root / '123' / DAY
-        for name in ReportStore.COMIC_FILES:
+        for name in ('comic.json', f'测试群_four_panel_{DAY}.png', f'测试群_four_panel_{DAY}_thumb.jpg'):
             self.assertTrue((directory / name).is_file())
         rows = self.store.list_comics()
         self.assertEqual(rows['total'], 1)
@@ -295,7 +331,7 @@ class ComicStoreTest(unittest.TestCase):
         self.assertFalse(self.store.delete_comic('123', DAY)['deleted'])
         self.assertEqual(self.store.detail('123', DAY)['revision'], report['revision'])
         directory = self.store.root / '123' / DAY
-        for name in ReportStore.COMIC_FILES:
+        for name in ('comic.json', f'测试群_four_panel_{DAY}.png', f'测试群_four_panel_{DAY}_thumb.jpg'):
             self.assertFalse((directory / name).exists())
         self.assertTrue((directory / 'meta.json').is_file())
 
@@ -319,7 +355,7 @@ class ComicStoreTest(unittest.TestCase):
         while True:
             chunk = self.store.comic_chunk('123', DAY, offset=offset, revision=meta['revision'])
             self.assertEqual(chunk['mime'], 'image/png')
-            self.assertEqual(chunk['filename'], f'123-{DAY}-comic.png')
+            self.assertEqual(chunk['filename'], f'测试群_four_panel_{DAY}.png')
             blocks.append(base64.b64decode(chunk['data']))
             offset = chunk['next_offset']
             if chunk['done']:
@@ -360,8 +396,37 @@ class ComicStoreTest(unittest.TestCase):
     def test_comic_without_report_and_missing_files(self):
         self.save_comic()
         self.assertEqual(self.store.list_comics()['total'], 1)
-        (self.store.root / '123' / DAY / 'comic.png').unlink()
+        (self.store.root / '123' / DAY / f'测试群_four_panel_{DAY}.png').unlink()
         self.assertEqual(self.store.list_comics()['total'], 0)
+
+    def test_style_change_replaces_old_named_files(self):
+        self.save_comic()
+        self.save_comic(style='watercolor')
+        directory = self.store.root / '123' / DAY
+        self.assertFalse((directory / f'测试群_four_panel_{DAY}.png').exists())
+        self.assertFalse((directory / f'测试群_four_panel_{DAY}_thumb.jpg').exists())
+        self.assertTrue((directory / f'测试群_watercolor_{DAY}.png').is_file())
+        self.assertEqual(self.store.list_comics()['total'], 1)
+        self.assertEqual(self.store.comic_detail('123', DAY)['style'], 'watercolor')
+
+    def test_legacy_comic_readable_preserved_and_deletable(self):
+        comic = self.save_comic()
+        directory = self.store.root / '123' / DAY
+        stem = f'测试群_four_panel_{DAY}'
+        (directory / f'{stem}.png').rename(directory / 'comic.png')
+        (directory / f'{stem}_thumb.jpg').rename(directory / 'comic_thumb.jpg')
+        reopened = ReportStore(self.data)
+        self.assertEqual(reopened.list_comics()['total'], 1)
+        self.assertEqual(reopened.comic_detail('123', DAY)['revision'], comic['revision'])
+        self.assertEqual(reopened.read_comic_bytes('123', DAY), base64.b64decode(encoded_image()))
+        self.assertTrue(reopened.comic_thumbnail('123', DAY)['data_uri'].startswith('data:image/jpeg;base64,'))
+        self.assertEqual(reopened.comic_chunk('123', DAY)['filename'], f'{stem}.png')
+        self.save_report()
+        self.assertEqual(reopened.comic_detail('123', DAY)['revision'], comic['revision'])
+        self.assertTrue(reopened.delete_comic('123', DAY, comic['revision'])['deleted'])
+        self.assertFalse((directory / 'comic.png').exists())
+        self.assertFalse((directory / 'comic_thumb.jpg').exists())
+        self.assertFalse((directory / 'comic.json').exists())
 
 
 if __name__ == '__main__':

@@ -452,6 +452,7 @@ class ReportSectionConfig(PluginConfigBase):
         description="手动 /日报 成功后是否计入「当天已发」（开启则定时不再重复发同一群）",
     )
     archive_retention_days: int = Field(default=90, ge=0, le=3650, description="报告库保留天数，启动时清理过期报告；0=不自动清理")
+    local_archive_enabled: bool = Field(default=True, description="是否把日报/漫画存到本地报告库；关闭后仍正常发群与上传相册，旧存档保留")
     enable_daily_report: bool = Field(default=True, description="每天自动生成群聊日报")
     daily_report_hour: int = Field(default=22, description="每天自动生成日报的小时（0~23）", ge=0, le=23)
     daily_report_minute: int = Field(default=0, description="每天自动生成日报的分钟（0~59）", ge=0, le=59)
@@ -683,7 +684,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         self._stats = self._load_stats()
         self._stats_loaded = True
         try:
-            await asyncio.to_thread(self._report_store.cleanup, self._report_cfg().archive_retention_days)
+            await asyncio.to_thread(self._report_store.cleanup, self._eff_retention_days())
         except (OSError, ValueError) as exc:
             self.ctx.logger.warning("[weekly] 报告库清理失败: %s", type(exc).__name__)
         # 清理历史遗留的重复/过期 stream（同一个群多套 stream 曾导致一天出两份日报）
@@ -1200,7 +1201,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "debug_mode": {"label": "调试模式（输出详细日志）", "ui_type": "switch"},
             "chat_whitelist": {"label": "群白名单", "ui_type": "textarea", "rows": 6, "hint": "每行一个群号；留空=所有群"},
             "command_admins": {"label": "命令管理员", "ui_type": "textarea", "rows": 4, "hint": "每行一个QQ号；留空=所有人可用"},
-            "archive_retention_days": {"label": "报告库保留天数", "ui_type": "number", "min": 0, "max": 3650, "default": 90, "hint": "启动时清理过期报告；0=不自动清理"},
+            "archive_retention_days": {"label": "报告库保留天数", "ui_type": "number", "min": 0, "max": 3650, "default": 90, "hint": "启动时清理过期报告；0=不自动清理；WebUI 存储管理保存的值优先"},
+            "local_archive_enabled": {"label": "本地存盘开关", "ui_type": "switch", "hint": "关闭后新日报/漫画不再落盘（仍发群/传相册），旧存档保留；WebUI 存储管理保存的值优先"},
             "enable_daily_report": {"label": "每日日报开关", "ui_type": "switch"},
             "daily_report_hour": {"label": "日报发送小时", "ui_type": "number", "min": 0, "max": 23},
             "daily_report_minute": {"label": "日报发送分钟", "ui_type": "number", "min": 0, "max": 59},
@@ -3035,6 +3037,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         return base
 
     async def _archive_report(self, stream_id, day, theme, context, analysis, image, html_text, started):
+        if not self._eff_archive_enabled():
+            return
         chat = self._stats.get("chats", {}).get(stream_id) or {}
         acfg = self._cfg().analysis
         metadata = {
@@ -3755,21 +3759,24 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             return "failed"
         job["stage"] = "存档漫画"
         entry = self._comic_book.get(request_id) or {}
-        try:
-            comic_meta = await asyncio.to_thread(
-                self._report_store.save_comic, group_id, day, base64.b64encode(blob).decode("ascii"),
-                {"group_name": report_meta.get("group_name") or group_id, "style": style,
-                 "request_id": request_id, "task_id": task_id,
-                 "prompt": entry.get("prompt") or "", "storyboard": entry.get("storyboard") or {},
-                 "message_count": report_meta.get("message_count", 0), "version": "1.6.0"})
-        except (OSError, ValueError):
-            await asyncio.to_thread(self._comic_book.update, request_id, status="completed", error="本地存档失败")
-            job["error"] = "漫画已生成但本地存档失败，请检查磁盘空间后到漫画廊「恢复进度」"
-            return "failed"
+        comic_meta = None
+        if self._eff_archive_enabled():
+            try:
+                comic_meta = await asyncio.to_thread(
+                    self._report_store.save_comic, group_id, day, base64.b64encode(blob).decode("ascii"),
+                    {"group_name": report_meta.get("group_name") or group_id, "style": style,
+                     "request_id": request_id, "task_id": task_id,
+                     "prompt": entry.get("prompt") or "", "storyboard": entry.get("storyboard") or {},
+                     "message_count": report_meta.get("message_count", 0), "version": "1.6.0"})
+            except (OSError, ValueError):
+                await asyncio.to_thread(self._comic_book.update, request_id, status="completed", error="本地存档失败")
+                job["error"] = "漫画已生成但本地存档失败，请检查磁盘空间后到漫画廊「恢复进度」"
+                return "failed"
         await asyncio.to_thread(self._comic_book.update, request_id, status="completed", error="")
         job["stage"] = "发送漫画"
         if await self._send_comic_image(stream_id, blob):
-            await asyncio.to_thread(self._report_store.mark_comic_sent, group_id, day, comic_meta["revision"])
+            if comic_meta is not None:
+                await asyncio.to_thread(self._report_store.mark_comic_sent, group_id, day, comic_meta["revision"])
             await asyncio.to_thread(self._comic_book.update, request_id, sent=True)
             # 群相册上传（对齐原版漫画独立开关；失败静默，不影响已发出的漫画）
             try:
@@ -3780,8 +3787,12 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             except Exception as exc:
                 self.ctx.logger.warning("[comic] 群相册上传异常: %s", exc)
             return "ok"
-        await asyncio.to_thread(self._comic_book.update, request_id, error="已存档，发送失败")
-        job["error"] = "漫画已存档，但发送到群失败；可在漫画廊重发"
+        if comic_meta is not None:
+            await asyncio.to_thread(self._comic_book.update, request_id, error="已存档，发送失败")
+            job["error"] = "漫画已存档，但发送到群失败；可在漫画廊重发"
+        else:
+            await asyncio.to_thread(self._comic_book.update, request_id, error="发送失败（本地存盘已关闭）")
+            job["error"] = "漫画已生成但发送到群失败；本地存盘已关闭，无法从存档重发"
         return "failed"
 
     async def _comic_cancel_cleanup(self, client: DrawpicClient, state: dict) -> None:
@@ -4313,30 +4324,58 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     @API("token_stats", version="1")
     async def webui_token_stats(self, range_days: int = 7) -> dict:
+        # 口径 = 本插件 LLM 调用账本（llm_usage.json），不读宿主全机统计
         range_days = max(1, min(int(range_days), 30))
-        out = {"available": False, "range_days": range_days, "trend": None,
-               "model_pie": [], "module_pie": [], "provider_pie": [], "tasks": [], "cards": {}}
-        try:
-            trend = await self.ctx.call_capability("statistics.local.token_trend", days=range_days, bucket="day")
-            dist_model = await self.ctx.call_capability("statistics.local.token_distribution", days=range_days, group_by="model")
-            dist_module = await self.ctx.call_capability("statistics.local.token_distribution", days=range_days, group_by="module")
-            dist_provider = await self.ctx.call_capability("statistics.local.token_distribution", days=range_days, group_by="provider")
-        except Exception as exc:
-            self.ctx.logger.warning("[stats] 宿主统计能力不可用: %s", type(exc).__name__)
-            trend = None
-        if isinstance(trend, dict) and trend.get("success"):
-            series = trend.get("series") or {}
-            vb = series.get("values_by_key") or {}
-            out["available"] = True
-            out["trend"] = {"timestamps": series.get("timestamps") or [],
-                            "total": vb.get("total_tokens") or [], "prompt": vb.get("prompt_tokens") or [],
-                            "completion": vb.get("completion_tokens") or [], "requests": vb.get("request_count") or [],
-                            "sum_total": series.get("total") or 0}
-            for key, dist in (("model_pie", dist_model), ("module_pie", dist_module), ("provider_pie", dist_provider)):
-                if isinstance(dist, dict) and dist.get("success"):
-                    pies = (dist.get("distribution") or {}).get("pies") or []
-                    out[key] = (pies[0].get("data") if pies else []) or []
         rows = await asyncio.to_thread(self._load_llm_usage)
+        days = [(date.today() - timedelta(days=i)).isoformat() for i in range(range_days - 1, -1, -1)]
+        buckets = {day: {"prompt": 0, "completion": 0, "total": 0, "requests": 0} for day in days}
+        model_tokens: dict[str, int] = {}
+        task_tokens: dict[str, int] = {}
+        for r in rows:
+            day = str(r.get("ts") or "")[:10]
+            if day not in buckets:
+                continue
+            b = buckets[day]
+            b["prompt"] += int(r.get("prompt_tokens") or 0)
+            b["completion"] += int(r.get("completion_tokens") or 0)
+            total = int(r.get("total_tokens") or 0)
+            b["total"] += total
+            b["requests"] += 1
+            model = str(r.get("model") or "") or "未知"
+            model_tokens[model] = model_tokens.get(model, 0) + total
+            task = str(r.get("task") or "auto")
+            task_tokens[task] = task_tokens.get(task, 0) + total
+        out = {"available": True, "range_days": range_days,
+               "trend": {"timestamps": days,
+                         "total": [buckets[d]["total"] for d in days],
+                         "prompt": [buckets[d]["prompt"] for d in days],
+                         "completion": [buckets[d]["completion"] for d in days],
+                         "requests": [buckets[d]["requests"] for d in days],
+                         "sum_total": sum(b["total"] for b in buckets.values())},
+               "model_pie": [{"name": k, "value": v} for k, v in sorted(model_tokens.items(), key=lambda kv: -kv[1])],
+               "module_pie": [{"name": k, "value": v} for k, v in sorted(task_tokens.items(), key=lambda kv: -kv[1])],
+               "cost_available": False, "cost_total": None, "cost_pie": [],
+               "tasks": [], "cards": {}}
+        # 花费读宿主逐次计费结果（宿主按模型配置单价计算，含分时/缓存价），request_type 过滤出本插件；
+        # limit 2000 远大于本插件 30 天窗口内的调用量，超出时丢弃最旧记录
+        try:
+            billed = await self.ctx.call_capability(
+                "database.query", model_name="ModelUsage",
+                filters={"request_type": "plugin.maibot-plugin-qq-group-daily-analysis"},
+                order_by="-timestamp", limit=2000)
+        except Exception:
+            billed = None
+        if isinstance(billed, list):
+            cost_by_model: dict[str, float] = {}
+            for r in billed:
+                if not isinstance(r, dict) or str(r.get("timestamp") or "")[:10] < days[0]:
+                    continue
+                name = str(r.get("model_assign_name") or r.get("model_name") or "") or "未知"
+                cost_by_model[name] = cost_by_model.get(name, 0.0) + float(r.get("cost") or 0)
+            out["cost_available"] = True
+            out["cost_total"] = round(sum(cost_by_model.values()), 6)
+            out["cost_pie"] = [{"name": k, "value": round(v, 6)}
+                               for k, v in sorted(cost_by_model.items(), key=lambda kv: -kv[1]) if v > 0]
         today = date.today().isoformat()
         todays = [r for r in rows if str(r.get("ts") or "").startswith(today)]
         bytask: dict[str, dict] = {}
@@ -4376,6 +4415,57 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                            "status": "completed"})
         events.sort(key=lambda e: str(e["time"]), reverse=True)
         return {"events": events[:max(1, min(int(limit), 100))]}
+
+    def _storage_prefs(self) -> dict:
+        try:
+            data = json.loads((Path(self.ctx.paths.data_dir) / "storage_ui_prefs.json").read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_storage_prefs(self, prefs: dict) -> None:
+        path = Path(self.ctx.paths.data_dir) / "storage_ui_prefs.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
+
+    def _eff_retention_days(self) -> int:
+        value = self._storage_prefs().get("archive_retention_days")
+        if type(value) is int and 0 <= value <= 3650:
+            return value
+        return self._report_cfg().archive_retention_days
+
+    def _eff_archive_enabled(self) -> bool:
+        prefs = self._storage_prefs()
+        if "local_archive_enabled" in prefs:
+            return bool(prefs["local_archive_enabled"])
+        return bool(self._report_cfg().local_archive_enabled)
+
+    @API("storage_prefs", version="1")
+    async def webui_storage_prefs(self) -> dict:
+        return {"archive_retention_days": self._eff_retention_days(),
+                "local_archive_enabled": self._eff_archive_enabled()}
+
+    @API("storage_prefs_set", version="1")
+    async def webui_storage_prefs_set(self, archive_retention_days: int | None = None,
+                                      local_archive_enabled: bool | None = None) -> dict:
+        prefs = self._storage_prefs()
+        if archive_retention_days is not None:
+            if type(archive_retention_days) is not int or not 0 <= archive_retention_days <= 3650:
+                return {"saved": False, "message": "保留天数需为 0~3650 的整数（0=不自动清理）"}
+            prefs["archive_retention_days"] = archive_retention_days
+        if local_archive_enabled is not None:
+            prefs["local_archive_enabled"] = bool(local_archive_enabled)
+        self._save_storage_prefs(prefs)
+        return {"saved": True, "archive_retention_days": self._eff_retention_days(),
+                "local_archive_enabled": self._eff_archive_enabled(), "message": "已保存存储偏好"}
+
+    @API("storage_cleanup", version="1")
+    async def webui_storage_cleanup(self) -> dict:
+        days = self._eff_retention_days()
+        if days == 0:
+            return {"deleted": 0, "message": "保留天数为 0（不自动清理），未执行清理"}
+        deleted = await asyncio.to_thread(self._report_store.cleanup, days)
+        return {"deleted": deleted, "message": f"已清理 {deleted} 份超过 {days} 天的过期存档"}
 
     @staticmethod
     def _dir_usage(path: Path) -> dict:

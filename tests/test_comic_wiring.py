@@ -9,7 +9,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from PIL import Image
 
@@ -194,6 +194,17 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.p.ctx.send.image.assert_awaited_once_with(base64.b64encode(self.api.blob).decode('ascii'), 'stream')
         self.p.ctx.send.text.assert_awaited_once()
         self.p._call_llm_json.assert_awaited_once()
+
+    async def test_archive_disabled_skips_comic_save_but_still_sends(self):
+        self.save_daily()
+        self.p._cfg().report.local_archive_enabled = False
+        self.assertTrue((await self.p.webui_draw('123', DAY, 'four_panel'))['accepted'])
+        await self.wait_for_operation()
+        self.assertEqual(self.operation()['status'], 'succeeded')
+        self.assertEqual(self.p._report_store.list_comics()['total'], 0)
+        entry = self.book_entry()
+        self.assertEqual((entry['status'], entry['sent']), ('completed', True))
+        self.p.ctx.send.image.assert_awaited_once()
 
     async def test_draw_submit_unknown_keeps_request_key(self):
         self.save_daily()
@@ -395,29 +406,57 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.p._eff_daily_random())
 
     async def test_token_stats_and_events(self):
-        async def cap(name, **kw):
-            if name == 'statistics.local.token_trend':
-                return {'success': True, 'series': {'timestamps': ['2026-11-14'], 'values_by_key': {
-                    'total_tokens': [100], 'prompt_tokens': [50], 'completion_tokens': [50], 'request_count': [1]}, 'total': 100}}
-            if name == 'statistics.local.token_distribution':
-                return {'success': True, 'distribution': {'pies': [{'data': [{'name': 'm', 'value': 100}]}]}}
-            return {}
-        with patch.object(self.p._ctx, 'call_capability', AsyncMock(side_effect=cap)):
-            r = await self.p.webui_token_stats(7)
-        self.assertTrue(r['available'])
-        self.assertEqual(r['model_pie'][0]['name'], 'm')
-        self.assertEqual(len(r['provider_pie']), 1)
+        billed = [
+            {'timestamp': date.today().isoformat() + 'T10:00:00', 'model_assign_name': 'm', 'model_name': 'mi', 'cost': 0.02},
+            {'timestamp': date.today().isoformat() + 'T11:00:00', 'model_assign_name': 'm', 'model_name': 'mi', 'cost': 0.03},
+            {'timestamp': (date.today() - timedelta(days=1)).isoformat() + 'T09:00:00', 'model_assign_name': 'free', 'model_name': 'fi', 'cost': 0.0},
+            {'timestamp': (date.today() - timedelta(days=9)).isoformat() + 'T09:00:00', 'model_assign_name': 'old', 'model_name': 'oi', 'cost': 9.99},
+        ]
+        cap_spy = AsyncMock(side_effect=lambda name, **kw: billed if name == 'database.query' else {})
+        with patch.object(self.p._ctx, 'call_capability', cap_spy):
+            r0 = await self.p.webui_token_stats(7)
+        self.assertTrue(r0['available'])
+        self.assertEqual(len(r0['trend']['timestamps']), 7)
+        self.assertEqual(r0['trend']['sum_total'], 0)
+        self.assertEqual(r0['model_pie'], [])
+        self.assertEqual(r0['module_pie'], [])
+        self.assertNotIn('provider_pie', r0)
+        self.assertFalse(any(str(c.args[0]).startswith('statistics.') for c in cap_spy.call_args_list))
+        self.assertTrue(r0['cost_available'])
+        self.assertAlmostEqual(r0['cost_total'], 0.05)
+        self.assertEqual(r0['cost_pie'], [{'name': 'm', 'value': 0.05}])
         self.p._record_llm_usage({'success': True, 'model_name': 'm', 'prompt_tokens': 10,
                                   'completion_tokens': 5, 'total_tokens': 15}, 'utils', 1.5)
         self.p._record_llm_usage({'success': False, 'model_name': 'm', 'prompt_tokens': 1,
                                   'completion_tokens': 0, 'total_tokens': 1}, 'utils', 0.5)
-        with patch.object(self.p._ctx, 'call_capability', AsyncMock(side_effect=cap)):
+        with patch.object(self.p._ctx, 'call_capability', cap_spy):
             r2 = await self.p.webui_token_stats(7)
+        self.assertTrue(r2['available'])
+        self.assertEqual(r2['trend']['sum_total'], 16)
+        self.assertEqual(r2['trend']['total'][-1], 16)
+        self.assertEqual(r2['trend']['prompt'][-1], 11)
+        self.assertEqual(r2['trend']['requests'][-1], 2)
+        self.assertEqual(r2['model_pie'], [{'name': 'm', 'value': 16}])
+        self.assertEqual(r2['module_pie'], [{'name': 'utils', 'value': 16}])
         self.assertEqual(r2['tasks'][0]['task'], 'utils')
         self.assertEqual(r2['tasks'][0]['calls'], 2)
         self.assertEqual(r2['tasks'][0]['success'], 1)
         self.assertEqual(r2['cards']['calls_today'], 2)
         self.assertEqual(r2['cards']['success_rate'], 50.0)
+        # 宿主计费查询失败/变形 → 花费优雅降级
+        with patch.object(self.p._ctx, 'call_capability', AsyncMock(return_value={'success': False, 'error': 'x'})):
+            r3 = await self.p.webui_token_stats(7)
+        self.assertFalse(r3['cost_available'])
+        self.assertIsNone(r3['cost_total'])
+        self.assertEqual(r3['cost_pie'], [])
+        usage = Path(self.p._ctx.paths.data_dir) / 'llm_usage.json'
+        rows = json.loads(usage.read_text(encoding='utf-8'))
+        rows.append({'ts': (datetime.now() - timedelta(days=40)).isoformat(timespec='seconds'),
+                     'source': 'plugin', 'task': 'utils', 'model': 'm', 'prompt_tokens': 999,
+                     'completion_tokens': 0, 'total_tokens': 999, 'success': True, 'ms': 1})
+        usage.write_text(json.dumps(rows), encoding='utf-8')
+        r5 = await self.p.webui_token_stats(7)
+        self.assertEqual(r5['trend']['sum_total'], 16)
         self.assertIn('events', await self.p.webui_events(10))
 
     async def test_comic_resend_and_delete_guards(self):

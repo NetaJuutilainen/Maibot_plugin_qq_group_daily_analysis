@@ -6,6 +6,7 @@ Run with python -m unittest discover -s tests; no bot/LLM/network startup.
 """
 import asyncio
 import re
+import tempfile
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,7 +40,10 @@ class RenderHardeningTest(unittest.IsolatedAsyncioTestCase):
     def plugin(self):
         p = module.GroupDailyAnalysisPlugin()
         p._plugin_config_instance = module.DailyAnalysisConfig()
-        p._ctx = SimpleNamespace(logger=Mock(), call_capability=Mock())
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        p._ctx = SimpleNamespace(logger=Mock(), call_capability=Mock(),
+                                 paths=SimpleNamespace(data_dir=Path(temp.name)))
         return p
 
     def rendered(self, p, theme):

@@ -302,7 +302,7 @@
       "id": "stats-data",
       "mode": "custom",
       "title": "统计与数据",
-      "description": "今日概览、消息/报告趋势（48小时/7/14/30天）、Token 消耗与占比、事件时间线、存储分区明细与批量删除、缓存清理。",
+      "description": "今日概览、消息/报告趋势（48小时/7/14/30天）、Token 消耗与占比、花费统计与占比（宿主按模型配置单价计费）、事件时间线、存储分区明细与批量删除、存盘开关/保留天数/立即清理、缓存清理。",
       "placement": "sidebar",
       "icon": "chart",
       "entry": "webui/stats_data.html",
@@ -317,6 +317,7 @@
           }
         },
         "storage": {"api": "storage", "version": "1"},
+        "storage_prefs": {"api": "storage_prefs", "version": "1"},
         "token_stats": {
           "api": "token_stats",
           "version": "1",
@@ -345,6 +346,20 @@
           "api": "cache_clear",
           "version": "1",
           "confirmation": "清理运行时缓存（头像/水印/相册临时文件，可自动重建），不影响报告存档。确认清理？",
+          "parameters": {}
+        },
+        "storage_prefs_set": {
+          "api": "storage_prefs_set",
+          "version": "1",
+          "parameters": {
+            "archive_retention_days": {"type": "integer", "minimum": 0, "maximum": 3650},
+            "local_archive_enabled": {"type": "boolean"}
+          }
+        },
+        "storage_cleanup": {
+          "api": "storage_cleanup",
+          "version": "1",
+          "confirmation": "按当前保留天数立即清理过期的报告/漫画存档（连带当日漫画），不删除任何群消息。此操作不可撤销，确认清理？",
           "parameters": {}
         }
       }

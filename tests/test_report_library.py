@@ -11,7 +11,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
-from datetime import date
+from datetime import date, timedelta
 
 from PIL import Image
 
@@ -92,6 +92,29 @@ class ReportLibraryTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.p._report_store, 'save', side_effect=OSError('disk failure')):
             self.assertEqual(await self.p._generate_daily_and_send('stream', DAY, 'atri'), 'ok')
         self.p.ctx.send.image.assert_awaited_once()
+
+    async def test_archive_disabled_skips_save_but_still_sends(self):
+        self.p._cfg().report.local_archive_enabled = False
+        self.assertEqual(await self.p._generate_daily_and_send('stream', DAY, 'atri'), 'ok')
+        self.p.ctx.send.image.assert_awaited_once()
+        self.assertEqual(self.p._report_store.list_reports()['total'], 0)
+
+    async def test_storage_prefs_override_config_and_cleanup(self):
+        self.assertEqual(await self.p.webui_storage_prefs(),
+                         {'archive_retention_days': 90, 'local_archive_enabled': True})
+        saved = await self.p.webui_storage_prefs_set(archive_retention_days=30, local_archive_enabled=False)
+        self.assertTrue(saved['saved'])
+        self.assertEqual((saved['archive_retention_days'], saved['local_archive_enabled']), (30, False))
+        self.assertEqual(self.p._cfg().report.archive_retention_days, 90)
+        self.assertTrue(self.p._cfg().report.local_archive_enabled)
+        self.assertFalse(self.p._eff_archive_enabled())
+        self.assertFalse((await self.p.webui_storage_prefs_set(archive_retention_days=4000))['saved'])
+        self.save(day=(date.today() - timedelta(days=31)).isoformat())
+        self.save()
+        self.assertEqual((await self.p.webui_storage_cleanup())['deleted'], 1)
+        self.assertEqual(self.p._report_store.list_reports()['total'], 1)
+        await self.p.webui_storage_prefs_set(archive_retention_days=0)
+        self.assertEqual((await self.p.webui_storage_cleanup())['deleted'], 0)
 
     async def test_render_failure_does_not_create_success_archive(self):
         self.p.ctx.call_capability.return_value = {}
@@ -287,7 +310,7 @@ class DeclarationTest(unittest.TestCase):
 
     def test_manifest_and_bound_api_signatures(self):
         manifest = json.loads((ROOT / '_manifest.json').read_text(encoding='utf-8'))
-        self.assertEqual(manifest['version'], '1.6.0')
+        self.assertEqual(manifest['version'], '1.6.1')
         self.assertEqual(manifest['host_application']['min_version'], '1.3.19')
         self.assertEqual(manifest['sdk']['min_version'], '2.12.0')
         self.assertIn('webui.claim_upload', manifest['capabilities'])
@@ -322,8 +345,10 @@ class DeclarationTest(unittest.TestCase):
         self.assertEqual(stats.entry, 'webui/stats_data.html')
         self.assertEqual(stats.placement, 'sidebar')
         self.assertIn('overview', stats.queries)
-        self.assertEqual(set(stats.actions), {'storage_delete', 'cache_clear'})
+        self.assertIn('storage_prefs', stats.queries)
+        self.assertEqual(set(stats.actions), {'storage_delete', 'cache_clear', 'storage_prefs_set', 'storage_cleanup'})
         self.assertTrue(stats.actions['storage_delete'].confirmation)
+        self.assertTrue(stats.actions['storage_cleanup'].confirmation)
         gallery = next(p for p in extension.pages if p.id == 'comic-gallery')
         self.assertIn('image_upload', extension.required_capabilities)
         upload = gallery.uploads['ref']

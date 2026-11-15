@@ -61,6 +61,12 @@ class ReportStore:
             raise ValueError('日期无效') from None
         return value
 
+    @staticmethod
+    def _label(value, fallback):
+        text = re.sub(r'[\\/:*?"<>|\x00-\x1f\s]+', '_', str(value or ''))
+        text = re.sub(r'_{2,}', '_', text).strip('_')[:40].strip('_')
+        return text or fallback
+
     def _directory(self, group_id, day):
         path = self.root / self._group(group_id) / self._day(day)
         self._check_path(path)
@@ -70,6 +76,14 @@ class ReportStore:
         path = directory / name
         self._check_path(path)
         return path
+
+    def _report_stem(self, meta):
+        return f"{self._label(meta.get('group_name'), meta['group_id'])}_{self._label(meta.get('theme'), 'default')}_{meta['day']}"
+
+    def _artifact(self, directory, stem, suffix, legacy):
+        # 新命名（群名_主题_日期）优先，旧固定文件名兼容读，不做批量迁移
+        name = f'{stem}{suffix}'
+        return self._file(directory, name if (directory / name).is_file() else legacy)
 
     def _read_meta(self, directory):
         path = self._file(directory, 'meta.json')
@@ -94,8 +108,12 @@ class ReportStore:
                 raise ValueError('报告耗时字段无效')
             if type(meta['has_image']) is not bool:
                 raise ValueError('报告类型无效')
-            required = ['report.html'] + (['report.png', 'thumb.jpg'] if meta['has_image'] else [])
-            if any(not self._file(directory, name).is_file() for name in required):
+            stem = self._report_stem(meta)
+            required = [self._artifact(directory, stem, '.html', 'report.html')]
+            if meta['has_image']:
+                required += [self._artifact(directory, stem, '.png', 'report.png'),
+                             self._artifact(directory, stem, '_thumb.jpg', 'thumb.jpg')]
+            if any(not path.is_file() for path in required):
                 raise ValueError('报告文件不完整')
         except (KeyError, TypeError, UnicodeError, json.JSONDecodeError):
             raise ValueError('报告元数据无效') from None
@@ -169,16 +187,17 @@ class ReportStore:
             backup = directory.parent / f'.{day}-old-{uuid.uuid4().hex}'
             moved = False
             try:
-                (staging / 'report.html').write_bytes(html)
+                stem = self._report_stem(meta)
+                (staging / f'{stem}.html').write_bytes(html)
                 if context_bytes:
                     (staging / 'context.json').write_bytes(context_bytes)
                 if image is not None:
-                    (staging / 'report.png').write_bytes(image)
-                    (staging / 'thumb.jpg').write_bytes(thumb)
+                    (staging / f'{stem}.png').write_bytes(image)
+                    (staging / f'{stem}_thumb.jpg').write_bytes(thumb)
                 (staging / 'meta.json').write_bytes(encoded)
                 # 整目录替换前保留当日漫画存档（P3），否则重新生成日报会抹掉漫画
                 if directory.exists():
-                    for name in self.COMIC_FILES:
+                    for name in self._comic_artifact_names(directory):
                         source = directory / name
                         if source.is_file():
                             shutil.copy2(source, staging / name)
@@ -285,7 +304,7 @@ class ReportStore:
             self._revision(meta, revision)
             if not meta['has_image']:
                 raise ValueError('该报告仅有 HTML')
-            path = self._file(directory, 'thumb.jpg')
+            path = self._artifact(directory, self._report_stem(meta), '_thumb.jpg', 'thumb.jpg')
             if path.stat().st_size > 15 * 1024:
                 raise ValueError('缩略图文件过大')
             return {'data_uri': 'data:image/jpeg;base64,' + base64.b64encode(path.read_bytes()).decode('ascii'),
@@ -299,7 +318,9 @@ class ReportStore:
         self._revision(meta, revision)
         if kind == 'image' and not meta['has_image']:
             raise ValueError('该报告仅有 HTML')
-        path = self._file(directory, 'report.png' if kind == 'image' else 'report.html')
+        stem = self._report_stem(meta)
+        path = (self._artifact(directory, stem, '.png', 'report.png') if kind == 'image'
+                else self._artifact(directory, stem, '.html', 'report.html'))
         maximum = self.MAX_IMAGE_BYTES if kind == 'image' else self.MAX_HTML_BYTES
         size = path.stat().st_size
         if not 0 < size <= maximum:
@@ -323,7 +344,7 @@ class ReportStore:
             return {'data': base64.b64encode(block).decode('ascii'), 'offset': offset,
                     'next_offset': next_offset, 'size': size, 'done': next_offset == size,
                     'mime': 'image/png' if kind == 'image' else 'text/html',
-                    'filename': f'{group_id}-{day}.{"png" if kind == "image" else "html"}',
+                    'filename': f'{self._report_stem(meta)}.{"png" if kind == "image" else "html"}',
                     'revision': meta['revision']}
 
     def delete(self, group_id, day, revision=''):
@@ -349,8 +370,33 @@ class ReportStore:
             return sum(self.delete(row['group_id'], row['day'], row['revision'])['deleted'] for row in old)
 
     # ------------------------------------------------------------------ 漫画存档（P3）
-    # 漫画三件套 comic.png / comic_thumb.jpg / comic.json 与日报同住 reports/<群>/<日>/，
-    # 日报 save() 整目录替换时会保留它们；delete() 删整日目录则一并删除。
+    # 漫画与日报同住 reports/<群>/<日>/：图片按 群名_风格_日期.png/_thumb.jpg 命名，
+    # comic.json 保持固定名作索引；日报 save() 整目录替换时会保留它们，delete() 删整日目录则一并删除。
+
+    def _comic_stem(self, meta):
+        return f"{self._label(meta.get('group_name'), meta['group_id'])}_{self._label(meta.get('style'), 'comic')}_{meta['day']}"
+
+    def _comic_artifact_names(self, directory):
+        names = set(self.COMIC_FILES)
+        try:
+            meta = json.loads(self._file(directory, 'comic.json').read_text(encoding='utf-8'))
+            if isinstance(meta, dict):
+                stem = self._comic_stem(meta)
+                names.update((f'{stem}.png', f'{stem}_thumb.jpg'))
+        except (OSError, ValueError, KeyError, TypeError, UnicodeError):
+            pass
+        return sorted(names)
+
+    def _write_atomic(self, directory, name, payload):
+        fd, tmp = tempfile.mkstemp(prefix=f'.{name}-', dir=str(directory))
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(payload)
+            self._check_path(directory / name)
+            os.replace(tmp, directory / name)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
     def _read_comic_meta(self, directory):
         path = self._file(directory, 'comic.json')
@@ -374,7 +420,9 @@ class ReportStore:
                 raise ValueError('漫画计数字段无效')
             if type(meta['sent']) is not bool:
                 raise ValueError('漫画发送标记无效')
-            if any(not self._file(directory, name).is_file() for name in ('comic.png', 'comic_thumb.jpg')):
+            stem = self._comic_stem(meta)
+            if any(not self._artifact(directory, stem, suffix, legacy).is_file()
+                   for suffix, legacy in (('.png', 'comic.png'), ('_thumb.jpg', 'comic_thumb.jpg'))):
                 raise ValueError('漫画文件不完整')
         except (KeyError, TypeError, UnicodeError, json.JSONDecodeError):
             raise ValueError('漫画元数据无效') from None
@@ -408,17 +456,17 @@ class ReportStore:
         with self._lock:
             self._check_path(directory)
             directory.mkdir(parents=True, exist_ok=True)
+            stem = self._comic_stem(meta)
             # 逐文件原子替换，comic.json 最后写（它是列表可见性的提交标记）
-            for name, payload in (('comic.png', image), ('comic_thumb.jpg', thumb), ('comic.json', encoded)):
-                fd, tmp = tempfile.mkstemp(prefix=f'.{name}-', dir=str(directory))
-                try:
-                    with os.fdopen(fd, 'wb') as stream:
-                        stream.write(payload)
-                    self._check_path(directory / name)
-                    os.replace(tmp, directory / name)
-                finally:
-                    if os.path.exists(tmp):
-                        os.unlink(tmp)
+            for name, payload in ((f'{stem}.png', image), (f'{stem}_thumb.jpg', thumb)):
+                self._write_atomic(directory, name, payload)
+            # 换风格重画后清掉旧命名残留，避免同日目录堆积多套漫画
+            for name in self._comic_artifact_names(directory):
+                if name not in (f'{stem}.png', f'{stem}_thumb.jpg', 'comic.json'):
+                    path = self._file(directory, name)
+                    if path.is_file():
+                        path.unlink()
+            self._write_atomic(directory, 'comic.json', encoded)
         return meta
 
     def _comic_catalog(self):
@@ -487,7 +535,7 @@ class ReportStore:
             directory = self._directory(group_id, day)
             meta = self._read_comic_meta(directory)
             self._revision(meta, revision)
-            path = self._file(directory, 'comic_thumb.jpg')
+            path = self._artifact(directory, self._comic_stem(meta), '_thumb.jpg', 'comic_thumb.jpg')
             if path.stat().st_size > 15 * 1024:
                 raise ValueError('缩略图文件过大')
             return {'data_uri': 'data:image/jpeg;base64,' + base64.b64encode(path.read_bytes()).decode('ascii'),
@@ -498,7 +546,7 @@ class ReportStore:
             directory = self._directory(group_id, day)
             meta = self._read_comic_meta(directory)
             self._revision(meta, revision)
-            path = self._file(directory, 'comic.png')
+            path = self._artifact(directory, self._comic_stem(meta), '.png', 'comic.png')
             size = path.stat().st_size
             if not 0 < size <= self.MAX_IMAGE_BYTES:
                 raise ValueError('漫画文件大小无效')
@@ -509,7 +557,7 @@ class ReportStore:
             directory = self._directory(group_id, day)
             meta = self._read_comic_meta(directory)
             self._revision(meta, revision)
-            path = self._file(directory, 'comic.png')
+            path = self._artifact(directory, self._comic_stem(meta), '.png', 'comic.png')
             size = path.stat().st_size
             if not 0 < size <= self.MAX_IMAGE_BYTES:
                 raise ValueError('漫画文件大小无效')
@@ -521,7 +569,7 @@ class ReportStore:
             next_offset = offset + len(block)
             return {'data': base64.b64encode(block).decode('ascii'), 'offset': offset,
                     'next_offset': next_offset, 'size': size, 'done': next_offset == size,
-                    'mime': 'image/png', 'filename': f'{group_id}-{day}-comic.png',
+                    'mime': 'image/png', 'filename': f'{self._comic_stem(meta)}.png',
                     'revision': meta['revision']}
 
     def mark_comic_sent(self, group_id, day, revision=''):
@@ -531,15 +579,7 @@ class ReportStore:
             self._revision(meta, revision)
             meta['sent'] = True
             encoded = json.dumps(meta, ensure_ascii=False, allow_nan=False).encode('utf-8')
-            path = self._file(directory, 'comic.json')
-            fd, tmp = tempfile.mkstemp(prefix='.comic.json-', dir=str(directory))
-            try:
-                with os.fdopen(fd, 'wb') as stream:
-                    stream.write(encoded)
-                os.replace(tmp, path)
-            finally:
-                if os.path.exists(tmp):
-                    os.unlink(tmp)
+            self._write_atomic(directory, 'comic.json', encoded)
             return meta
 
     def delete_comic(self, group_id, day, revision=''):
@@ -549,7 +589,7 @@ class ReportStore:
                 return {'deleted': False}
             meta = self._read_comic_meta(directory)
             self._revision(meta, revision)
-            for name in self.COMIC_FILES:
+            for name in self._comic_artifact_names(directory):
                 path = self._file(directory, name)
                 if path.is_file():
                     path.unlink()

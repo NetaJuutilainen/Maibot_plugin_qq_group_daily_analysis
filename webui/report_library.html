@@ -112,12 +112,12 @@
         <button id="generate" class="primary" type="button" data-mutation disabled>立即生成</button>
       </div>
       <p class="hint">日期留空为今天（以服务器日期为准）；当日重建使用滚动24小时，历史日期仅用既有统计，不补造历史。生成会消耗模型额度并发送到所选群。</p>
-      <div class="section-heading"><h3>报告参数</h3><span class="muted">与插件设置页双向同步</span></div>
+      <div class="section-heading"><h3>报告参数</h3><span id="cfg-state" class="muted">—</span></div>
       <div class="fields">
         <label>默认日报主题<select id="cfg-theme" disabled></select></label>
-        <label>按群指定主题<textarea id="cfg-theme-map" rows="2" maxlength="4000" placeholder="每行 群号=主题key" disabled></textarea></label>
       </div>
-      <p class="hint">按群主题每行「群号=主题key」（如 123456789=hack），优先于默认主题；主题 key 见上方「报告主题」下拉。改完即写回插件设置并热生效。</p>
+      <p class="hint">按群主题逐群指定（下拉即改即存），未指定的群用默认主题；与插件设置页双向同步。</p>
+      <div id="cfg-theme-list" class="tasks"><p class="empty">正在连接…</p></div>
     </section>
 
     <section class="panel" aria-labelledby="tasks-title">
@@ -258,6 +258,68 @@
         $('page-label').textContent = `第 ${state.page} / ${state.pages} 页`;
       }
 
+      function parseGroupMapText(text) {
+        const map = {};
+        for (const raw of String(text || '').split(/\r?\n/)) {
+          const line = raw.trim();
+          if (!line) continue;
+          const sep = ['=', '：', ':', '\t', ' '].find(ch => line.includes(ch));
+          if (!sep) continue;
+          const gid = line.slice(0, line.indexOf(sep)).trim();
+          const value = line.slice(line.indexOf(sep) + 1).trim();
+          if (gid && value) map[gid] = value;
+        }
+        return map;
+      }
+
+      function serializeGroupMap(map) {
+        return Object.keys(map).sort().filter(gid => map[gid]).map(gid => `${gid}=${map[gid]}`).join('\n');
+      }
+
+      let themeMapStamp = null;
+
+      function renderThemeMap(groups, mapText) {
+        const container = $('cfg-theme-list');
+        const map = parseGroupMapText(mapText);
+        const known = (Array.isArray(groups) ? groups : []).filter(object)
+          .map(g => ({ gid: String(g.group_id || ''), name: String(g.group_name || g.group_id || '') }))
+          .filter(g => validGroup(g.gid));
+        const knownIds = new Set(known.map(g => g.gid));
+        const stale = Object.keys(map).filter(gid => !knownIds.has(gid)).map(gid => ({ gid, name: `${gid}（未活跃）` }));
+        const rows = [...known, ...stale];
+        const stamp = JSON.stringify([rows.map(r => [r.gid, r.name]), map, themeEntries.filter(item => object(item) && item.key).map(item => item.key)]);
+        if (stamp === themeMapStamp || container.querySelector('select:focus')) return; // 数据没变或正在操作，跳过重建
+        themeMapStamp = stamp;
+        const specified = rows.filter(r => map[r.gid]).length;
+        $('cfg-state').textContent = rows.length ? `已指定 ${specified} / ${rows.length} 群` : '—';
+        if (!rows.length) {
+          container.replaceChildren(element('p', '还没有已知的群聊；机器人收到群消息后回来即可设置。', 'empty'));
+          return;
+        }
+        container.replaceChildren(...rows.map(({ gid, name }) => {
+          const row = element('div', undefined, 'task');
+          const copy = element('div', undefined, 'task-copy');
+          copy.append(element('strong', name));
+          const line = element('p', undefined, 'muted');
+          const select = document.createElement('select');
+          select.setAttribute('aria-label', `${name} 日报主题`);
+          select.replaceChildren(new Option('跟随默认主题', ''),
+            ...themeEntries.filter(item => object(item) && item.key).map(item => new Option(item.label, item.key)));
+          if (map[gid] && !themeEntries.some(item => object(item) && item.key === map[gid])) select.append(new Option(map[gid], map[gid]));
+          select.value = map[gid] || '';
+          line.append('主题 ', select);
+          copy.append(line);
+          row.append(copy);
+          row.append(element('span', map[gid] ? '指定' : '默认', map[gid] ? 'badge ok' : 'badge'));
+          select.addEventListener('change', () => {
+            const next = { ...map };
+            if (select.value) next[gid] = select.value; else delete next[gid];
+            saveParam(`保存 ${name} 日报主题`, 'theme_by_group', serializeGroupMap(next));
+          });
+          return row;
+        }));
+      }
+
       function renderReportParams(view) {
         const theme = $('cfg-theme');
         if (document.activeElement !== theme) {
@@ -265,18 +327,18 @@
           theme.replaceChildren(...themeEntries.filter(item => object(item) && item.key).map(item => new Option(item.label, item.key)));
           theme.value = [...theme.options].some(option => option.value === wanted) ? wanted : '';
         }
-        if (document.activeElement !== $('cfg-theme-map')) $('cfg-theme-map').value = typeof view.theme_by_group === 'string' ? view.theme_by_group : '';
+        renderThemeMap(overviewGroups, typeof view.theme_by_group === 'string' ? view.theme_by_group : '');
         syncReportParamsControls();
       }
 
       function syncReportParamsControls() {
         const locked = !state.ready || state.actionBusy;
-        for (const id of ['cfg-theme', 'cfg-theme-map']) $(id).disabled = locked;
+        for (const id of ['cfg-theme']) $(id).disabled = locked;
+        for (const select of document.querySelectorAll('#cfg-theme-list select')) select.disabled = locked;
       }
 
       const saveParam = (label, key, value) => { void performAction('config_save', { section: 'report', key, value }, label); };
       $('cfg-theme').addEventListener('change', () => saveParam('保存默认日报主题', 'daily_theme', $('cfg-theme').value));
-      $('cfg-theme-map').addEventListener('change', () => saveParam('保存按群指定主题', 'theme_by_group', $('cfg-theme-map').value.trim()));
 
       function replaceOptions(select, entries, placeholder, valueKey, labelKey) {
         const selected = select.value;

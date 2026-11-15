@@ -133,9 +133,10 @@
         <label>等待上限（秒）<input id="cfg-wait" type="number" min="60" max="3600" disabled></label>
         <label>漫画文案<input id="cfg-caption" type="text" maxlength="120" disabled></label>
         <label>相册上传<select id="cfg-album-on" disabled><option value="off">关</option><option value="on">开</option></select></label>
-        <label>相册按群指定<textarea id="cfg-album-map" rows="2" maxlength="4000" placeholder="每行 群号=相册名" disabled></textarea></label>
       </div>
-      <p class="hint">相册按群指定优先于设置页的「漫画相册名称」；两者都留空跟随日报相册设置。默认日报主题与按群主题在报告库页设置。</p>
+      <div class="section-heading"><h3>相册按群指定</h3><span id="album-state" class="muted">—</span></div>
+      <div id="cfg-album-list" class="tasks"><p class="empty">正在连接…</p></div>
+      <p class="hint">逐群填目标相册名（留空=跟随默认），改完即存；优先于设置页的「漫画相册名称」，都留空跟随日报相册设置。需先打开「相册上传」。默认日报主题与按群主题在报告库页设置。</p>
     </section>
 
     <section class="panel" aria-labelledby="recover-title">
@@ -349,13 +350,77 @@
         if (document.activeElement !== $('cfg-wait')) $('cfg-wait').value = String(Number(view.max_wait_seconds) || 300);
         if (document.activeElement !== $('cfg-caption')) $('cfg-caption').value = typeof view.comic_caption === 'string' ? view.comic_caption : '';
         if (document.activeElement !== $('cfg-album-on')) $('cfg-album-on').value = view.album_upload_enabled ? 'on' : 'off';
-        if (document.activeElement !== $('cfg-album-map')) $('cfg-album-map').value = typeof view.album_name_by_group === 'string' ? view.album_name_by_group : '';
+        renderAlbumMap(overviewGroups, typeof view.album_name_by_group === 'string' ? view.album_name_by_group : '');
         syncParamsControls();
       }
 
       function syncParamsControls() {
         const locked = !state.ready || state.actionBusy || !state.enabled;
-        for (const id of ['cfg-panels', 'cfg-wait', 'cfg-caption', 'cfg-album-on', 'cfg-album-map']) $(id).disabled = locked;
+        for (const id of ['cfg-panels', 'cfg-wait', 'cfg-caption', 'cfg-album-on']) $(id).disabled = locked;
+        for (const input of document.querySelectorAll('#cfg-album-list input')) input.disabled = locked;
+      }
+
+      function parseGroupMapText(text) {
+        const map = {};
+        for (const raw of String(text || '').split(/\r?\n/)) {
+          const line = raw.trim();
+          if (!line) continue;
+          const sep = ['=', '：', ':', '\t', ' '].find(ch => line.includes(ch));
+          if (!sep) continue;
+          const gid = line.slice(0, line.indexOf(sep)).trim();
+          const value = line.slice(line.indexOf(sep) + 1).trim();
+          if (gid && value) map[gid] = value;
+        }
+        return map;
+      }
+
+      function serializeGroupMap(map) {
+        return Object.keys(map).sort().filter(gid => map[gid]).map(gid => `${gid}=${map[gid]}`).join('\n');
+      }
+
+      let albumMapStamp = null;
+
+      function renderAlbumMap(groups, mapText) {
+        const container = $('cfg-album-list');
+        const map = parseGroupMapText(mapText);
+        const known = (Array.isArray(groups) ? groups : []).filter(object)
+          .map(g => ({ gid: String(g.group_id || ''), name: String(g.group_name || g.group_id || '') }))
+          .filter(g => validGroup(g.gid));
+        const knownIds = new Set(known.map(g => g.gid));
+        const stale = Object.keys(map).filter(gid => !knownIds.has(gid)).map(gid => ({ gid, name: `${gid}（未活跃）` }));
+        const rows = [...known, ...stale];
+        const stamp = JSON.stringify([rows.map(r => [r.gid, r.name]), map]);
+        if (stamp === albumMapStamp || container.querySelector('input:focus')) return; // 数据没变或正在输入，跳过重建
+        albumMapStamp = stamp;
+        const specified = rows.filter(r => map[r.gid]).length;
+        $('album-state').textContent = rows.length ? `已指定 ${specified} / ${rows.length} 群` : '—';
+        if (!rows.length) {
+          container.replaceChildren(element('p', '还没有已知的群聊；机器人收到群消息后回来即可设置。', 'empty'));
+          return;
+        }
+        container.replaceChildren(...rows.map(({ gid, name }) => {
+          const row = element('div', undefined, 'task');
+          const copy = element('div', undefined, 'task-copy');
+          copy.append(element('strong', name));
+          const line = element('p', undefined, 'muted');
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.maxLength = 100;
+          input.placeholder = '跟随默认';
+          input.setAttribute('aria-label', `${name} 漫画相册名`);
+          input.value = map[gid] || '';
+          line.append('相册名 ', input);
+          copy.append(line);
+          row.append(copy);
+          row.append(element('span', map[gid] ? '指定' : '默认', map[gid] ? 'badge ok' : 'badge'));
+          input.addEventListener('change', () => {
+            const next = { ...map };
+            const value = input.value.trim();
+            if (value) next[gid] = value; else delete next[gid];
+            saveParam(`保存 ${name} 漫画相册`, 'album_name_by_group', serializeGroupMap(next));
+          });
+          return row;
+        }));
       }
 
       function renderStylePolicy(groups, styleByGroup, rot, defaultStyle) {
@@ -1084,7 +1149,6 @@
       });
       $('cfg-caption').addEventListener('change', () => saveParam('保存漫画文案', 'comic', 'comic_caption', $('cfg-caption').value.trim()));
       $('cfg-album-on').addEventListener('change', () => saveParam('保存漫画相册上传开关', 'comic', 'album_upload_enabled', $('cfg-album-on').value));
-      $('cfg-album-map').addEventListener('change', () => saveParam('保存漫画按群相册', 'comic', 'album_name_by_group', $('cfg-album-map').value.trim()));
       $('draw-group').addEventListener('change', syncControls);
       $('draw').addEventListener('click', () => {
         void performAction('draw', { group_id: $('draw-group').value, day: $('draw-day').value, style: $('draw-style').value }, '画漫画');

@@ -1159,8 +1159,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     _CONFIG_EDITABLE: ClassVar[dict[str, frozenset]] = {
         "comic": frozenset({"storyboard_panels", "comic_caption", "max_wait_seconds",
-                            "album_upload_enabled", "album_name_by_group"}),
-        "report": frozenset({"daily_theme", "theme_by_group"}),
+                            "album_upload_enabled", "album_name_by_group", "groups"}),
+        "report": frozenset({"daily_theme", "theme_by_group", "daily_report_groups", "chat_whitelist"}),
     }
 
     def _persist_config_toml(self, section: str, new_cfg) -> None:
@@ -3298,7 +3298,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                        for gid, chat in sorted(best.items())][:100],
             "themes": [{"key": key, "label": value["label"]} for key, value in THEME_REGISTRY.items()],
             "config_view": {"daily_theme": str(self.config.report.daily_theme),
-                            "theme_by_group": str(self.config.report.theme_by_group or "")},
+                            "theme_by_group": str(self.config.report.theme_by_group or ""),
+                            "daily_report_groups": str(self.config.report.daily_report_groups or ""),
+                            "chat_whitelist": str(self.config.report.chat_whitelist or "")},
         }
 
     @API("reports", version="1")
@@ -3578,7 +3580,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                             "comic_caption": ccfg.comic_caption,
                             "max_wait_seconds": int(ccfg.max_wait_seconds or 300),
                             "album_upload_enabled": bool(ccfg.album_upload_enabled),
-                            "album_name_by_group": ccfg.album_name_by_group},
+                            "album_name_by_group": ccfg.album_name_by_group,
+                            "auto_comic_groups": ccfg.groups,
+                            "auto_after_daily": bool(ccfg.auto_after_daily),
+                            "chat_whitelist": str(self.config.report.chat_whitelist or "")},
             "use_reference_images": bool(ccfg.use_reference_images),
             "total": listing["total"], "today_count": daily["total"],
             "groups": [{"group_id": gid, "group_name": str(chat.get("name") or gid)[:200]}

@@ -112,11 +112,13 @@
         <button id="generate" class="primary" type="button" data-mutation disabled>立即生成</button>
       </div>
       <p class="hint">日期留空为今天（以服务器日期为准）；当日重建使用滚动24小时，历史日期仅用既有统计，不补造历史。生成会消耗模型额度并发送到所选群。</p>
-      <div class="section-heading"><h3>报告参数</h3><span id="cfg-state" class="muted">—</span></div>
+      <div class="section-heading"><h3>按群日报管理</h3><span id="cfg-state" class="muted">—</span></div>
       <div class="fields">
         <label>默认日报主题<select id="cfg-theme" disabled></select></label>
+        <label>添加群聊<input id="cfg-add-group" type="text" maxlength="128" placeholder="群号" disabled></label>
+        <button id="cfg-add" type="button" disabled>添加并开启日报</button>
       </div>
-      <p class="hint">按群主题逐群指定（下拉即改即存），未指定的群用默认主题；与插件设置页双向同步。</p>
+      <p class="hint">开关即改即存：暂停=不再自动生成（统计照常、主题配置保留）；添加的群会自动过白名单。首次操作会把「全部活跃群」固化为显式名单，此后新增群默认暂停。与插件设置页双向同步。</p>
       <div id="cfg-theme-list" class="tasks"><p class="empty">正在连接…</p></div>
     </section>
 
@@ -278,22 +280,37 @@
 
       let themeMapStamp = null;
 
-      function renderThemeMap(groups, mapText) {
+      function parseIdList(text) {
+        return String(text || '').split(/\r?\n/).map(s => s.trim()).filter(s => s && validGroup(s));
+      }
+
+      function serializeIdList(ids) {
+        return [...new Set(ids)].join('\n');
+      }
+
+      function renderDailyGroups(groups, view) {
         const container = $('cfg-theme-list');
-        const map = parseGroupMapText(mapText);
+        const themeMap = parseGroupMapText(view.theme_by_group);
+        const listed = parseIdList(view.daily_report_groups);
+        const managed = listed.length > 0; // 空=未按群管理：全部活跃群开启（旧语义）
+        state.chatWhitelist = typeof view.chat_whitelist === 'string' ? view.chat_whitelist : '';
+        state.dailyList = { managed, listed };
         const known = (Array.isArray(groups) ? groups : []).filter(object)
           .map(g => ({ gid: String(g.group_id || ''), name: String(g.group_name || g.group_id || '') }))
           .filter(g => validGroup(g.gid));
         const knownIds = new Set(known.map(g => g.gid));
-        const stale = Object.keys(map).filter(gid => !knownIds.has(gid)).map(gid => ({ gid, name: `${gid}（未活跃）` }));
+        state.dailyList.knownIds = [...knownIds];
+        const isOn = gid => (managed ? listed.includes(gid) : knownIds.has(gid));
+        const stale = [...new Set([...listed, ...Object.keys(themeMap)])].filter(gid => !knownIds.has(gid))
+          .map(gid => ({ gid, name: `${gid}（未活跃）` }));
         const rows = [...known, ...stale];
-        const stamp = JSON.stringify([rows.map(r => [r.gid, r.name]), map, themeEntries.filter(item => object(item) && item.key).map(item => item.key)]);
+        const stamp = JSON.stringify([rows.map(r => [r.gid, r.name]), themeMap, listed, managed, themeEntries.filter(item => object(item) && item.key).map(item => item.key)]);
         if (stamp === themeMapStamp || container.querySelector('select:focus')) return; // 数据没变或正在操作，跳过重建
         themeMapStamp = stamp;
-        const specified = rows.filter(r => map[r.gid]).length;
-        $('cfg-state').textContent = rows.length ? `已指定 ${specified} / ${rows.length} 群` : '—';
+        const onCount = rows.filter(r => isOn(r.gid)).length;
+        $('cfg-state').textContent = rows.length ? `开启 ${onCount} / ${rows.length} 群${managed ? '' : '（未按群管理：全部活跃群）'}` : '—';
         if (!rows.length) {
-          container.replaceChildren(element('p', '还没有已知的群聊；机器人收到群消息后回来即可设置。', 'empty'));
+          container.replaceChildren(element('p', '还没有已知的群聊；机器人收到群消息后回来即可管理，或直接在上方输入群号添加。', 'empty'));
           return;
         }
         container.replaceChildren(...rows.map(({ gid, name }) => {
@@ -301,18 +318,27 @@
           const copy = element('div', undefined, 'task-copy');
           copy.append(element('strong', name));
           const line = element('p', undefined, 'muted');
+          const toggle = document.createElement('select');
+          toggle.setAttribute('aria-label', `${name} 日报开关`);
+          toggle.append(new Option('开启', 'on'), new Option('暂停', 'off'));
+          toggle.value = isOn(gid) ? 'on' : 'off';
           const select = document.createElement('select');
           select.setAttribute('aria-label', `${name} 日报主题`);
           select.replaceChildren(new Option('跟随默认主题', ''),
             ...themeEntries.filter(item => object(item) && item.key).map(item => new Option(item.label, item.key)));
-          if (map[gid] && !themeEntries.some(item => object(item) && item.key === map[gid])) select.append(new Option(map[gid], map[gid]));
-          select.value = map[gid] || '';
-          line.append('主题 ', select);
+          if (themeMap[gid] && !themeEntries.some(item => object(item) && item.key === themeMap[gid])) select.append(new Option(themeMap[gid], themeMap[gid]));
+          select.value = themeMap[gid] || '';
+          line.append('日报 ', toggle, '　主题 ', select);
           copy.append(line);
           row.append(copy);
-          row.append(element('span', map[gid] ? '指定' : '默认', map[gid] ? 'badge ok' : 'badge'));
+          row.append(element('span', isOn(gid) ? '开启' : '暂停', isOn(gid) ? 'badge ok' : 'badge'));
+          toggle.addEventListener('change', () => {
+            const set = new Set(managed ? listed : knownIds);
+            if (toggle.value === 'on') set.add(gid); else set.delete(gid);
+            saveParam(`保存 ${name} 日报开关`, 'daily_report_groups', serializeIdList([...set]));
+          });
           select.addEventListener('change', () => {
-            const next = { ...map };
+            const next = { ...themeMap };
             if (select.value) next[gid] = select.value; else delete next[gid];
             saveParam(`保存 ${name} 日报主题`, 'theme_by_group', serializeGroupMap(next));
           });
@@ -327,18 +353,31 @@
           theme.replaceChildren(...themeEntries.filter(item => object(item) && item.key).map(item => new Option(item.label, item.key)));
           theme.value = [...theme.options].some(option => option.value === wanted) ? wanted : '';
         }
-        renderThemeMap(overviewGroups, typeof view.theme_by_group === 'string' ? view.theme_by_group : '');
+        renderDailyGroups(overviewGroups, view);
         syncReportParamsControls();
       }
 
       function syncReportParamsControls() {
         const locked = !state.ready || state.actionBusy;
-        for (const id of ['cfg-theme']) $(id).disabled = locked;
+        for (const id of ['cfg-theme', 'cfg-add-group', 'cfg-add']) $(id).disabled = locked;
         for (const select of document.querySelectorAll('#cfg-theme-list select')) select.disabled = locked;
       }
 
       const saveParam = (label, key, value) => { void performAction('config_save', { section: 'report', key, value }, label); };
       $('cfg-theme').addEventListener('change', () => saveParam('保存默认日报主题', 'daily_theme', $('cfg-theme').value));
+      $('cfg-add').addEventListener('click', async () => {
+        const gid = $('cfg-add-group').value.trim();
+        if (!validGroup(gid)) { notice('请输入有效群号。', true); return; }
+        $('cfg-add-group').value = '';
+        const info = state.dailyList || { managed: true, listed: [], knownIds: [] };
+        const ids = new Set(info.managed ? info.listed : info.knownIds);
+        ids.add(gid);
+        await performAction('config_save', { section: 'report', key: 'daily_report_groups', value: serializeIdList([...ids]) }, `添加群 ${gid} 并开启日报`);
+        const whitelist = parseIdList(state.chatWhitelist || '');
+        if (whitelist.length && !whitelist.includes(gid)) {
+          await performAction('config_save', { section: 'report', key: 'chat_whitelist', value: serializeIdList([...whitelist, gid]) }, `将群 ${gid} 加入白名单`);
+        }
+      });
 
       function replaceOptions(select, entries, placeholder, valueKey, labelKey) {
         const selected = select.value;

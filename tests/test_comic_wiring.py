@@ -473,6 +473,9 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         overview = await self.p.webui_overview()
         self.assertEqual(overview['config_view']['theme_by_group'], '123=hack')
         self.assertEqual(overview['config_view']['daily_theme'], 'hack')
+        # 群开关名单三键可回写（日报开关/白名单/漫画联动）
+        for section, key in (('report', 'daily_report_groups'), ('report', 'chat_whitelist'), ('comic', 'groups')):
+            self.assertTrue((await self.p.webui_config_save(section, key, '123'))['saved'])
 
     async def test_token_stats_and_events(self):
         billed = [

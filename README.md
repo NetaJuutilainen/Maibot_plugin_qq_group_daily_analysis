@@ -22,7 +22,56 @@
 
 ---
 
-## 二、三分钟上手
+## 二、主题一览（12 套）
+
+所有主题含同样四块内容 + 24h 活跃度图 + Token 页脚，差别在配色/字体/排版/板块文案。
+
+### 主题预览（真实渲染结果）
+
+缩略图截顶部区域，点击看 1000px 完整长图。
+
+|**ATRI**|**BlueArchive**|**初音未来**|
+|:--:|:--:|:--:|
+|[![ATRI](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/atri.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/atri.jpg)|[![BlueArchive](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/bluearchive.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/bluearchive.jpg)|[![初音未来](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/hatsunemiku.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hatsunemiku.jpg)|
+
+|**黑客帝国**|**复古未来**|**剪贴簿**|
+|:--:|:--:|:--:|
+|[![黑客帝国](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/hack.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hack.jpg)|[![复古未来](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/retro_futurism.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/retro_futurism.jpg)|[![剪贴簿](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/scrapbook.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/scrapbook.jpg)|
+
+|**新春**|**简约**|**格式报告**|
+|:--:|:--:|:--:|
+|[![新春](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/spring_festival.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/spring_festival.jpg)|[![简约](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/simple.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/simple.jpg)|[![格式报告](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/format.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/format.jpg)|
+
+|**新艺术运动**|**圣母在上**|**鲸鱼女仆娘**|
+|:--:|:--:|:--:|
+|[![新艺术运动](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/art_nouveau.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/art_nouveau.jpg)|[![圣母在上](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/maria.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/maria.jpg)|[![鲸鱼女仆娘](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/deepseek_maid.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/deepseek_maid.jpg)|
+
+> 图片用 jsDelivr 镜像绝对外链（WebUI 详情页与 GitHub 都能显示；相对路径在 WebUI 会 404）。
+> CDN 与 GitHub camo 对同一 URL 缓存约一年：**换图必须换文件名**（`-dark` / `-4koma` 后缀即为此），只改内容不换名会被旧缓存挡住。
+> `art_nouveau`/`maria`/`deepseek_maid` 模板与素材移植自上游，许可见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)（`deepseek_maid` 角色形象 CC BY-NC-SA 4.0）。
+
+### 主题清单与切换
+
+| key | 名称 | 风格 |
+|---|---|---|
+| `atri` | ATRI | 浅蓝紫 · 霞鹜文楷 · 亚托莉立绘 |
+| `bluearchive` | BlueArchive | 蔚蓝+青紫 · 阿洛娜 |
+| `hatsunemiku` | 初音未来 | 葱绿+粉 · 科技面板 |
+| `hack` | 黑客帝国 | 黑底橙字 · 等宽终端 |
+| `retro_futurism` | 复古未来 | 米白+荧光绿 · CRT |
+| `scrapbook` | 剪贴簿 | 点阵纸+手写体 · 卡通 |
+| `spring_festival` | 新春 | 宣纸+红金 · 书法 |
+| `simple` | 简约 | 灰白极简 |
+| `format` | 格式报告 | 白底蓝字 · 正式文档 |
+| `art_nouveau` | 新艺术运动 | 羊皮纸+森林绿×复古金 · 穆夏 |
+| `maria` | 圣母在上 | 羊皮纸+古金墨绿酒红 · 学园茶会 |
+| `deepseek_maid` | 鲸鱼女仆娘 | 白底蓝紫渐变 · 女仆娘立绘 |
+
+**切换**：全局「默认日报主题」；分群「按群指定主题」(`群号=主题`)；临时 `/日报 主题名`。深色主题下人格水印自动切换混合模式。
+
+---
+
+## 三、三分钟上手
 
 1. **安装**：把本插件目录放进 MaiBot 的 `plugins/` 下，重启或在插件管理里加载（需宿主 ≥1.3.19、SDK ≥2.12.0）。
 2. **填群白名单**：插件设置 → 日报设置 → 「群白名单」，每行一个群号（留空 = 所有群）。
@@ -33,7 +82,7 @@
 
 ---
 
-## 三、WebUI 控制台（1.6.0）
+## 四、WebUI 控制台（1.6.0）
 
 顶部「群聊分析」工作区提供三个页面，顶部按钮可互相跳转；页面跟随宿主 UI 风格与明暗。
 
@@ -83,7 +132,7 @@
 
 ---
 
-## 四、LLM 原生工具
+## 五、LLM 原生工具
 
 | 工具 | 说明 |
 |---|---|
@@ -92,7 +141,7 @@
 
 ---
 
-## 五、命令
+## 六、命令
 
 | 命令 | 说明 |
 |---|---|
@@ -102,7 +151,7 @@
 
 ---
 
-## 六、常用配置
+## 七、常用配置
 
 ### 日报设置
 | 配置 | 说明 |
@@ -128,53 +177,6 @@ NapCat 与 SnowLuma 均支持（同一 OneBot v11 相册接口）。配置：生
 
 ### 分析提示词 / 官方 QQ 机器人
 四板块提示词可改（支持 `${max_topics}` `${messages_text}` 等变量）+ 分析人设注入。官方 QQ 机器人（OpenID）自宿主 1.4.0 起无需配置支持：头像走 `chat.get_avatar`，昵称取入站消息（取不到显示「群友+OpenID后6位」）。
-
----
-
-## 七、主题一览（12 套）
-
-所有主题含同样四块内容 + 24h 活跃度图 + Token 页脚，差别在配色/字体/排版/板块文案。
-
-| key | 名称 | 风格 |
-|---|---|---|
-| `atri` | ATRI | 浅蓝紫 · 霞鹜文楷 · 亚托莉立绘 |
-| `bluearchive` | BlueArchive | 蔚蓝+青紫 · 阿洛娜 |
-| `hatsunemiku` | 初音未来 | 葱绿+粉 · 科技面板 |
-| `hack` | 黑客帝国 | 黑底橙字 · 等宽终端 |
-| `retro_futurism` | 复古未来 | 米白+荧光绿 · CRT |
-| `scrapbook` | 剪贴簿 | 点阵纸+手写体 · 卡通 |
-| `spring_festival` | 新春 | 宣纸+红金 · 书法 |
-| `simple` | 简约 | 灰白极简 |
-| `format` | 格式报告 | 白底蓝字 · 正式文档 |
-| `art_nouveau` | 新艺术运动 | 羊皮纸+森林绿×复古金 · 穆夏 |
-| `maria` | 圣母在上 | 羊皮纸+古金墨绿酒红 · 学园茶会 |
-| `deepseek_maid` | 鲸鱼女仆娘 | 白底蓝紫渐变 · 女仆娘立绘 |
-
-**切换**：全局「默认日报主题」；分群「按群指定主题」(`群号=主题`)；临时 `/日报 主题名`。深色主题下人格水印自动切换混合模式。
-
-### 主题预览（真实渲染结果）
-
-缩略图截顶部区域，点击看 1000px 完整长图。
-
-|**ATRI**|**BlueArchive**|**初音未来**|
-|:--:|:--:|:--:|
-|[![ATRI](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/atri.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/atri.jpg)|[![BlueArchive](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/bluearchive.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/bluearchive.jpg)|[![初音未来](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/hatsunemiku.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hatsunemiku.jpg)|
-
-|**黑客帝国**|**复古未来**|**剪贴簿**|
-|:--:|:--:|:--:|
-|[![黑客帝国](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/hack.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/hack.jpg)|[![复古未来](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/retro_futurism.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/retro_futurism.jpg)|[![剪贴簿](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/scrapbook.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/scrapbook.jpg)|
-
-|**新春**|**简约**|**格式报告**|
-|:--:|:--:|:--:|
-|[![新春](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/spring_festival.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/spring_festival.jpg)|[![简约](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/simple.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/simple.jpg)|[![格式报告](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/format.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/format.jpg)|
-
-|**新艺术运动**|**圣母在上**|**鲸鱼女仆娘**|
-|:--:|:--:|:--:|
-|[![新艺术运动](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/art_nouveau.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/art_nouveau.jpg)|[![圣母在上](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/maria.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/maria.jpg)|[![鲸鱼女仆娘](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/grid/deepseek_maid.jpg)](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/deepseek_maid.jpg)|
-
-> 图片用 jsDelivr 镜像绝对外链（WebUI 详情页与 GitHub 都能显示；相对路径在 WebUI 会 404）。
-> CDN 与 GitHub camo 对同一 URL 缓存约一年：**换图必须换文件名**（`-dark` / `-4koma` 后缀即为此），只改内容不换名会被旧缓存挡住。
-> `art_nouveau`/`maria`/`deepseek_maid` 模板与素材移植自上游，许可见 [`THIRD-PARTY-NOTICES.md`](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/THIRD-PARTY-NOTICES.md)（`deepseek_maid` 角色形象 CC BY-NC-SA 4.0）。
 
 ---
 

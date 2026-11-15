@@ -61,7 +61,7 @@
 
 | 四格漫画 | 更多风格 | 更多风格 |
 |:--:|:--:|:--:|
-| <img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/comic-sample-4koma.jpg" width="300" alt="四格漫画示例（真实成品）"> | 待增补 | 待增补 |
+| <img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/comic-sample-4koma.jpg?v=2" width="300" alt="四格漫画示例（真实成品）"> | 待增补 | 待增补 |
 
 ### 统计与数据
 

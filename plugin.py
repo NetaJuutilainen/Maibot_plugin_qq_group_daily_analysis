@@ -3822,11 +3822,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 self.ctx.logger.warning("[comic] 群相册上传异常: %s", exc)
             return "ok"
         if comic_meta is not None:
-            await asyncio.to_thread(self._comic_book.update, request_id, error="已存档，发送失败")
-            job["error"] = "漫画已存档，但发送到群失败；可在漫画廊重发"
+            await asyncio.to_thread(self._comic_book.update, request_id, error="已存档，发送回执失败（图可能已实际送达）")
+            job["error"] = "漫画已存档，但发送回执为失败；图可能已实际送达，请先在群里核对再决定是否到漫画廊重发"
         else:
-            await asyncio.to_thread(self._comic_book.update, request_id, error="发送失败（本地存盘已关闭）")
-            job["error"] = "漫画已生成但发送到群失败；本地存盘已关闭，无法从存档重发"
+            await asyncio.to_thread(self._comic_book.update, request_id, error="发送回执失败（本地存盘已关闭）")
+            job["error"] = "漫画已生成但发送回执为失败；本地存盘已关闭，无法从存档重发"
         return "failed"
 
     async def _comic_cancel_cleanup(self, client: DrawpicClient, state: dict) -> None:
@@ -3851,7 +3851,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             if caption:
                 await self.ctx.send.text(caption, stream_id)
             result = await self.ctx.send.image(base64.b64encode(blob).decode("ascii"), stream_id)
-            return not (result is False or (isinstance(result, dict) and result.get("success") is False))
+            ok = not (result is False or (isinstance(result, dict) and result.get("success") is False))
+            if not ok:
+                # 回执与实际送达可能不一致（宿主/协议端偶发，2026-11-16 月球群实测出现过），留下现场证据
+                self.ctx.logger.warning("[comic] 发送回执为失败（图可能已实际送达）：%r", result)
+            return ok
         except Exception as exc:
             self.ctx.logger.warning("[comic] 漫画发送失败: %s", type(exc).__name__)
             return False

@@ -78,7 +78,7 @@
 | 风格 | 明 | 暗 |
 |:--:|:--:|:--:|
 | modern | ![modern 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@10989fd/assets/previews/webui/theme-modern-light.png) | ![modern 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@10989fd/assets/previews/webui/theme-modern-dark.png) |
-| 千禧 | ![千禧 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-millennium-light-1115.png) | ![千禧 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-millennium-dark-1115.png) |
+| 千禧 | ![千禧 明](https://cdn.jsdelivr.net/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-millennium-light-1115.png) | ![千禧 暗](https://cdn.jsdelivr.net/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-millennium-dark-1115.png) |
 | 未来复古 | ![未来复古 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@10989fd/assets/previews/webui/theme-retro-light.png) | ![未来复古 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@10989fd/assets/previews/webui/theme-retro-dark.png) |
 
 ---

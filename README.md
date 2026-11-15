@@ -68,7 +68,7 @@
 ![统计与数据](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/webui-stats-dark.png)
 
 - 今日概览（今日报告/最近生成/今日消息）+ 48h/7/14/30 天消息/报告趋势。
-- **Token 审计**：总/输入/输出/调用次数/成功率/活跃群；趋势**折线 / 堆叠柱 / 表格**三态；**模型 / 任务模块 / 服务商**占比饼图（宿主本机统计）。
+- **Token 审计**：总/输入/输出/调用次数/成功率/活跃群；趋势**折线 / 堆叠柱 / 表格**三态；**模型 / 任务模块**占比饼图。全部来自本插件 LLM 调用账本（llm_usage.json，近 30 天），不含宿主其他模块消耗。
 - **事件时间线** + **存储管理**（分区明细、报告批量删除、运行时缓存清理）。
 
 ### 宿主主题适配
@@ -78,7 +78,7 @@
 | 风格 | 明 | 暗 |
 |:--:|:--:|:--:|
 | modern | ![modern 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@10989fd/assets/previews/webui/theme-modern-light.png) | ![modern 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@10989fd/assets/previews/webui/theme-modern-dark.png) |
-| 千禧 | ![千禧 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@10989fd/assets/previews/webui/theme-millennium-light.png) | ![千禧 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@10989fd/assets/previews/webui/theme-millennium-dark.png) |
+| 千禧 | ![千禧 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-millennium-light-1115.png) | ![千禧 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/previews/webui/theme-millennium-dark-1115.png) |
 | 未来复古 | ![未来复古 明](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@10989fd/assets/previews/webui/theme-retro-light.png) | ![未来复古 暗](https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@10989fd/assets/previews/webui/theme-retro-dark.png) |
 
 ---

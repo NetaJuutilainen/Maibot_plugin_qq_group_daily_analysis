@@ -132,10 +132,10 @@
     <section class="panel" aria-labelledby="policy-title">
       <div class="section-heading"><h2 id="policy-title">按群漫画管理</h2><span id="policy-state" class="muted">—</span></div>
       <div class="fields">
-        <label>添加群聊<input id="policy-add-group" type="text" maxlength="128" placeholder="群号" disabled></label>
+        <label>添加群聊<select id="policy-add-group" disabled><option value="">选择群聊</option></select></label>
         <button id="policy-add" type="button" disabled>添加并开启联动</button>
       </div>
-      <p class="hint">联动开=该群日报发送成功后自动画漫画（还需设置页「日报后自动追加漫画」总开关开启；添加的群会自动过白名单）；风格方式/固定风格对该群所有出图生效。删除=移出漫画联动与白名单并清掉该群配置。</p>
+      <p class="hint">候选=已开启日报的群聊（自动漫画跟着日报走），已在联动名单的不再出现；联动开=该群日报发送成功后自动画漫画（还需设置页「日报后自动追加漫画」总开关开启）；风格方式/固定风格对该群所有出图生效。删除=仅移出漫画联动并清掉风格指定，不影响日报与白名单。</p>
       <div id="style-policy" class="tasks"><p class="empty">正在连接…</p></div>
     </section>
 
@@ -445,10 +445,9 @@
         return [...new Set(ids)].join('\n');
       }
 
-      function renderStylePolicy(groups, styleByGroup, rot, defaultStyle, autoList, chatWhitelist) {
+      function renderStylePolicy(groups, styleByGroup, rot, defaultStyle, autoList, dailyEnabled) {
         const container = $('style-policy');
         state.autoComic = { listed: autoList };
-        state.chatWhitelist = typeof chatWhitelist === 'string' ? chatWhitelist : '';
         const known = (Array.isArray(groups) ? groups : []).filter(object)
           .map(g => ({ gid: String(g.group_id || ''), name: String(g.group_name || g.group_id || '') }))
           .filter(g => validGroup(g.gid));
@@ -468,8 +467,14 @@
         const fixedCount = rows.filter(r => styleByGroup[r.gid]).length;
         $('policy-state').textContent = rows.length
           ? `联动 ${rows.filter(r => autoList.includes(r.gid)).length} / ${rows.length} 群 · 固定风格 ${fixedCount} 群` : '—';
+        const addSelect = $('policy-add-group');
+        if (document.activeElement !== addSelect) {
+          const candidates = (Array.isArray(dailyEnabled) ? dailyEnabled : []).filter(gid => !autoList.includes(gid) && validGroup(gid));
+          addSelect.replaceChildren(new Option(candidates.length ? '选择群聊' : '没有已开启日报且未联动的群', ''),
+            ...candidates.map(gid => new Option(text((known.find(g => g.gid === gid) || {}).name || gid, 100), gid)));
+        }
         if (!rows.length) {
-          container.replaceChildren(element('p', '还没有已知的群聊；机器人收到群消息后回来即可管理，或直接在上方输入群号添加。', 'empty'));
+          container.replaceChildren(element('p', '还没有已知的群聊；机器人收到群消息后回来即可管理。', 'empty'));
           return;
         }
         const cards = rows.map(({ gid, name }) => {
@@ -519,10 +524,6 @@
             state.autoComic.listed = [...set];
             await performAction('config_save', { section: 'comic', key: 'groups', value: serializeIdList([...set]) }, `移出群 ${name} 的漫画联动`);
             if (fixedKey) await performAction('comic_style_by_group_set', { group_id: gid, style: '' }, `清除群 ${name} 的风格指定`);
-            const whitelist = parseIdList(state.chatWhitelist || '');
-            if (whitelist.includes(gid)) {
-              await performAction('config_save', { section: 'report', key: 'chat_whitelist', value: serializeIdList(whitelist.filter(item => item !== gid)) }, `将群 ${name} 移出白名单`);
-            }
           });
           return row;
         });
@@ -840,7 +841,7 @@
           renderStylePolicy(overviewGroups, styleByGroup, rot,
             typeof result.default_style === 'string' ? result.default_style : 'four_panel',
             parseIdList(typeof cfgView.auto_comic_groups === 'string' ? cfgView.auto_comic_groups : ''),
-            typeof cfgView.chat_whitelist === 'string' ? cfgView.chat_whitelist : '');
+            Array.isArray(cfgView.daily_enabled_groups) ? cfgView.daily_enabled_groups.filter(gid => typeof gid === 'string') : []);
           renderParams(cfgView);
           $('rotation-reset').disabled = !state.ready || !rot || rot.mode === 'off';
           const prefs = object(result.prefs) ? result.prefs : {};
@@ -1206,17 +1207,12 @@
       $('cfg-caption').addEventListener('change', () => saveParam('保存漫画文案', 'comic', 'comic_caption', $('cfg-caption').value.trim()));
       $('cfg-album-on').addEventListener('change', () => saveParam('保存漫画相册上传开关', 'comic', 'album_upload_enabled', $('cfg-album-on').value));
       $('policy-add').addEventListener('click', async () => {
-        const gid = $('policy-add-group').value.trim();
-        if (!validGroup(gid)) { notice('请输入有效群号。', true); return; }
-        $('policy-add-group').value = '';
+        const gid = $('policy-add-group').value;
+        if (!gid) { notice('没有可添加的群聊：候选=已开启日报且未联动的群。', true); return; }
         const ids = new Set((state.autoComic && state.autoComic.listed) || []);
         ids.add(gid);
         state.autoComic = { listed: [...ids] };
         await performAction('config_save', { section: 'comic', key: 'groups', value: serializeIdList([...ids]) }, `添加群 ${gid} 并开启漫画联动`);
-        const whitelist = parseIdList(state.chatWhitelist || '');
-        if (whitelist.length && !whitelist.includes(gid)) {
-          await performAction('config_save', { section: 'report', key: 'chat_whitelist', value: serializeIdList([...whitelist, gid]) }, `将群 ${gid} 加入白名单`);
-        }
       });
       $('draw-group').addEventListener('change', syncControls);
       $('draw').addEventListener('click', () => {

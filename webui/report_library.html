@@ -118,10 +118,10 @@
       <div class="section-heading"><h3>按群日报管理</h3><span id="cfg-state" class="muted">—</span></div>
       <div class="fields">
         <label>默认日报主题<select id="cfg-theme" disabled></select></label>
-        <label>添加群聊<input id="cfg-add-group" type="text" maxlength="128" placeholder="群号" disabled></label>
+        <label>添加群聊<select id="cfg-add-group" disabled><option value="">选择群聊</option></select></label>
         <button id="cfg-add" type="button" disabled>添加并开启日报</button>
       </div>
-      <p class="hint">开关即改即存：暂停=不再自动生成（统计照常、主题配置保留）；删除=移出白名单（连统计一起停）并清掉该群配置；添加的群会自动过白名单。首次操作会把「全部活跃群」固化为显式名单，此后新增群默认暂停。与插件设置页双向同步。</p>
+      <p class="hint">候选来自 Maibot 已有对话的群聊（自带白名单过滤），已开启的不再出现；未按群管理时全部已知群都算开启，先暂停某个群才会腾出候选。开关即改即存：暂停=不再自动生成（统计照常、主题配置保留）；删除=移出白名单（连统计一起停）并清掉该群配置。首次操作会把「全部活跃群」固化为显式名单，此后新增群默认暂停。与插件设置页双向同步。</p>
       <div id="cfg-theme-list" class="tasks"><p class="empty">正在连接…</p></div>
     </section>
 
@@ -312,8 +312,14 @@
         themeMapStamp = stamp;
         const onCount = rows.filter(r => isOn(r.gid)).length;
         $('cfg-state').textContent = rows.length ? `开启 ${onCount} / ${rows.length} 群${managed ? '' : '（未按群管理：全部活跃群）'}` : '—';
+        const addSelect = $('cfg-add-group');
+        if (document.activeElement !== addSelect) {
+          const candidates = known.filter(g => !isOn(g.gid));
+          addSelect.replaceChildren(new Option(candidates.length ? '选择群聊' : '全部已知群均已开启', ''),
+            ...candidates.map(g => new Option(text(g.name, 100), g.gid)));
+        }
         if (!rows.length) {
-          container.replaceChildren(element('p', '还没有已知的群聊；机器人收到群消息后回来即可管理，或直接在上方输入群号添加。', 'empty'));
+          container.replaceChildren(element('p', '还没有已知的群聊；机器人收到群消息后回来即可管理，或直接在上方下拉选择添加。', 'empty'));
           return;
         }
         container.replaceChildren(...rows.map(({ gid, name }) => {
@@ -388,17 +394,12 @@
       const saveParam = (label, key, value) => { void performAction('config_save', { section: 'report', key, value }, label); };
       $('cfg-theme').addEventListener('change', () => saveParam('保存默认日报主题', 'daily_theme', $('cfg-theme').value));
       $('cfg-add').addEventListener('click', async () => {
-        const gid = $('cfg-add-group').value.trim();
-        if (!validGroup(gid)) { notice('请输入有效群号。', true); return; }
-        $('cfg-add-group').value = '';
+        const gid = $('cfg-add-group').value;
+        if (!gid) { notice('没有可添加的群聊：全部已知群均已开启（未按群管理时先暂停某个群，或等新群出现）。', true); return; }
         const info = state.dailyList || { managed: true, listed: [], knownIds: [] };
         const ids = new Set(info.managed ? info.listed : info.knownIds);
         ids.add(gid);
         await performAction('config_save', { section: 'report', key: 'daily_report_groups', value: serializeIdList([...ids]) }, `添加群 ${gid} 并开启日报`);
-        const whitelist = parseIdList(state.chatWhitelist || '');
-        if (whitelist.length && !whitelist.includes(gid)) {
-          await performAction('config_save', { section: 'report', key: 'chat_whitelist', value: serializeIdList([...whitelist, gid]) }, `将群 ${gid} 加入白名单`);
-        }
       });
 
       function replaceOptions(select, entries, placeholder, valueKey, labelKey) {

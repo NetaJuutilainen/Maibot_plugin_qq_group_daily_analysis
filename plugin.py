@@ -3564,6 +3564,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         operations = [job for job in self._jobs.snapshot() if job["kind"] == "comic"]
         active = self._jobs.active_count()
         best = self._best_chats()
+        daily_ids = self._daily_report_group_ids()
         return {
             "enabled": bool(ccfg.enabled),
             "drawpic_available": await self._drawpic_ready() if ccfg.enabled else False,
@@ -3583,7 +3584,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                             "album_name_by_group": ccfg.album_name_by_group,
                             "auto_comic_groups": ccfg.groups,
                             "auto_after_daily": bool(ccfg.auto_after_daily),
-                            "chat_whitelist": str(self.config.report.chat_whitelist or "")},
+                            "daily_enabled_groups": sorted(
+                                gid for gid, chat in best.items()
+                                if daily_ids is None or gid in daily_ids)},
             "use_reference_images": bool(ccfg.use_reference_images),
             "total": listing["total"], "today_count": daily["total"],
             "groups": [{"group_id": gid, "group_name": str(chat.get("name") or gid)[:200]}

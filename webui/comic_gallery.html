@@ -64,7 +64,10 @@
     .task { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 10px 0; }
     .task-copy { min-width: 0; overflow-wrap: anywhere; }
     .task-error { color: var(--danger); white-space: pre-wrap; }
-    .tasks { max-height: 300px; overflow-y: auto; margin-top: 12px; }
+    .tasks { max-height: 480px; overflow-y: auto; margin-top: 12px; }
+    .inline-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .inline-controls select, .inline-controls input { width: auto; flex: 0 1 auto; max-width: 15em; }
+    .inline-controls button { width: auto; flex: none; padding: 6px 10px; }
     .refs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
     .ref { border: 1px solid var(--line); border-radius: calc(var(--radius) * .7); overflow: hidden; background: var(--bg); }
     .ref img { display: block; width: 100%; height: 110px; object-fit: contain; background: var(--soft); }
@@ -124,14 +127,20 @@
         <label>轮换进度范围<select id="rotation-scope" disabled><option value="global">全局</option><option value="group">按群</option></select></label>
         <label>每日随机角色<select id="daily-random" disabled><option value="off">关闭</option><option value="on">开启</option></select></label>
       </div>
-      <div class="section-heading"><h3 id="policy-title">按群漫画管理</h3><span id="policy-state" class="muted">—</span></div>
+    </section>
+
+    <section class="panel" aria-labelledby="policy-title">
+      <div class="section-heading"><h2 id="policy-title">按群漫画管理</h2><span id="policy-state" class="muted">—</span></div>
       <div class="fields">
         <label>添加群聊<input id="policy-add-group" type="text" maxlength="128" placeholder="群号" disabled></label>
         <button id="policy-add" type="button" disabled>添加并开启联动</button>
       </div>
-      <p class="hint">联动开=该群日报发送成功后自动画漫画（还需设置页「日报后自动追加漫画」总开关开启；添加的群会自动过白名单）；风格方式/固定风格对该群所有出图生效。</p>
+      <p class="hint">联动开=该群日报发送成功后自动画漫画（还需设置页「日报后自动追加漫画」总开关开启；添加的群会自动过白名单）；风格方式/固定风格对该群所有出图生效。删除=移出漫画联动与白名单并清掉该群配置。</p>
       <div id="style-policy" class="tasks"><p class="empty">正在连接…</p></div>
-      <div class="section-heading"><h3>漫画参数</h3><span class="muted">与插件设置页双向同步</span></div>
+    </section>
+
+    <section class="panel" aria-labelledby="params-title">
+      <div class="section-heading"><h2 id="params-title">漫画参数与相册</h2><span class="muted">与插件设置页双向同步</span></div>
       <div class="fields">
         <label>分镜数<select id="cfg-panels" disabled></select></label>
         <label>等待上限（秒）<input id="cfg-wait" type="number" min="60" max="3600" disabled></label>
@@ -469,7 +478,7 @@
           const row = element('div', undefined, 'task');
           const copy = element('div', undefined, 'task-copy');
           copy.append(element('strong', name));
-          const line = element('p', undefined, 'muted');
+          const line = element('p', undefined, 'muted inline-controls');
           const toggle = document.createElement('select');
           toggle.setAttribute('aria-label', `${name} 自动漫画联动`);
           toggle.append(new Option('联动开', 'on'), new Option('联动关', 'off'));
@@ -483,9 +492,14 @@
           style.replaceChildren(...styleEntries.filter(item => object(item) && item.key).map(item => new Option(item.label, item.key)));
           if (fixedKey && !styleEntries.some(item => object(item) && item.key === fixedKey)) style.append(new Option(fixedKey, fixedKey));
           style.value = fixedKey || defaultStyle;
-          line.append('联动 ', toggle, '　方式 ', mode, '　风格 ', style);
+          const del = document.createElement('button');
+          del.type = 'button';
+          del.className = 'danger';
+          del.textContent = '删除';
+          del.setAttribute('aria-label', `删除群 ${name}`);
+          line.append('联动', toggle, '方式', mode, '风格', style, del);
           const progress = rot && object(rot.progress) ? object(rot.progress[scopeGroup ? gid : 'global']) : null;
-          if (!fixedKey && progress && progress.last) line.append(` · 轮换上次：${text(styleLabelOf(String(progress.last)), 20)}`);
+          if (!fixedKey && progress && progress.last) line.append(`轮换上次：${text(styleLabelOf(String(progress.last)), 20)}`);
           copy.append(line);
           row.append(copy);
           row.append(element('span', linked ? '联动开' : '联动关', linked ? 'badge ok' : 'badge'));
@@ -499,6 +513,17 @@
             mode.value === 'fixed' ? `固定 ${name} 漫画风格` : `恢复 ${name} 跟随全局`);
           mode.addEventListener('change', save);
           style.addEventListener('change', () => { if (mode.value === 'fixed') void save(); });
+          del.addEventListener('click', async () => {
+            const set = new Set(state.autoComic.listed);
+            set.delete(gid);
+            state.autoComic.listed = [...set];
+            await performAction('config_save', { section: 'comic', key: 'groups', value: serializeIdList([...set]) }, `移出群 ${name} 的漫画联动`);
+            if (fixedKey) await performAction('comic_style_by_group_set', { group_id: gid, style: '' }, `清除群 ${name} 的风格指定`);
+            const whitelist = parseIdList(state.chatWhitelist || '');
+            if (whitelist.includes(gid)) {
+              await performAction('config_save', { section: 'report', key: 'chat_whitelist', value: serializeIdList(whitelist.filter(item => item !== gid)) }, `将群 ${name} 移出白名单`);
+            }
+          });
           return row;
         });
         container.replaceChildren(...cards);

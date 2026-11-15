@@ -64,7 +64,10 @@
     .task { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 10px 0; }
     .task-copy { min-width: 0; overflow-wrap: anywhere; }
     .task-error { color: var(--danger); white-space: pre-wrap; }
-    .tasks { max-height: 300px; overflow-y: auto; margin-top: 12px; }
+    .tasks { max-height: 480px; overflow-y: auto; margin-top: 12px; }
+    .inline-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .inline-controls select, .inline-controls input { width: auto; flex: 0 1 auto; max-width: 15em; }
+    .inline-controls button { width: auto; flex: none; padding: 6px 10px; }
     progress { width: 100%; height: 9px; accent-color: var(--accent); margin: 12px 0 3px; }
     .overlay { position: fixed; inset: 0; background: #0009; display: flex; justify-content: center; align-items: center; padding: 20px; z-index: 10; }
     /* 宿主 future-retro 的 surface 采样为透明，弹层必须用不透明的页面底色兜底。 */
@@ -118,7 +121,7 @@
         <label>添加群聊<input id="cfg-add-group" type="text" maxlength="128" placeholder="群号" disabled></label>
         <button id="cfg-add" type="button" disabled>添加并开启日报</button>
       </div>
-      <p class="hint">开关即改即存：暂停=不再自动生成（统计照常、主题配置保留）；添加的群会自动过白名单。首次操作会把「全部活跃群」固化为显式名单，此后新增群默认暂停。与插件设置页双向同步。</p>
+      <p class="hint">开关即改即存：暂停=不再自动生成（统计照常、主题配置保留）；删除=移出白名单（连统计一起停）并清掉该群配置；添加的群会自动过白名单。首次操作会把「全部活跃群」固化为显式名单，此后新增群默认暂停。与插件设置页双向同步。</p>
       <div id="cfg-theme-list" class="tasks"><p class="empty">正在连接…</p></div>
     </section>
 
@@ -317,7 +320,7 @@
           const row = element('div', undefined, 'task');
           const copy = element('div', undefined, 'task-copy');
           copy.append(element('strong', name));
-          const line = element('p', undefined, 'muted');
+          const line = element('p', undefined, 'muted inline-controls');
           const toggle = document.createElement('select');
           toggle.setAttribute('aria-label', `${name} 日报开关`);
           toggle.append(new Option('开启', 'on'), new Option('暂停', 'off'));
@@ -328,7 +331,12 @@
             ...themeEntries.filter(item => object(item) && item.key).map(item => new Option(item.label, item.key)));
           if (themeMap[gid] && !themeEntries.some(item => object(item) && item.key === themeMap[gid])) select.append(new Option(themeMap[gid], themeMap[gid]));
           select.value = themeMap[gid] || '';
-          line.append('日报 ', toggle, '　主题 ', select);
+          const del = document.createElement('button');
+          del.type = 'button';
+          del.className = 'danger';
+          del.textContent = '删除';
+          del.setAttribute('aria-label', `删除群 ${name}`);
+          line.append('日报', toggle, '主题', select, del);
           copy.append(line);
           row.append(copy);
           row.append(element('span', isOn(gid) ? '开启' : '暂停', isOn(gid) ? 'badge ok' : 'badge'));
@@ -341,6 +349,20 @@
             const next = { ...themeMap };
             if (select.value) next[gid] = select.value; else delete next[gid];
             saveParam(`保存 ${name} 日报主题`, 'theme_by_group', serializeGroupMap(next));
+          });
+          del.addEventListener('click', async () => {
+            const setD = new Set(managed ? listed : knownIds);
+            setD.delete(gid);
+            await performAction('config_save', { section: 'report', key: 'daily_report_groups', value: serializeIdList([...setD]) }, `移出群 ${name} 的日报`);
+            const whitelist = parseIdList(state.chatWhitelist || '');
+            if (whitelist.includes(gid)) {
+              await performAction('config_save', { section: 'report', key: 'chat_whitelist', value: serializeIdList(whitelist.filter(item => item !== gid)) }, `将群 ${name} 移出白名单`);
+            }
+            if (themeMap[gid]) {
+              const next = { ...themeMap };
+              delete next[gid];
+              await performAction('config_save', { section: 'report', key: 'theme_by_group', value: serializeGroupMap(next) }, `清除群 ${name} 的主题指定`);
+            }
           });
           return row;
         }));

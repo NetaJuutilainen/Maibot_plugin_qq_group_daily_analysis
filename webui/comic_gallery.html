@@ -124,6 +124,9 @@
         <label>轮换进度范围<select id="rotation-scope" disabled><option value="global">全局</option><option value="group">按群</option></select></label>
         <label>每日随机角色<select id="daily-random" disabled><option value="off">关闭</option><option value="on">开启</option></select></label>
       </div>
+      <div class="section-heading"><h3 id="policy-title">按群风格策略</h3><span id="policy-state" class="muted">—</span></div>
+      <p class="hint">为单个群固定漫画风格（该群不再走轮换、不消耗轮换进度），其余群跟随上方全局轮换设置；自动联动、/漫画 与 WebUI 均生效。</p>
+      <div id="style-policy" class="tasks"><p class="empty">正在连接…</p></div>
     </section>
 
     <section class="panel" aria-labelledby="recover-title">
@@ -226,6 +229,7 @@
       let comicGroups = [];
       let overviewGroups = [];
       let styleEntries = [{ key: 'four_panel', label: '四格漫画' }, { key: 'poster', label: '单幅海报' }];
+      let policyStamp = null;
       let characterEntries = [];
       let refRows = [];
       let charStamp = null;
@@ -314,6 +318,72 @@
         $('previous').disabled = locked || state.page <= 1;
         $('next').disabled = locked || state.page >= state.pages;
         $('page-label').textContent = `第 ${state.page} / ${state.pages} 页`;
+        syncPolicyControls();
+      }
+
+      function styleLabelOf(key) {
+        const hit = styleEntries.find(item => object(item) && item.key === key);
+        return hit ? hit.label : String(key || '');
+      }
+
+      function syncPolicyControls() {
+        const locked = !state.ready || state.actionBusy || !state.enabled;
+        for (const select of document.querySelectorAll('#style-policy select')) select.disabled = locked;
+      }
+
+      function renderStylePolicy(groups, styleByGroup, rot, defaultStyle) {
+        const container = $('style-policy');
+        const known = (Array.isArray(groups) ? groups : []).filter(object)
+          .map(g => ({ gid: String(g.group_id || ''), name: String(g.group_name || g.group_id || '') }))
+          .filter(g => validGroup(g.gid));
+        const knownIds = new Set(known.map(g => g.gid));
+        const stale = Object.keys(styleByGroup).filter(gid => !knownIds.has(gid))
+          .map(gid => ({ gid, name: `${gid}（未活跃）` }));
+        const rows = [...known, ...stale];
+        const scopeGroup = !!rot && rot.scope === 'group';
+        const stamp = JSON.stringify([rows.map(r => [r.gid, r.name]), styleByGroup, rot && rot.mode, rot && rot.scope,
+          rot && object(rot.progress) ? Object.entries(rot.progress).map(([k, v]) => [k, object(v) ? v.last : null]) : null,
+          defaultStyle, styleEntries.map(s => object(s) ? s.key : null)]);
+        if (stamp === policyStamp || [...container.querySelectorAll('select')].some(select => select.matches(':focus'))) {
+          syncPolicyControls();
+          return; // 数据没变或用户正在操作，跳过重建
+        }
+        policyStamp = stamp;
+        $('policy-state').textContent = rows.length ? `已固定 ${rows.filter(r => styleByGroup[r.gid]).length} / ${rows.length} 群` : '—';
+        if (!rows.length) {
+          container.replaceChildren(element('p', '还没有已知的群聊；机器人收到群消息后回来即可设置。', 'empty'));
+          return;
+        }
+        const cards = rows.map(({ gid, name }) => {
+          const fixedKey = typeof styleByGroup[gid] === 'string' && styleByGroup[gid] ? styleByGroup[gid] : '';
+          const row = element('div', undefined, 'task');
+          const copy = element('div', undefined, 'task-copy');
+          copy.append(element('strong', name));
+          const line = element('p', undefined, 'muted');
+          const mode = document.createElement('select');
+          mode.setAttribute('aria-label', `${name} 风格方式`);
+          mode.append(new Option('跟随全局轮换', ''), new Option('固定风格', 'fixed'));
+          mode.value = fixedKey ? 'fixed' : '';
+          const style = document.createElement('select');
+          style.setAttribute('aria-label', `${name} 固定风格`);
+          style.replaceChildren(...styleEntries.filter(item => object(item) && item.key).map(item => new Option(item.label, item.key)));
+          if (fixedKey && !styleEntries.some(item => object(item) && item.key === fixedKey)) style.append(new Option(fixedKey, fixedKey));
+          style.value = fixedKey || defaultStyle;
+          line.append('方式 ', mode, '　风格 ', style);
+          const progress = rot && object(rot.progress) ? object(rot.progress[scopeGroup ? gid : 'global']) : null;
+          if (!fixedKey && progress && progress.last) line.append(` · 轮换上次：${text(styleLabelOf(String(progress.last)), 20)}`);
+          copy.append(line);
+          row.append(copy);
+          row.append(element('span', fixedKey ? '固定' : '跟随全局', fixedKey ? 'badge ok' : 'badge'));
+          const save = () => performAction('comic_style_by_group_set', { group_id: gid, style: mode.value === 'fixed' ? style.value : '' },
+            mode.value === 'fixed' ? `固定 ${name} 漫画风格` : `恢复 ${name} 跟随全局`);
+          mode.addEventListener('change', save);
+          style.addEventListener('change', () => { if (mode.value === 'fixed') void save(); });
+          return row;
+        });
+        container.replaceChildren(...cards);
+        container.removeAttribute('aria-busy');
+        syncPolicyControls();
       }
 
       function replaceOptions(select, entries, placeholder, valueKey, labelKey) {
@@ -388,7 +458,7 @@
           } else if (name === 'forget_request') {
             deleted = result.deleted === true;
             notice(deleted ? '已删除该恢复记录。' : `未删除：${text(result.message)}`, !deleted);
-          } else if (name === 'character_save' || name === 'character_set_active' || name === 'comic_prefs_set') {
+          } else if (name === 'character_save' || name === 'character_set_active' || name === 'comic_prefs_set' || name === 'comic_style_by_group_set') {
             notice(result.saved === true ? text(result.message || '已保存。') : `未保存：${text(result.message)}`, result.saved !== true);
           } else if (name === 'character_delete') {
             deleted = result.deleted === true;
@@ -616,9 +686,13 @@
           const modeNames = { off: '关闭', sequential: '顺序', random: '随机', shuffle: '洗牌' };
           const lasts = rot && object(rot.progress)
             ? Object.values(rot.progress).map(p => object(p) ? p.last : null).filter(Boolean) : [];
+          const styleByGroup = object(result.style_by_group) ? result.style_by_group : {};
+          const fixedCount = Object.keys(styleByGroup).length;
           $('rotation-info').textContent = rot
-            ? `轮换：${modeNames[rot.mode] || rot.mode} · 池 ${text((rot.pool || []).length)} 套${lasts.length ? ` · 上次 ${text(lasts[lasts.length - 1])}` : ''}`
-            : '轮换：关闭';
+            ? `轮换：${modeNames[rot.mode] || rot.mode} · 池 ${text((rot.pool || []).length)} 套${lasts.length ? ` · 上次 ${text(lasts[lasts.length - 1])}` : ''}${fixedCount ? ` · ${fixedCount} 群固定` : ''}`
+            : `轮换：关闭${fixedCount ? ` · ${fixedCount} 群固定` : ''}`;
+          renderStylePolicy(overviewGroups, styleByGroup, rot,
+            typeof result.default_style === 'string' ? result.default_style : 'four_panel');
           $('rotation-reset').disabled = !state.ready || !rot || rot.mode === 'off';
           const prefs = object(result.prefs) ? result.prefs : {};
           if (document.activeElement !== $('rotation-mode')) $('rotation-mode').value = prefs.style_rotation || 'off';

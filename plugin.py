@@ -1051,7 +1051,40 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         self._save_comic_prefs(prefs)
         return {"saved": True, "message": "已保存漫画偏好"}
 
+    @API("comic_style_by_group_set", version="1")
+    async def webui_comic_style_by_group_set(self, group_id: str, style: str = "") -> dict:
+        gid = str(group_id or "").strip()
+        if not gid or len(gid) > 128:
+            return {"saved": False, "message": "群号无效"}
+        style = str(style or "").strip()
+        if style and style not in COMIC_STYLES:
+            return {"saved": False, "message": "未知漫画风格"}
+        prefs = self._comic_prefs()
+        table = self._style_by_group()
+        if style:
+            table[gid] = style
+        else:
+            table.pop(gid, None)  # 跟随全局 = 移除该群覆盖
+        if table:
+            prefs["style_by_group"] = table
+        else:
+            prefs.pop("style_by_group", None)
+        self._save_comic_prefs(prefs)
+        return {"saved": True, "message": f"已{'固定' if style else '恢复跟随全局'}：{gid}"}
+
+    def _style_by_group(self) -> dict:
+        data = self._comic_prefs().get("style_by_group")
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+    def _fixed_style_for(self, group_id: str) -> str:
+        """按群固定风格（WebUI「按群风格策略」）；未设置或风格已失效返回空串，走全局轮换。"""
+        style = self._style_by_group().get(str(group_id or ""), "")
+        return style if style in COMIC_STYLES else ""
+
     def _pick_comic_style(self, group_id: str) -> str:
+        fixed = self._fixed_style_for(group_id)
+        if fixed:
+            return fixed  # 固定群不进入轮换、不消耗进度
         ccfg = self._comic_cfg()
         mode, scope = self._eff_rotation()
         if mode not in ("sequential", "random", "shuffle"):
@@ -3380,6 +3413,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "daily_random_character": self._eff_daily_random(),
             "prefs": {"style_rotation": self._eff_rotation()[0], "rotation_scope": self._eff_rotation()[1],
                       "daily_random_character": self._eff_daily_random()},
+            "style_by_group": self._style_by_group(),
             "use_reference_images": bool(ccfg.use_reference_images),
             "total": listing["total"], "today_count": daily["total"],
             "groups": [{"group_id": gid, "group_name": str(chat.get("name") or gid)[:200]}
@@ -4402,15 +4436,28 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     @API("events", version="1")
     async def webui_events(self, limit: int = 50) -> dict:
+        kind_names = {"report": "日报", "comic": "漫画", "resend": "重发", "rerender": "重渲染", "task": "任务"}
+
+        def fmt_time(value) -> str:
+            return str(value or "").replace("T", " ")[:19]
+
+        catalog = await asyncio.to_thread(self._report_store._catalog)
+        catalog_keys = {(row.get("group_id"), row.get("day")) for row in catalog[:100]}
+        chats = self._best_chats()
         events = []
         for job in self._jobs.snapshot():
-            events.append({"time": job.get("finished_at") or job.get("started_at") or job.get("created_at") or "",
-                           "kind": job.get("kind") or "task",
-                           "label": f"{job.get('kind') or 'task'} · {job.get('group_id') or ''} · {job.get('status') or ''}",
-                           "status": job.get("status") or ""})
-        catalog = await asyncio.to_thread(self._report_store._catalog)
+            kind = str(job.get("kind") or "task")
+            if kind == "report" and job.get("status") == "succeeded" \
+                    and (job.get("group_id"), job.get("day")) in catalog_keys:
+                continue  # 成功日报已有存档条目，不重复展示
+            name = str((chats.get(str(job.get("group_id") or "")) or {}).get("name")
+                       or job.get("group_id") or "未知群")
+            title = f"{kind_names.get(kind, kind)} · {name} · {job.get('day') or ''}"
+            events.append({"time": fmt_time(job.get("finished_at") or job.get("started_at")),
+                           "kind": kind_names.get(kind, kind),
+                           "label": title, "status": job.get("status") or ""})
         for row in catalog[:100]:
-            events.append({"time": row.get("created_at") or "", "kind": "report",
+            events.append({"time": fmt_time(row.get("created_at")), "kind": "日报",
                            "label": f"报告 · {row.get('group_name') or row.get('group_id')} · {row.get('day')}",
                            "status": "completed"})
         events.sort(key=lambda e: str(e["time"]), reverse=True)

@@ -180,7 +180,7 @@
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
             "day": {"type": "string", "max_length": 10},
-            "style": {"type": "string", "choices": ["four_panel", "poster"], "max_length": 16}
+            "style": {"type": "string", "max_length": 16}
           }
         },
         "comic_resume": {
@@ -284,6 +284,14 @@
             "style_rotation": {"type": "string", "max_length": 16},
             "rotation_scope": {"type": "string", "max_length": 16},
             "daily_random_character": {"type": "boolean"}
+          }
+        },
+        "comic_style_by_group_set": {
+          "api": "comic_style_by_group_set",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "style": {"type": "string", "max_length": 32}
           }
         },
         "cancel": {

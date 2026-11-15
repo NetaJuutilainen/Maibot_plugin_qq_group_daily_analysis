@@ -405,6 +405,26 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await self.p.webui_comic_prefs_set(style_rotation='off', daily_random_character=False))['saved'])
         self.assertFalse(self.p._eff_daily_random())
 
+    async def test_style_by_group_policy(self):
+        # 默认无按群固定：跟随全局（off → 默认风格），不写轮换进度
+        self.assertEqual(self.p._pick_comic_style('123'), 'four_panel')
+        self.assertEqual(self.p._fixed_style_for('123'), '')
+        self.assertEqual(self.p._load_rotation(), {})
+        # 固定风格生效且优先于轮换，且不消耗进度
+        self.assertTrue((await self.p.webui_comic_style_by_group_set('123', 'noir'))['saved'])
+        await self.p.webui_comic_prefs_set(style_rotation='sequential')
+        self.assertEqual(self.p._fixed_style_for('123'), 'noir')
+        self.assertEqual(self.p._pick_comic_style('123'), 'noir')
+        self.assertEqual(self.p._load_rotation(), {})
+        # 未固定的群照常轮换并记录进度（全局顺序：首个为 four_panel）
+        self.assertEqual(self.p._pick_comic_style('456'), 'four_panel')
+        self.assertEqual(self.p._load_rotation().get('global', {}).get('index'), 1)
+        # 非法风格拒绝；清空 = 恢复跟随全局；overview 暴露映射
+        self.assertFalse((await self.p.webui_comic_style_by_group_set('123', 'bogus'))['saved'])
+        self.assertTrue((await self.p.webui_comic_style_by_group_set('123', ''))['saved'])
+        self.assertEqual(self.p._fixed_style_for('123'), '')
+        self.assertEqual((await self.p.webui_comic_overview())['style_by_group'], {})
+
     async def test_token_stats_and_events(self):
         billed = [
             {'timestamp': date.today().isoformat() + 'T10:00:00', 'model_assign_name': 'm', 'model_name': 'mi', 'cost': 0.02},

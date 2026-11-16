@@ -173,9 +173,12 @@
     </section>
 
     <section class="panel" aria-labelledby="char-title">
-      <div class="section-heading"><h2 id="char-title">角色方案</h2><span id="char-state" class="muted">—</span></div>
+      <div class="section-heading">
+        <h2 id="char-title">角色方案</h2>
+        <label style="display:flex;flex-direction:row;align-items:center;gap:8px">当前角色（切换即全局生效）<select id="character-active" disabled style="width:auto"></select><span id="char-state" class="muted">—</span></label>
+      </div>
+      <p class="hint">上方「当前角色」= 一键切换生效方案；下方编辑区只在你点「保存方案」时才写入，两者互不影响，可放心切换。</p>
       <div class="fields">
-        <label>当前角色<select id="character-active" disabled><option value="">不用角色方案</option></select></label>
         <label>编辑对象<select id="character-edit" disabled><option value="">新建方案</option></select></label>
       </div>
       <div class="fields">
@@ -1193,6 +1196,12 @@
       $('character-active').addEventListener('change', () => { void performAction('character_set_active', { id: $('character-active').value }, '切换角色方案'); });
       $('character-edit').addEventListener('change', loadCharForm);
       $('char-save').addEventListener('click', () => {
+        const hasRef = [...$('char-refs').querySelectorAll('input:checked')].length > 0;
+        const hasText = [$('char-name').value, $('char-persona').value, $('char-scene').value].some(v => v.trim());
+        if (!$('char-live').checked && !hasRef && !hasText) {
+          notice('空方案不保存：请至少填写名称 / 人设 / 场景之一，或勾选参考图，或勾选「跟随麦麦实时人设」。', true);
+          return;
+        }
         const refIds = [...$('char-refs').querySelectorAll('input:checked')].map(input => input.value).join(',');
         void performAction('character_save', { id: $('character-edit').value, name: $('char-name').value, persona: $('char-persona').value, scene_prompt: $('char-scene').value, ref_ids: refIds, live: $('char-live').checked }, '保存角色方案');
       });

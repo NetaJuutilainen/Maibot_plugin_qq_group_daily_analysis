@@ -1903,13 +1903,14 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         if self._live_persona_cache is not None and now - self._live_persona_ts < max_age:
             return self._live_persona_cache
         try:
-            result = await self.ctx.call_capability("personality.get_current", {})
+            # 注意：call_capability 第二个位置参数是 timeout_ms，无参能力调用不要传位置参数
+            result = await self.ctx.call_capability("personality.get_current")
             data = result
             if isinstance(data, dict) and isinstance(data.get("result"), dict):
                 data = data["result"]
             text = str(data.get("personality") or "").strip() if isinstance(data, dict) else ""
         except Exception as exc:
-            self.ctx.logger.warning("[weekly] 读取麦麦实时人设失败: %s", type(exc).__name__)
+            self.ctx.logger.warning("[weekly] 读取麦麦实时人设失败: %s: %s", type(exc).__name__, exc)
             text = ""
         if text:
             self._live_persona_cache = text

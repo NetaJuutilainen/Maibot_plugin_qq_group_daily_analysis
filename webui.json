@@ -54,7 +54,8 @@
             "revision": {"type": "string", "required": true, "max_length": 128}
           }
         },
-        "overview": {"api": "overview", "version": "1"}
+        "overview": {"api": "overview", "version": "1"},
+        "persona_capture": {"api": "persona_capture", "version": "1"}
       },
       "actions": {
         "trigger": {
@@ -112,6 +113,22 @@
             "section": {"type": "string", "required": true, "max_length": 32},
             "key": {"type": "string", "required": true, "max_length": 64},
             "value": {"type": "string", "max_length": 4000}
+          }
+        },
+        "persona_template_save": {
+          "api": "persona_template_save",
+          "version": "1",
+          "parameters": {
+            "id": {"type": "string", "max_length": 32},
+            "name": {"type": "string", "max_length": 60},
+            "text": {"type": "string", "max_length": 2000}
+          }
+        },
+        "persona_template_delete": {
+          "api": "persona_template_delete",
+          "version": "1",
+          "parameters": {
+            "id": {"type": "string", "required": true, "max_length": 32}
           }
         }
       }
@@ -268,7 +285,8 @@
             "name": {"type": "string", "max_length": 40},
             "persona": {"type": "string", "max_length": 400},
             "scene_prompt": {"type": "string", "max_length": 400},
-            "ref_ids": {"type": "string", "max_length": 200}
+            "ref_ids": {"type": "string", "max_length": 200},
+            "live": {"type": "boolean"}
           }
         },
         "character_delete": {

@@ -112,6 +112,8 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.p._drawpic_probe = None
         self.p._config_save_lock = asyncio.Lock()
         self.p._config_toml_path = ''
+        self.p._live_persona_cache = None
+        self.p._live_persona_ts = 0.0
         self.p._tasks = []
         self.p._jobs = module.JobManager(self.p._spawn, Mock())
         self.p._stats = {'chats': {'stream': {'group_id': '123', 'name': '测试群', 'last_daily': '',
@@ -476,6 +478,30 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         # 群开关名单三键可回写（日报开关/白名单/漫画联动）
         for section, key in (('report', 'daily_report_groups'), ('report', 'chat_whitelist'), ('comic', 'groups')):
             self.assertTrue((await self.p.webui_config_save(section, key, '123'))['saved'])
+        # prompts 节两键可回写 + 分析人设三态
+        self.assertTrue((await self.p.webui_config_save('prompts', 'analysis_persona', '咸鱼AI'))['saved'])
+        self.assertTrue((await self.p.webui_config_save('prompts', 'analysis_persona_mode', 'live'))['saved'])
+        self.assertEqual(self.p.config.prompts.analysis_persona_mode, 'live')
+        with patch.object(self.p._ctx, 'call_capability',
+                          AsyncMock(return_value={'success': True, 'result': {'personality': '你是麦麦，一只鲸鱼女仆娘', 'behavior_style': ''}})):
+            self.assertEqual(await self.p._resolve_analysis_persona(), '你是麦麦，一只鲸鱼女仆娘')
+        with patch.object(self.p._ctx, 'call_capability', AsyncMock(side_effect=RuntimeError('boom'))):
+            self.assertEqual(await self.p._live_persona_text(max_age=0.0), '你是麦麦，一只鲸鱼女仆娘')  # 失败回落缓存
+        self.assertTrue((await self.p.webui_config_save('prompts', 'analysis_persona_mode', 'none'))['saved'])
+        self.assertEqual(await self.p._resolve_analysis_persona(), '')
+        self.assertTrue((await self.p.webui_config_save('prompts', 'analysis_persona_mode', 'text'))['saved'])
+        self.assertEqual(await self.p._resolve_analysis_persona(), '咸鱼AI')
+        # 人设模板：保存/列举/删除
+        r = await self.p.webui_persona_template_save(name='麦麦', text='你是麦麦')
+        self.assertTrue(r['saved'])
+        tid = r['id']
+        self.assertTrue(any(t['id'] == tid for t in self.p._persona_templates()))
+        self.assertTrue((await self.p.webui_persona_template_delete(id=tid))['deleted'])
+        self.assertFalse(any(t['id'] == tid for t in self.p._persona_templates()))
+        # 漫画角色方案 live 字段：保存即存，管线注入实时人设
+        c = await self.p.webui_comic_character_save(name='实时方案', persona='备用人设', live=True)
+        self.assertTrue(c['saved'])
+        self.assertTrue(next(r for r in self.p._comic_characters() if r['id'] == c['id'])['live'])
 
     async def test_token_stats_and_events(self):
         billed = [

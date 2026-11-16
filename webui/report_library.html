@@ -26,7 +26,7 @@
     h1 { font-size: 25px; letter-spacing: .03em; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
     h2 { font-size: 17px; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
     h3 { font-size: 15px; overflow-wrap: anywhere; }
-    button, input, select { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: calc(var(--radius) * .6); background: var(--panel); padding: 8px 12px; }
+    button, input, select, textarea { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: calc(var(--radius) * .6); background: var(--panel); padding: 8px 12px; }
     button { cursor: pointer; min-height: 38px; }
     button:disabled { cursor: not-allowed; opacity: .48; }
     button.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
@@ -36,7 +36,7 @@
     :root:not([data-dashboard-style]) button.primary:hover:not(:disabled) { filter: brightness(.94); background: var(--accent); }
     :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
     label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
-    input, select { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); }
+    input, select, textarea { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); resize: vertical; }
     /* 原生下拉弹层行强制用页面面/字色：宿主 bridge 未必设 color-scheme，暗色下避免白底浅字。 */
     select option, select optgroup { background-color: var(--bg); color: var(--ink); }
     .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
@@ -123,6 +123,23 @@
       </div>
       <p class="hint">候选来自 Maibot 已有对话的群聊（自带白名单过滤），已开启的不再出现；未按群管理时全部已知群都算开启，先暂停某个群才会腾出候选。开关即改即存：暂停=不再自动生成（统计照常、主题配置保留）；删除=移出白名单（连统计一起停）并清掉该群配置。首次操作会把「全部活跃群」固化为显式名单，此后新增群默认暂停。与插件设置页双向同步。</p>
       <div id="cfg-theme-list" class="tasks"><p class="empty">正在连接…</p></div>
+    </section>
+
+    <section class="panel" aria-labelledby="persona-title">
+      <div class="section-heading"><h2 id="persona-title">分析人设</h2><span id="persona-state" class="muted">—</span></div>
+      <div class="fields">
+        <label>来源<select id="persona-mode" disabled><option value="none">通用口吻</option><option value="text">自定义文本</option><option value="live">跟随麦麦实时人设</option></select></label>
+        <label>模板<select id="persona-tpl" disabled><option value="">（不基于模板）</option></select></label>
+        <label>模板名<input id="persona-tpl-name" type="text" maxlength="60" placeholder="保存模板时命名" disabled></label>
+      </div>
+      <label style="display:block">人设文本<textarea id="persona-text" rows="5" maxlength="2000" placeholder="角色身份 / 语气 / 视角描述；来源=自定义文本时生效" disabled></textarea></label>
+      <div class="buttons" style="margin-top:10px">
+        <button id="persona-save-text" class="primary" type="button" disabled>应用为当前人设</button>
+        <button id="persona-save-tpl" type="button" disabled>保存到模板</button>
+        <button id="persona-del-tpl" class="danger" type="button" disabled>删除模板</button>
+        <button id="persona-capture" type="button" disabled>抓取麦麦当前人设填入</button>
+      </div>
+      <p class="hint">来源改完即存、设置页同步：通用口吻=不注入任何人设；自定义文本=用上方文本；跟随麦麦实时人设=每次分析前拉取宿主当前人设（麦麦换人设即跟随；宿主不可用回落通用口吻）。「抓取」把麦麦当前人设文本填入文本框，可再存成模板随时切换。</p>
     </section>
 
     <section class="panel" aria-labelledby="tasks-title">
@@ -252,6 +269,7 @@
         for (const id of ['generate-group', 'generate-day', 'generate-theme', 'filter-group', 'filter-search', 'filter-type', 'filter-sort', 'date-from', 'date-to', 'apply-filter', 'refresh', 'gallery-link', 'stats-link']) $(id).disabled = locked;
         $('rerender-theme').disabled = locked || $('rerender').dataset.invalid === 'true';
         syncReportParamsControls();
+        syncPersonaControls();
         for (const button of document.querySelectorAll('[data-mutation]')) {
           const busy = button.dataset.action !== 'cancel' && state.busyGroups.has(button.dataset.group);
           button.disabled = locked || button.dataset.invalid === 'true' || busy;
@@ -402,6 +420,83 @@
         await performAction('config_save', { section: 'report', key: 'daily_report_groups', value: serializeIdList([...ids]) }, `添加群 ${gid} 并开启日报`);
       });
 
+      let personaState = { mode: 'text', tplId: '' };
+
+      function renderPersonaBlock(view, templates) {
+        const rows = Array.isArray(templates) ? templates.filter(object) : [];
+        state.personaTemplates = rows;
+        const modeSel = $('persona-mode');
+        const mode = ['none', 'text', 'live'].includes(view.analysis_persona_mode) ? view.analysis_persona_mode : 'text';
+        if (document.activeElement !== modeSel) modeSel.value = mode;
+        personaState.mode = modeSel.value;
+        const textEl = $('persona-text');
+        if (document.activeElement !== textEl && document.activeElement !== $('persona-tpl')) {
+          textEl.value = typeof view.analysis_persona === 'string' ? view.analysis_persona : '';
+        }
+        const tplSel = $('persona-tpl');
+        if (document.activeElement !== tplSel) {
+          tplSel.replaceChildren(new Option('（不基于模板）', ''), ...rows.map(row => new Option(text(row.name || row.id, 60), row.id)));
+          tplSel.value = [...tplSel.options].some(option => option.value === personaState.tplId) ? personaState.tplId : '';
+        }
+        $('persona-state').textContent = { none: '通用口吻', text: '自定义文本', live: '跟随麦麦实时人设' }[personaState.mode] || personaState.mode;
+        syncPersonaControls();
+      }
+
+      function syncPersonaControls() {
+        const locked = !state.ready || state.actionBusy;
+        const mode = $('persona-mode').value;
+        $('persona-text').disabled = locked || mode !== 'text';
+        $('persona-save-text').disabled = locked || mode === 'live';
+        for (const id of ['persona-mode', 'persona-tpl', 'persona-tpl-name', 'persona-save-tpl', 'persona-del-tpl', 'persona-capture']) $(id).disabled = locked;
+      }
+
+      $('persona-mode').addEventListener('change', () => {
+        personaState.mode = $('persona-mode').value;
+        syncPersonaControls();
+        void performAction('config_save', { section: 'prompts', key: 'analysis_persona_mode', value: personaState.mode }, '保存分析人设来源');
+      });
+      $('persona-save-text').addEventListener('click', async () => {
+        const value = $('persona-text').value.trim();
+        if (!value) { notice('人设文本为空：要回到通用口吻请把来源切到「通用口吻」。', true); return; }
+        await performAction('config_save', { section: 'prompts', key: 'analysis_persona', value }, '应用分析人设文本');
+        await performAction('config_save', { section: 'prompts', key: 'analysis_persona_mode', value: 'text' }, '切换人设来源为自定义文本');
+      });
+      $('persona-tpl').addEventListener('change', () => {
+        personaState.tplId = $('persona-tpl').value;
+        const row = (state.personaTemplates || []).find(item => item.id === personaState.tplId);
+        if (row) { $('persona-text').value = row.text || ''; $('persona-tpl-name').value = row.name || ''; }
+      });
+      $('persona-save-tpl').addEventListener('click', () => {
+        const value = $('persona-text').value.trim();
+        if (!value) { notice('人设文本为空，无法保存模板。', true); return; }
+        void performAction('persona_template_save', { id: personaState.tplId, name: $('persona-tpl-name').value.trim(), text: value }, '保存人设模板');
+      });
+      $('persona-del-tpl').addEventListener('click', () => {
+        if (!personaState.tplId) { notice('请先在模板下拉里选中要删除的模板。', true); return; }
+        void performAction('persona_template_delete', { id: personaState.tplId }, '删除人设模板');
+      });
+      $('persona-capture').addEventListener('click', async () => {
+        if (!state.ready || state.disposed || state.actionBusy) return;
+        state.actionBusy = true;
+        syncControls();
+        notice('正在抓取麦麦当前人设…');
+        try {
+          const result = await call('query', 'persona_capture');
+          if (state.disposed) return;
+          if (object(result) && result.captured === true) {
+            $('persona-text').value = typeof result.text === 'string' ? result.text : '';
+            notice('已抓取麦麦当前人设并填入文本框；点「保存到模板」留存，或「应用为当前人设」立即生效。');
+          } else {
+            notice(`未抓取到：${text(object(result) && result.message)}`, true);
+          }
+        } catch (error) {
+          if (!(error instanceof StaleRequest)) notice(`抓取失败：${text(error.message)}`, true);
+        } finally {
+          state.actionBusy = false;
+          if (!state.disposed) syncControls();
+        }
+      });
+
       function replaceOptions(select, entries, placeholder, valueKey, labelKey) {
         const selected = select.value;
         const options = [new Option(placeholder, '')];
@@ -452,7 +547,7 @@
 
       async function performAction(name, args, label) {
         if (!state.ready || state.disposed || state.actionBusy) return;
-        if (name !== 'config_save' && !validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
+        if (name !== 'config_save' && name !== 'persona_template_save' && name !== 'persona_template_delete' && !validGroup(args.group_id)) { notice('请选择有效群聊。', true); return; }
         if ((name === 'rerun' || name === 'delete') && !validRevision(args.revision)) { notice('存档版本缺失，请刷新后重试。', true); return; }
         if (name === 'rerender' && !themeEntries.some(entry => object(entry) && entry.key === args.theme)) { notice('请选择有效的重绘主题。', true); return; }
         state.actionBusy = true;
@@ -466,6 +561,10 @@
           if (!object(result)) throw new Error('操作响应格式不正确');
           if (name === 'config_save') {
             notice(result.saved === true ? text(result.message || '已保存。') : `未保存：${text(result.message)}`, result.saved !== true);
+          } else if (name === 'persona_template_save') {
+            notice(result.saved === true ? text(result.message || '已保存模板。') : `未保存：${text(result.message)}`, result.saved !== true);
+          } else if (name === 'persona_template_delete') {
+            notice(result.deleted === true ? text(result.message || '已删除模板。') : `未删除：${text(result.message)}`, result.deleted !== true);
           } else if (name === 'delete') {
             deleted = result.deleted === true;
             notice(deleted ? '已删除所选报告存档，群消息未受影响。' : '报告未删除，可能已更新或不存在；请刷新后重试。', !deleted);
@@ -535,6 +634,8 @@
           themeEntries = Array.isArray(result.themes) ? result.themes : [];
           replaceOptions($('generate-theme'), themeEntries, '默认主题', 'key', 'label');
           renderReportParams(object(result.config_view) ? result.config_view : {});
+          renderPersonaBlock(object(result.config_view) ? result.config_view : {},
+            Array.isArray(result.persona_templates) ? result.persona_templates : []);
           $('active-count').textContent = `活跃任务：${text(result.active_count)}`;
           $('task-status').textContent = `${text(result.status)} · 更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
           $('task-progress').value = typeof result.progress === 'number' && Number.isFinite(result.progress) ? Math.max(0, Math.min(100, result.progress)) : 0;

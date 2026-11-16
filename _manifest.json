@@ -46,7 +46,8 @@
     "chat.get_avatar",
     "webui.claim_upload",
     "api.call",
-    "api.get"
+    "api.get",
+    "personality.get_current"
   ],
   "i18n": {
     "default_locale": "zh-CN"

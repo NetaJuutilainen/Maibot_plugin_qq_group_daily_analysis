@@ -26,7 +26,7 @@
     h1 { font-size: 25px; letter-spacing: .03em; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
     h2 { font-size: 17px; font-family: var(--maibot-font-display, inherit); font-synthesis: none; }
     h3 { font-size: 15px; overflow-wrap: anywhere; }
-    button, input, select { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: calc(var(--radius) * .6); background: var(--panel); padding: 8px 12px; }
+    button, input, select, textarea { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: calc(var(--radius) * .6); background: var(--panel); padding: 8px 12px; }
     button { cursor: pointer; min-height: 38px; }
     button:disabled { cursor: not-allowed; opacity: .48; }
     button.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
@@ -36,7 +36,7 @@
     :root:not([data-dashboard-style]) button.primary:hover:not(:disabled) { filter: brightness(.94); background: var(--accent); }
     :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
     label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
-    input, select { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); }
+    input, select, textarea { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); resize: vertical; }
     /* 原生下拉弹层行强制用页面面/字色：宿主 bridge 未必设 color-scheme，暗色下避免白底浅字。 */
     select option, select optgroup { background-color: var(--bg); color: var(--ink); }
     .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
@@ -180,12 +180,13 @@
       </div>
       <div class="fields">
         <label>名称<input id="char-name" maxlength="40" placeholder="如：麦麦 / 原创角色" disabled></label>
-        <label>人设<input id="char-persona" maxlength="400" placeholder="角色性格 / 外观描述" disabled></label>
+        <label>人设<input id="char-persona" maxlength="400" placeholder="角色性格 / 外观描述（勾选「实时」时忽略此项）" disabled></label>
+        <label class="badge" title="勾选后每次生成都拉取麦麦当前人设文本作为角色描述">跟随麦麦实时人设<input id="char-live" type="checkbox" disabled></label>
       </div>
       <label>场景提示<input id="char-scene" maxlength="400" placeholder="场景 / 画风补充提示" disabled></label>
       <div id="char-refs" class="buttons" aria-label="为该方案勾选参考图"></div>
       <div class="buttons"><button id="char-save" class="primary" type="button" disabled>保存方案</button><button id="char-delete" class="danger" type="button" disabled>删除方案</button></div>
-      <p class="hint">每日随机角色在插件设置开启；开启后当天首次生成随机选一个方案并固定全天。勾选的参考图随该方案附带（优先于全局参考图开关）。</p>
+      <p class="hint">每日随机角色在插件设置开启；开启后当天首次生成随机选一个方案并固定全天。勾选的参考图随该方案附带（优先于全局参考图开关）。勾选「跟随麦麦实时人设」的方案：每次生成拉取麦麦当前人设文本作为角色描述（宿主不可用回落上方人设词），麦麦换人设形象即跟着变。</p>
     </section>
 
     <section aria-labelledby="gallery-title">
@@ -784,6 +785,7 @@
         const scheme = characterEntries.find(c => c.id === editId);
         $('char-name').value = scheme ? scheme.name || '' : '';
         $('char-persona').value = scheme ? scheme.persona || '' : '';
+        $('char-live').checked = !!(scheme && scheme.live);
         $('char-scene').value = scheme ? scheme.scene_prompt || '' : '';
         $('char-delete').disabled = !state.ready || !state.enabled || !editId;
         renderCharRefs();
@@ -803,7 +805,7 @@
         $('char-state').textContent = result.daily_random_character ? '每日随机角色已开启'
           : (active ? `当前：${text((characterEntries.find(c => c.id === active) || {}).name || active, 40)}` : '未启用角色方案');
         const enabled = state.ready && state.enabled;
-        for (const id of ['character-active', 'character-edit', 'char-name', 'char-persona', 'char-scene', 'char-save']) $(id).disabled = !enabled;
+        for (const id of ['character-active', 'character-edit', 'char-name', 'char-persona', 'char-scene', 'char-live', 'char-save']) $(id).disabled = !enabled;
         loadCharForm();
       }
 
@@ -1192,7 +1194,7 @@
       $('character-edit').addEventListener('change', loadCharForm);
       $('char-save').addEventListener('click', () => {
         const refIds = [...$('char-refs').querySelectorAll('input:checked')].map(input => input.value).join(',');
-        void performAction('character_save', { id: $('character-edit').value, name: $('char-name').value, persona: $('char-persona').value, scene_prompt: $('char-scene').value, ref_ids: refIds }, '保存角色方案');
+        void performAction('character_save', { id: $('character-edit').value, name: $('char-name').value, persona: $('char-persona').value, scene_prompt: $('char-scene').value, ref_ids: refIds, live: $('char-live').checked }, '保存角色方案');
       });
       $('char-delete').addEventListener('click', () => { void performAction('character_delete', { id: $('character-edit').value }, '删除角色方案'); });
       $('rotation-mode').addEventListener('change', () => { void performAction('comic_prefs_set', { style_rotation: $('rotation-mode').value }, '保存轮换设置'); });

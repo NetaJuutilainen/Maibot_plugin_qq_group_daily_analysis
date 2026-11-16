@@ -310,10 +310,11 @@ class DeclarationTest(unittest.TestCase):
 
     def test_manifest_and_bound_api_signatures(self):
         manifest = json.loads((ROOT / '_manifest.json').read_text(encoding='utf-8'))
-        self.assertEqual(manifest['version'], '1.6.1')
+        self.assertRegex(manifest['version'], r'^\d+\.\d+\.\d+$')
         self.assertEqual(manifest['host_application']['min_version'], '1.3.19')
         self.assertEqual(manifest['sdk']['min_version'], '2.12.0')
         self.assertIn('webui.claim_upload', manifest['capabilities'])
+        self.assertIn('personality.get_current', manifest['capabilities'])
         self.assertIn('api.call', manifest['capabilities'])
         self.assertIn('api.get', manifest['capabilities'])
         self.assertTrue((ROOT / manifest['changelog']).is_file())

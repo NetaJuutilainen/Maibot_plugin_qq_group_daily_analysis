@@ -359,14 +359,23 @@
         for (const id of ['policy-add-group', 'policy-add']) $(id).disabled = locked;
       }
 
+      const paramServer = {}; // 轮询只在服务端值真正变化时才回填，保护未保存的输入
+
+      function syncFieldValue(el, serverValue, key) {
+        if (document.activeElement === el) return;
+        if (paramServer[key] === serverValue) return;
+        el.value = serverValue;
+        paramServer[key] = serverValue;
+      }
+
       function renderParams(view) {
         const panels = $('cfg-panels');
         if (!panels.options.length) {
           panels.append(new Option('跟随风格', '0'), ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => new Option(`${n} 格`, String(n))));
         }
         if (document.activeElement !== panels) panels.value = String(Number(view.storyboard_panels) || 0);
-        if (document.activeElement !== $('cfg-wait')) $('cfg-wait').value = String(Number(view.max_wait_seconds) || 300);
-        if (document.activeElement !== $('cfg-caption')) $('cfg-caption').value = typeof view.comic_caption === 'string' ? view.comic_caption : '';
+        syncFieldValue($('cfg-wait'), String(Number(view.max_wait_seconds) || 300), 'wait');
+        syncFieldValue($('cfg-caption'), typeof view.comic_caption === 'string' ? view.comic_caption : '', 'caption');
         if (document.activeElement !== $('cfg-album-on')) $('cfg-album-on').value = view.album_upload_enabled ? 'on' : 'off';
         renderAlbumMap(overviewGroups, typeof view.album_name_by_group === 'string' ? view.album_name_by_group : '');
         syncParamsControls();

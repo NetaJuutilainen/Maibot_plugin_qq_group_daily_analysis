@@ -421,6 +421,7 @@
       });
 
       let personaState = { mode: 'text', tplId: '' };
+      let personaServerLast = null; // 轮询只在服务端值真正变化时才回填文本框，保护未保存的输入
 
       function renderPersonaBlock(view, templates) {
         const rows = Array.isArray(templates) ? templates.filter(object) : [];
@@ -429,9 +430,11 @@
         const mode = ['none', 'text', 'live'].includes(view.analysis_persona_mode) ? view.analysis_persona_mode : 'text';
         if (document.activeElement !== modeSel) modeSel.value = mode;
         personaState.mode = modeSel.value;
+        const serverText = typeof view.analysis_persona === 'string' ? view.analysis_persona : '';
         const textEl = $('persona-text');
-        if (document.activeElement !== textEl && document.activeElement !== $('persona-tpl')) {
-          textEl.value = typeof view.analysis_persona === 'string' ? view.analysis_persona : '';
+        if (personaServerLast === null || personaServerLast !== serverText) {
+          if (document.activeElement !== textEl) textEl.value = serverText;
+          personaServerLast = serverText;
         }
         const tplSel = $('persona-tpl');
         if (document.activeElement !== tplSel) {

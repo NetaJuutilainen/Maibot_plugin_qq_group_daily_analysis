@@ -49,6 +49,7 @@
     .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: calc(var(--radius) * .5); font-size: 12px; line-height: 1.4; color: var(--muted); background: var(--soft); }
     .badge::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
     .badge.ok { color: var(--ok); background: var(--ok-soft); }
+    #persona-effective { color: var(--ok); background: var(--ok-soft); border-radius: calc(var(--radius) * .5); padding: 8px 10px; font-weight: 600; }
     .badge.warn { color: var(--warn); background: var(--warn-soft); }
     .badge.err { color: var(--danger); background: var(--danger-soft); }
     .catalog { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
@@ -449,7 +450,9 @@
           effEl.textContent = '当前生效：通用口吻（不注入任何人设，分析器按默认口吻输出）';
         } else if (mode === 'text') {
           const t = (typeof view.analysis_persona === 'string' ? view.analysis_persona : '').trim();
-          effEl.textContent = t ? `当前生效：自定义文本（${t.length} 字）：「${clip(t)}」`
+          const hit = rows.find(row => typeof row.text === 'string' && row.text.trim() === t);
+          const from = hit ? `（来自模板：${text(hit.name || hit.id, 60)}）` : '';
+          effEl.textContent = t ? `当前生效：自定义文本${from}（${t.length} 字）：「${clip(t)}」`
                                 : '当前生效：自定义文本但文本为空 → 实际等同通用口吻（要注入请填文本或换来源）';
         } else {
           const live = typeof view.analysis_persona_live === 'string' ? view.analysis_persona_live.trim() : '';

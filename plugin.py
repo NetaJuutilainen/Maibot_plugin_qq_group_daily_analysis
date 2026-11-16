@@ -1224,6 +1224,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         return {"saved": True, "message": f"已保存 {section}.{key}（设置页同步可见）"}
 
     _PERSONA_TEMPLATES_MAX = 12
+    _live_persona_cache: ClassVar[str | None] = None
+    _live_persona_ts: ClassVar[float] = 0.0
 
     def _persona_templates_path(self) -> Path:
         return Path(self.ctx.paths.data_dir) / "analysis_persona_templates.json"

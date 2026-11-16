@@ -139,6 +139,7 @@
         <button id="persona-del-tpl" class="danger" type="button" disabled>删除模板</button>
         <button id="persona-capture" type="button" disabled>抓取麦麦当前人设填入</button>
       </div>
+      <p id="persona-effective" class="hint">当前生效：—</p>
       <p class="hint">来源改完即存、设置页同步：通用口吻=不注入任何人设；自定义文本=用上方文本；跟随麦麦实时人设=每次分析前拉取宿主当前人设（麦麦换人设即跟随；宿主不可用回落通用口吻）。「抓取」把麦麦当前人设文本填入文本框，可再存成模板随时切换。</p>
     </section>
 
@@ -442,6 +443,19 @@
           tplSel.value = [...tplSel.options].some(option => option.value === personaState.tplId) ? personaState.tplId : '';
         }
         $('persona-state').textContent = { none: '通用口吻', text: '自定义文本', live: '跟随麦麦实时人设' }[personaState.mode] || personaState.mode;
+        const effEl = $('persona-effective');
+        const clip = s => `${s.slice(0, 40)}${s.length > 40 ? '…' : ''}`;
+        if (mode === 'none') {
+          effEl.textContent = '当前生效：通用口吻（不注入任何人设，分析器按默认口吻输出）';
+        } else if (mode === 'text') {
+          const t = (typeof view.analysis_persona === 'string' ? view.analysis_persona : '').trim();
+          effEl.textContent = t ? `当前生效：自定义文本（${t.length} 字）：「${clip(t)}」`
+                                : '当前生效：自定义文本但文本为空 → 实际等同通用口吻（要注入请填文本或换来源）';
+        } else {
+          const live = typeof view.analysis_persona_live === 'string' ? view.analysis_persona_live.trim() : '';
+          effEl.textContent = live ? `当前生效：麦麦实时人设（已缓存 ${live.length} 字，下次分析即用）：「${clip(live)}」`
+                                    : '当前生效：麦麦实时人设（尚未拉取过，首次分析时自动拉取；可点「抓取」立即预览）';
+        }
         syncPersonaControls();
       }
 

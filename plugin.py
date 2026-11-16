@@ -3401,7 +3401,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                             "daily_report_groups": str(self.config.report.daily_report_groups or ""),
                             "chat_whitelist": str(self.config.report.chat_whitelist or ""),
                             "analysis_persona_mode": str(self.config.prompts.analysis_persona_mode or "text"),
-                            "analysis_persona": str(self.config.prompts.analysis_persona or "")},
+                            "analysis_persona": str(self.config.prompts.analysis_persona or ""),
+                            "analysis_persona_live": str(self._live_persona_cache or "")},
             "persona_templates": self._persona_templates(),
         }
 

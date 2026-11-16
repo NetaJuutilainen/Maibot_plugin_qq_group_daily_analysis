@@ -37,6 +37,7 @@
     :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
     label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
     input, select, textarea { min-width: 0; width: 100%; color: var(--ink); background: var(--soft); resize: vertical; }
+    #persona-text { margin-top: 6px; }
     /* 原生下拉弹层行强制用页面面/字色：宿主 bridge 未必设 color-scheme，暗色下避免白底浅字。 */
     select option, select optgroup { background-color: var(--bg); color: var(--ink); }
     .header, .row, .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
@@ -49,7 +50,7 @@
     .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: calc(var(--radius) * .5); font-size: 12px; line-height: 1.4; color: var(--muted); background: var(--soft); }
     .badge::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
     .badge.ok { color: var(--ok); background: var(--ok-soft); }
-    #persona-effective { color: var(--ok); background: var(--ok-soft); border-radius: calc(var(--radius) * .5); padding: 8px 10px; font-weight: 600; }
+    #persona-effective { color: var(--ok); background: var(--ok-soft); border-radius: calc(var(--radius) * .5); padding: 9px 12px; font-weight: 600; margin: 14px 0 6px; }
     .badge.warn { color: var(--warn); background: var(--warn-soft); }
     .badge.err { color: var(--danger); background: var(--danger-soft); }
     .catalog { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
@@ -134,7 +135,7 @@
         <label>模板名<input id="persona-tpl-name" type="text" maxlength="60" placeholder="保存模板时命名" disabled></label>
       </div>
       <label style="display:block">人设文本<textarea id="persona-text" rows="5" maxlength="2000" placeholder="角色身份 / 语气 / 视角描述；来源=自定义文本时生效" disabled></textarea></label>
-      <div class="buttons" style="margin-top:10px">
+      <div class="buttons" style="margin-top:16px">
         <button id="persona-save-text" class="primary" type="button" disabled>应用为当前人设</button>
         <button id="persona-save-tpl" type="button" disabled>保存到模板</button>
         <button id="persona-del-tpl" class="danger" type="button" disabled>删除模板</button>

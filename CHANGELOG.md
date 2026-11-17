@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.6.6
+
+- 修复「每次插件更新 / 热重载后，漫画当前角色方案被重置」：`comic_character_set_active` 只改了内存里的配置对象，**从未写回 `config.toml`**；插件热重载时配置从文件重建，`active_character` 回到空值，看起来就是「角色方案设置被顶掉」（角色方案列表与参考图本身仍在 `data/plugins/<id>/comic_characters.json`）。现切换当前角色时落盘 `[comic].active_character`（tomlkit 保留注释）；删除当前角色时同步写回空值。
+- 回归测试：切换后 `config.toml` 必须含 `active_character = "<id>"`；删除当前角色后必须回到 `""`。
+
 ## 1.6.5
 
 - 漫画风格 12 套 → **17 套**：新增上游原版的 `cyberpunk_hud`（赛博朋克义体HUD日志）、`deep_sea_log`（深海科考观测录）、`steampunk_blueprint`（蒸汽朋克发明家手稿）、`alchemist_botanical`（炼金术士魔导植物志）、`wasteland_radio`（废土生存电台日志），key 与上游一致；风格列表、轮换池、按群指定均由 `COMIC_STYLES` 自动带出。

@@ -375,6 +375,8 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.p._pick_comic_style('123'), 'poster')
 
     async def test_character_schemes_and_daily_random(self):
+        cfg_path = Path(tempfile.mkdtemp()) / 'config.toml'
+        self.p._config_toml_path = str(cfg_path)
         r1 = await self.p.webui_comic_character_save(name='麦麦', persona='粉发', scene_prompt='教室')
         self.assertTrue(r1['saved'])
         cid = r1['id']
@@ -382,11 +384,14 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.p._comic_characters()), 2)
         self.assertTrue((await self.p.webui_comic_character_set_active(cid))['saved'])
         self.assertEqual(self.p._active_character('123')['id'], cid)
+        # 当前角色必须落盘：否则插件热重载/更新后从 config.toml 重建会把它清空
+        self.assertIn(f'active_character = "{cid}"', cfg_path.read_text(encoding='utf-8'))
         self.p._comic_cfg().daily_random_character = True
         self.assertEqual(self.p._active_character('123')['id'], self.p._active_character('456')['id'])
         self.p._comic_cfg().daily_random_character = False
         self.assertTrue((await self.p.webui_comic_character_delete(cid))['deleted'])
         self.assertEqual(len(self.p._comic_characters()), 1)
+        self.assertIn('active_character = ""', cfg_path.read_text(encoding='utf-8'))
         self.assertFalse((await self.p.webui_comic_character_delete('nope'))['deleted'])
 
     async def test_storyboard_includes_character_extra(self):

@@ -1084,6 +1084,14 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     def _comic_cfg(self) -> ComicSectionConfig:
         return cast(DailyAnalysisConfig, self.config).comic
 
+    def _persist_comic_config(self) -> None:
+        """把 [comic] 段标量写回 config.toml。
+
+        `active_character` 这类只改内存的字段必须落盘：否则插件每次热重载/更新都会从
+        config.toml 重建配置，当前角色方案被清空（2026-11-18 修复）。
+        """
+        self._persist_config_toml("comic", self.config)
+
     def _rotation_path(self) -> Path:
         return Path(self.ctx.paths.data_dir) / "comic_rotation.json"
 
@@ -1427,6 +1435,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         self._save_characters(remain)
         if self._comic_cfg().active_character == id:
             self._comic_cfg().active_character = ""
+            async with self._config_save_lock:
+                self._persist_comic_config()
         return {"deleted": True, "message": "已删除角色方案"}
 
     @API("comic_character_set_active", version="1")
@@ -1434,6 +1444,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         if id and id not in {r["id"] for r in self._comic_characters()}:
             return {"saved": False, "message": "角色方案不存在"}
         self._comic_cfg().active_character = id
+        async with self._config_save_lock:
+            self._persist_comic_config()
         return {"saved": True, "message": "已切换当前角色方案"}
 
     def _cfg(self) -> DailyAnalysisConfig:

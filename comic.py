@@ -6,7 +6,7 @@ submit / task / request / cancel / image 五个 v2 短 RPC，全部用 asyncio.t
 
 幂等纪律（与上游协议一致）：
 - request_id 先落盘再提交；超时/回执未知保留原键，绝不换键重画；
-- 恢复只走 task_v2 / request_v2 只读查询，任何情况下不自动重新 submit；
+- 恢复只走 task / request 只读查询，任何情况下不自动重新 submit；
 - stream_id 一律传空（仅生成），成图由本插件自己发群，避免双发。
 """
 
@@ -23,6 +23,9 @@ import threading
 import uuid
 
 DRAWPIC_PLUGIN_ID = "maimai-drawpic-plugin"
+# 联动接口形态：drawpic 2.3.0 起统一为 drawpic_*（无版本后缀）；2.2.x 及更早是 drawpic_*_v2 + version="2"。
+# 顺序即优先级：先试新版，探测不到再回落旧版，两端都能用。
+DRAWPIC_API_VARIANTS = (("", ""), ("_v2", "2"))
 RPC_TIMEOUT_SECONDS = 8.0
 MAX_IMAGE_BYTES = 32 * 1024 * 1024
 MAX_CHUNK_B64 = 256 * 1024
@@ -116,19 +119,44 @@ class DrawpicError(Exception):
         self.retry_submit = retry_submit
 
 
+async def detect_drawpic_variant(api) -> tuple[str, str] | None:
+    """探测 drawpic 联动接口形态，返回 (后缀, version) 或 None（未安装/未启用）。"""
+    for suffix, version in DRAWPIC_API_VARIANTS:
+        kwargs = {"version": version} if version else {}
+        try:
+            submit = await api.get(f"{DRAWPIC_PLUGIN_ID}.drawpic_submit{suffix}", **kwargs)
+            lookup = await api.get(f"{DRAWPIC_PLUGIN_ID}.drawpic_request{suffix}", **kwargs)
+        except Exception:
+            continue
+        if submit is not None and lookup is not None:
+            return suffix, version
+    return None
+
+
 class DrawpicClient:
     """ctx.api（SDK APICapability）之上的最小封装。宿主 runner 与 SDK 对 api.call 各剥一层
     result，正常拿到的就是 drawpic 业务字典本身；受理与否看 accepted/status/error。"""
 
     def __init__(self, api):
         self._api = api
+        self._variant: tuple[str, str] | None = None
+
+    async def _endpoint(self, operation: str) -> tuple[str, dict]:
+        if self._variant is None:
+            self._variant = await detect_drawpic_variant(self._api)
+            if self._variant is None:
+                raise DrawpicError("RPC_FAILED", "未检测到绘图插件接口（需安装并启用麦麦绘图）")
+        suffix, version = self._variant
+        return f"{DRAWPIC_PLUGIN_ID}.drawpic_{operation}{suffix}", ({"version": version} if version else {})
 
     async def _call(self, operation: str, **args) -> dict:
+        name, extra = await self._endpoint(operation)
         try:
             async with asyncio.timeout(RPC_TIMEOUT_SECONDS):
-                response = await self._api.call(
-                    f"{DRAWPIC_PLUGIN_ID}.drawpic_{operation}_v2", version="2", **args)
+                response = await self._api.call(name, **extra, **args)
         except asyncio.CancelledError:
+            raise
+        except DrawpicError:
             raise
         except Exception as exc:
             # 传输失败不证明业务未受理；submit 场景调用方必须按 submission_unknown 处理

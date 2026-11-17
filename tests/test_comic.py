@@ -20,10 +20,12 @@ ANALYSIS = {
 
 
 class FakeApi:
-    """按 drawpic 2.2.0 协议回放脚本化响应（宿主+SDK 已双层解包，直达业务字典）；记录全部调用供断言。"""
+    """脚本化 drawpic 对端：默认 2.3.0 无后缀协议，legacy=True 回放 2.2.x 的 _v2 + version="2"；
+    宿主+SDK 已双层解包，直达业务字典；记录全部调用供断言。"""
 
-    def __init__(self, blob=b'fake-image-bytes', chunk_size=7):
+    def __init__(self, blob=b'fake-image-bytes', chunk_size=7, legacy=False):
         self.calls = []
+        self.legacy = legacy
         self.blob = blob
         self.chunk_size = chunk_size
         self.submit_result = {'accepted': True, 'task_id': 'task-1', 'request_id': '', 'reused': False}
@@ -32,15 +34,28 @@ class FakeApi:
         self.fail_envelope = False
         self.raise_transport = False
 
+    async def get(self, name, *, version=''):
+        suffix, expected = ('_v2', '2') if self.legacy else ('', '')
+        if name in (f'maimai-drawpic-plugin.drawpic_submit{suffix}',
+                    f'maimai-drawpic-plugin.drawpic_request{suffix}') and version == expected:
+            return {'api': name}
+        return None
+
     async def call(self, name, *, version='', **kwargs):
         self.calls.append((name, kwargs))
-        assert version == '2'
-        assert name.startswith('maimai-drawpic-plugin.drawpic_') and name.endswith('_v2')
+        prefix = 'maimai-drawpic-plugin.drawpic_'
+        if self.legacy:
+            assert version == '2'
+            assert name.startswith(prefix) and name.endswith('_v2')
+            operation = name[len(prefix):-len('_v2')]
+        else:
+            assert version == ''
+            assert name.startswith(prefix) and not name.endswith('_v2')
+            operation = name[len(prefix):]
         if self.raise_transport:
             raise RuntimeError('transport down')
         if self.fail_envelope:
             return {'success': False, 'error': 'host error'}
-        operation = name[len('maimai-drawpic-plugin.drawpic_'):-len('_v2')]
         if operation == 'submit':
             result = dict(self.submit_result)
             result['request_id'] = kwargs['request_id']
@@ -71,12 +86,28 @@ class DrawpicClientTest(unittest.IsolatedAsyncioTestCase):
                                      style='水彩', source_images=['aGVsbG8='])
         self.assertTrue(result['accepted'])
         name, kwargs = api.calls[0]
-        self.assertEqual(name, 'maimai-drawpic-plugin.drawpic_submit_v2')
+        self.assertEqual(name, 'maimai-drawpic-plugin.drawpic_submit')
         self.assertEqual(kwargs['stream_id'], '')
         self.assertEqual(kwargs['task_type'], 'edit_image')
         self.assertEqual(kwargs['model'], '实例 / 模型')
         self.assertEqual(kwargs['style'], '水彩')
         self.assertEqual(kwargs['source_images'], ['aGVsbG8='])
+
+    async def test_legacy_v2_interface_still_works(self):
+        """2.2.x 及更早的 _v2 协议仍可用（市场用户不一定跟着升 drawpic）。"""
+        api = FakeApi(legacy=True)
+        result = await comic.DrawpicClient(api).submit('提示词', 'comic-abcdef123456')
+        self.assertTrue(result['accepted'])
+        self.assertEqual(api.calls[0][0], 'maimai-drawpic-plugin.drawpic_submit_v2')
+
+    async def test_missing_drawpic_interface_raises_rpc_failed(self):
+        class NoDrawpicApi(FakeApi):
+            async def get(self, name, *, version=''):
+                return None
+
+        with self.assertRaises(comic.DrawpicError) as caught:
+            await comic.DrawpicClient(NoDrawpicApi()).submit('提示词', 'comic-abcdef123456')
+        self.assertEqual(caught.exception.code, 'RPC_FAILED')
 
     async def test_submit_omits_optional_fields_when_empty(self):
         api = FakeApi()
@@ -128,14 +159,14 @@ class DrawpicClientTest(unittest.IsolatedAsyncioTestCase):
             await client.request('comic-abcdef123456')
         self.assertEqual(caught.exception.code, 'REQUEST_NOT_FOUND')
         await client.cancel('task-1')
-        self.assertEqual(api.calls[-1][0], 'maimai-drawpic-plugin.drawpic_cancel_v2')
+        self.assertEqual(api.calls[-1][0], 'maimai-drawpic-plugin.drawpic_cancel')
 
     async def test_read_image_reassembles_chunks(self):
         blob = bytes(range(256)) * 3
         api = FakeApi(blob=blob, chunk_size=100)
         result = await comic.DrawpicClient(api).read_image('task-1')
         self.assertEqual(result, blob)
-        image_calls = [kwargs for name, kwargs in api.calls if name.endswith('drawpic_image_v2')]
+        image_calls = [kwargs for name, kwargs in api.calls if name.endswith('drawpic_image')]
         self.assertEqual([kwargs['offset'] for kwargs in image_calls], [0, 100, 200, 300, 400, 500, 600, 700])
         self.assertTrue(all(kwargs['kind'] == 'original' and kwargs['index'] == 0 for kwargs in image_calls))
 
@@ -154,7 +185,7 @@ class DrawpicClientTest(unittest.IsolatedAsyncioTestCase):
 
             async def mutating_call(name, *, version='', _mutate=mutate, **kwargs):
                 response = await original_call(name, version=version, **kwargs)
-                if name.endswith('drawpic_image_v2') and kwargs['offset'] == 8:
+                if name.endswith('drawpic_image') and kwargs['offset'] == 8:
                     _mutate(response)
                 return response
 

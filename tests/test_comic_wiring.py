@@ -39,6 +39,12 @@ ANALYSIS = {
 }
 
 
+def _op(api_name):
+    """drawpic_submit / drawpic_submit_v2 → submit（兼容 2.3.0 无后缀与旧版 _v2）。"""
+    operation = api_name[len('maimai-drawpic-plugin.drawpic_'):]
+    return operation[:-len('_v2')] if operation.endswith('_v2') else operation
+
+
 class FakeDrawpic:
     """脚本化的 drawpic v2 对端：业务字典直达（宿主+SDK 已双层解包）+ 可注入的受理/进度/传输故障。"""
 
@@ -58,7 +64,7 @@ class FakeDrawpic:
 
     async def call(self, name, *, version='', **kwargs):
         self.calls.append((name, kwargs))
-        operation = name[len('maimai-drawpic-plugin.drawpic_'):-len('_v2')]
+        operation = _op(name)
         if operation == 'submit':
             if self.submit_raises:
                 raise RuntimeError('transport down')
@@ -88,11 +94,10 @@ class FakeDrawpic:
         raise AssertionError(f'unexpected operation {operation}')
 
     def ops(self):
-        return [name[len('maimai-drawpic-plugin.drawpic_'):-len('_v2')] for name, _ in self.calls]
+        return [_op(name) for name, _ in self.calls]
 
     def kwargs_for(self, operation):
-        return [kwargs for name, kwargs in self.calls
-                if name == f'maimai-drawpic-plugin.drawpic_{operation}_v2']
+        return [kwargs for name, kwargs in self.calls if _op(name) == operation]
 
 
 class ComicWiringTest(unittest.IsolatedAsyncioTestCase):

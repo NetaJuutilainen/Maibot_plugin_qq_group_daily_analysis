@@ -23,9 +23,9 @@ from maibot_sdk import API, Command, Field, HookHandler, MaiBotPlugin, PluginCon
 from maibot_sdk.types import HookMode
 
 from .comic import (
-    COMIC_STYLES, DRAWPIC_PLUGIN_ID, RECOVERABLE_STATUSES, ComicRequestBook, DrawpicClient,
-    DrawpicError, build_draw_prompt, new_request_id, normalize_storyboard, storyboard_prompt,
-    _effective_panels,
+    COMIC_STYLES, RECOVERABLE_STATUSES, ComicRequestBook, DrawpicClient,
+    DrawpicError, build_draw_prompt, detect_drawpic_variant, new_request_id, normalize_storyboard,
+    storyboard_prompt, _effective_panels,
 )
 from .job_manager import JobManager
 from .report_store import ReportStore
@@ -3529,18 +3529,12 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     # ------------------------------------------------------------------ 群聊漫画（P3，麦麦绘图协作）
 
     async def _drawpic_ready(self) -> bool:
-        """探测麦麦绘图 v2 接口是否可用（300s TTL 缓存；失败降级为不可用，不阻塞其他功能）。"""
+        """探测麦麦绘图联动接口是否可用（300s TTL 缓存；失败降级为不可用，不阻塞其他功能）。"""
         now = time.monotonic()
         cached = getattr(self, "_drawpic_probe", None)
         if cached is not None and now - cached[0] < 300:
             return cached[1]
-        ready = False
-        try:
-            submit = await self.ctx.api.get(f"{DRAWPIC_PLUGIN_ID}.drawpic_submit_v2", version="2")
-            lookup = await self.ctx.api.get(f"{DRAWPIC_PLUGIN_ID}.drawpic_request_v2", version="2")
-            ready = submit is not None and lookup is not None
-        except Exception:
-            ready = False
+        ready = await detect_drawpic_variant(self.ctx.api) is not None
         self._drawpic_probe = (now, ready)
         return ready
 

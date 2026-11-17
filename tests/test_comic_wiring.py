@@ -468,7 +468,7 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.p._comic_cfg().album_upload_enabled)
         # 0 = 跟随风格预设
         self.assertTrue((await self.p.webui_config_save('comic', 'storyboard_panels', '0'))['saved'])
-        self.assertEqual(self.p._eff_storyboard_panels('ukiyoe'), 1)
+        self.assertEqual(self.p._eff_storyboard_panels('ukiyoe'), 4)
         self.assertEqual(self.p._eff_storyboard_panels('four_panel'), 4)
         # 漫画相册条目式：全局 album_name 退出 WebUI 白名单，按群映射生效
         self.assertFalse((await self.p.webui_config_save('comic', 'album_name', 'x'))['saved'])

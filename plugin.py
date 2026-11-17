@@ -677,7 +677,7 @@ class ComicSectionConfig(PluginConfigBase):
     rotation_styles: str = Field(default="", description="参与轮换的风格 key，每行一个；留空=全部内置风格", json_schema_extra={"rows": 3})
     rotation_scope: str = Field(default="global", description="轮换进度范围：global=全局共享一份进度 / group=按群独立进度")
     storyboard_panels: int = Field(default=5, ge=0, le=9,
-                                   description="漫画分镜数：0=跟随风格预设（单幅1格/四格类4格）；1-9=固定格数（5=纵向五格条漫，6=2×3，9=九宫格）")
+                                   description="漫画分镜数：0=跟随风格预设（单幅1格/多格类4格）；1-9=固定格数（每行一至三格，5=五格，9=九宫格）")
     active_character: str = Field(default="", description="当前漫画角色方案 id（留空=不用角色方案，沿用全局参考图）；在漫画廊管理")
     daily_random_character: bool = Field(default=False, description="每日随机角色：当天首次生成时随机选一个角色方案并固定一整天")
     drawpic_style: str = Field(default="", description="传给麦麦绘图的风格预设名（留空=绘图插件当前默认风格）")
@@ -1552,7 +1552,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "drawpic_style": {"label": "绘图风格预设名", "ui_type": "text", "hint": "麦麦绘图工作台里的预设名；留空用其当前默认风格"},
             "model": {"label": "绘图模型完整名", "ui_type": "text", "hint": "格式「实例名 / 模型名」；留空用绘图插件默认模型"},
             "max_wait_seconds": {"label": "等待绘图上限（秒）", "ui_type": "number", "min": 60, "max": 3600, "hint": "超时不丢进度，可在漫画廊点「恢复进度」继续"},
-            "storyboard_panels": {"label": "漫画分镜数", "ui_type": "select", "choices": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], "hint": "0=跟随风格预设；5=纵向五格条漫；9=九宫格。WebUI 漫画页「漫画参数」可改并双向同步"},
+            "storyboard_panels": {"label": "漫画分镜数", "ui_type": "select", "choices": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], "hint": "0=跟随风格预设；多格按每行一至三格排布，5=五格，9=九宫格。WebUI 漫画页「漫画参数」可改并双向同步"},
             "use_reference_images": {"label": "附带参考图", "ui_type": "switch", "hint": "在漫画廊上传角色/画风参考图，最多 4 张；绘图时一并传给麦麦绘图"},
             "comic_caption": {"label": "漫画提示文字", "ui_type": "text", "hint": "漫画图片前附带；留空则只发图"},
             "album_upload_enabled": {"label": "漫画发送后上传群相册", "ui_type": "switch", "hint": "与日报相册开关独立；仅发送成功后上传，失败不影响已发出的漫画"},

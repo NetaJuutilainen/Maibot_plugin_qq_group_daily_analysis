@@ -337,7 +337,7 @@ class StoryboardTest(unittest.TestCase):
     def test_build_draw_prompt_styles_refs_and_cap(self):
         board = comic.fallback_storyboard(ANALYSIS, '测试群', 4)
         four = comic.build_draw_prompt(board, 'four_panel', '测试群', '2026-11-11')
-        self.assertIn('四格漫画', four)
+        self.assertIn('日系多格连环漫画', four)
         self.assertIn('第4格', four)
         self.assertNotIn('参考附图', four)
         poster = comic.build_draw_prompt(board, 'poster', '测试群', '2026-11-11', with_refs=True)
@@ -350,6 +350,13 @@ class StoryboardTest(unittest.TestCase):
         for key, meta in comic.COMIC_STYLES.items():
             self.assertTrue(meta.get('art'), key)
             self.assertTrue(meta.get('kind'), key)
+            self.assertTrue(meta.get('tone'), key)
+            if meta['panels'] > 1:
+                art = meta['art']
+                # 多格风格必须带色彩锚点（防止再写出「黑白」这类无对冲的单一色彩指令）与对白/旁白承载方式
+                self.assertTrue(any(word in art for word in ('色', '黑', '白', '彩')), key)
+                self.assertIn('对白', art, key)
+                self.assertIn('旁白', art, key)
             board = comic.fallback_storyboard(ANALYSIS, '测试群', meta['panels'])
             self.assertEqual(len(board['panels']), meta['panels'])
             prompt = comic.build_draw_prompt(board, key, '测试群', '2026-11-11')

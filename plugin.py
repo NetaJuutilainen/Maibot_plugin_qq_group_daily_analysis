@@ -715,8 +715,15 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     _jinja_envs: ClassVar[dict[str, Any]] = {}
     # 这些码位虽在 emoji 字体范围内（键帽 emoji 需要），但必须交给正文字体，否则数字会被拉宽
     _EMOJI_RANGE_SKIP: ClassVar[frozenset] = frozenset({"u+23", "u+2a", "u+30-39"})
-    # 相册上传超时（秒）：大图（几 MB）传给协议端再转 QQ，实测要 20~40s，给足余量避免客户端超时后重复上传
-    _ALBUM_UPLOAD_TIMEOUT_S: ClassVar[float] = 120.0
+    # 相册上传超时（秒）：大图（几 MB）传给协议端再转 QQ，实测要 20~40s；
+    # 2026-11-18 晚服务器上行异常时 12MB 漫画传了 263s，给足余量避免客户端超时后重复上传
+    _ALBUM_UPLOAD_TIMEOUT_S: ClassVar[float] = 600.0
+    # 漫画发送回执失败后，等多久再传相册（秒）：协议端动作超时 15s 就判失败，
+    # 但大图 highway 上传还在继续（2026-11-18 实测 12MB 传了 150s），等它传完再传相册才不会互相抢带宽
+    _ALBUM_AFTER_SEND_FAIL_DELAY_S: ClassVar[float] = 180.0
+    # 漫画发送前压缩阈值（字节）：超过就转 JPEG q90（4:4:4、不缩放），体积约降到 1/5，
+    # 文字边缘仍清晰；存档保留原图。日报等小图不受影响。
+    _COMIC_JPEG_THRESHOLD_B: ClassVar[int] = 4_000_000
     _TEMPLATES_ROOT: ClassVar[Path] = Path(__file__).resolve().parent / "templates"
     _STATIC_ASSETS_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "static_assets.json"
     _FONT_SUB_PATH: ClassVar[Path] = Path(__file__).resolve().parent / "fonts" / "LXGW-Regular-sub.woff2"
@@ -4083,6 +4090,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             job["error"] = f"绘图已完成但取图失败（{exc.code}）；可到漫画廊「恢复进度」重试读取"
             return "failed"
         job["stage"] = "存档漫画"
+        send_blob = await asyncio.to_thread(self._comic_send_blob, blob)
+        if len(send_blob) < len(blob):
+            self.ctx.logger.info("[comic] 发送前压缩：%d KB → %d KB（存档仍保留原图）",
+                                 len(blob) // 1024, len(send_blob) // 1024)
         entry = self._comic_book.get(request_id) or {}
         comic_meta = None
         if self._eff_archive_enabled():
@@ -4099,26 +4110,39 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 return "failed"
         await asyncio.to_thread(self._comic_book.update, request_id, status="completed", error="")
         job["stage"] = "发送漫画"
-        if await self._send_comic_image(stream_id, blob):
+        sent = await self._send_comic_image(stream_id, send_blob)
+        if sent:
             if comic_meta is not None:
                 await asyncio.to_thread(self._report_store.mark_comic_sent, group_id, day, comic_meta["revision"])
             await asyncio.to_thread(self._comic_book.update, request_id, sent=True)
-            # 群相册上传（对齐原版漫画独立开关；失败静默，不影响已发出的漫画）
-            try:
-                await self._upload_report_to_album(
-                    stream_id, group_id, base64.b64encode(blob).decode("ascii"),
-                    stem=self._album_file_stem(stream_id, "漫画", day),
-                    album_name_override=self._comic_album_name_for(group_id), enabled=ccfg.album_upload_enabled)
-            except Exception as exc:
-                self.ctx.logger.warning("[comic] 群相册上传异常: %s", exc)
-            return "ok"
-        if comic_meta is not None:
+        elif comic_meta is not None:
             await asyncio.to_thread(self._comic_book.update, request_id, error="已存档，发送回执失败（图可能已实际送达）")
             job["error"] = "漫画已存档，但发送回执为失败；图可能已实际送达，请先在群里核对再决定是否到漫画廊重发"
         else:
             await asyncio.to_thread(self._comic_book.update, request_id, error="发送回执失败（本地存盘已关闭）")
             job["error"] = "漫画已生成但发送回执为失败；本地存盘已关闭，无法从存档重发"
-        return "failed"
+
+        async def _upload_album(delay_s: float) -> None:
+            if delay_s > 0:
+                await asyncio.sleep(delay_s)
+            try:
+                await self._upload_report_to_album(
+                    stream_id, group_id, base64.b64encode(send_blob).decode("ascii"),
+                    stem=self._album_file_stem(stream_id, "漫画", day),
+                    album_name_override=self._comic_album_name_for(group_id), enabled=ccfg.album_upload_enabled)
+            except Exception as exc:
+                self.ctx.logger.warning("[comic] 群相册上传异常: %s", exc)
+
+        # 群相册上传（对齐原版漫画独立开关；失败静默，不影响已发出的漫画）。
+        # 回执失败≠没送达：协议端动作超时 15s 就判失败，但大图 highway 上传还在跑
+        # （2026-11-18 群 953644916 实测 12MB 传了 150s、图最终正常入群）。此时立刻传相册
+        # 会和它抢带宽、双双超时 —— 所以回执失败时等图传完再传；成功时仍即时上传。
+        if comic_meta is not None:
+            if sent:
+                await _upload_album(0)
+            elif ccfg.album_upload_enabled:
+                self._spawn(_upload_album(self._ALBUM_AFTER_SEND_FAIL_DELAY_S))
+        return "ok" if sent else "failed"
 
     async def _comic_cancel_cleanup(self, client: DrawpicClient, state: dict) -> None:
         """取消时尽力通知远端并落账本；已成图的条目不改状态（存档仍可重发）。"""
@@ -4151,10 +4175,28 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             self.ctx.logger.warning("[comic] 漫画发送失败: %s", type(exc).__name__)
             return False
 
+    def _comic_send_blob(self, blob: bytes) -> bytes:
+        """发送前压缩：超过阈值的图转 JPEG q90（4:4:4、不缩放），体积约降到 1/5，文字边缘仍清晰。
+        存档仍保留原图；PIL 不可用、解码失败或压完不更小时一律返回原图。"""
+        if len(blob) <= self._COMIC_JPEG_THRESHOLD_B:
+            return blob
+        try:
+            from PIL import Image
+            with Image.open(io.BytesIO(blob)) as im:
+                if im.mode not in ("RGB", "L"):
+                    im = im.convert("RGB")
+                buf = io.BytesIO()
+                im.save(buf, "JPEG", quality=90, subsampling=0, optimize=True)
+            out = buf.getvalue()
+        except Exception:
+            return blob
+        return out if 0 < len(out) < len(blob) else blob
+
     async def _send_archived_comic(self, job, stream_id: str, group_id: str, day: str,
                                    revision: str, request_id: str) -> str:
         job["stage"] = "重发漫画存档（不重新绘图）"
         blob = await asyncio.to_thread(self._report_store.read_comic_bytes, group_id, day, revision)
+        blob = await asyncio.to_thread(self._comic_send_blob, blob)
         if await self._send_comic_image(stream_id, blob):
             await asyncio.to_thread(self._report_store.mark_comic_sent, group_id, day, revision)
             if request_id:

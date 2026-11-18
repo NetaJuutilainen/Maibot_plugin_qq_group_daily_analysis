@@ -3,6 +3,7 @@ import base64
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -873,6 +874,53 @@ class ComicWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await self.p.webui_comic_resend('123', DAY, detail['revision']))['accepted'])
         await self.wait_for_operation()
         self.assertTrue(self.p._report_store.comic_detail('123', DAY)['sent'])
+
+    async def test_failed_send_still_uploads_album(self):
+        """回执失败（大图上传慢，协议端 15s 就判失败）时，仍应在图传完后补传相册。"""
+        self.save_daily()
+        ccfg = self.p._comic_cfg()
+        ccfg.album_upload_enabled = True
+        self.p.ctx.send.image.return_value = False
+        self.p._upload_report_to_album = AsyncMock()
+        with patch.object(type(self.p), '_ALBUM_AFTER_SEND_FAIL_DELAY_S', 0):
+            self.assertTrue((await self.p.webui_draw('123'))['accepted'])
+            await self.wait_for_operation()
+            self.assertEqual(self.operation()['status'], 'failed')
+            await self.drain()
+        call = self.p._upload_report_to_album.await_args
+        self.assertEqual(call.args[:2], ('stream', '123'))
+        self.assertEqual(call.kwargs['stem'], f'测试群-漫画-{DAY}')
+        self.assertIs(call.kwargs['enabled'], True)
+
+    async def test_failed_send_album_off_skips_upload(self):
+        self.save_daily()
+        self.p._comic_cfg().album_upload_enabled = False
+        self.p.ctx.send.image.return_value = False
+        self.p._upload_report_to_album = AsyncMock()
+        self.assertTrue((await self.p.webui_draw('123'))['accepted'])
+        await self.wait_for_operation()
+        await self.drain()
+        self.p._upload_report_to_album.assert_not_awaited()
+
+    async def test_comic_send_blob_compresses_large_image(self):
+        im = Image.frombytes('RGB', (160, 160), os.urandom(160 * 160 * 3))
+        buf = io.BytesIO()
+        im.save(buf, 'PNG')
+        png = buf.getvalue()
+        with patch.object(type(self.p), '_COMIC_JPEG_THRESHOLD_B', 1000):
+            out = self.p._comic_send_blob(png)
+        self.assertEqual(out[:2], b'\xff\xd8')
+        self.assertLess(len(out), len(png))
+        small = png_bytes('white')
+        self.assertIs(self.p._comic_send_blob(small), small)
+
+    async def test_comic_pipeline_sends_compressed_blob(self):
+        self.save_daily()
+        marker = b'\xff\xd8compressed'
+        with patch.object(self.p, '_comic_send_blob', return_value=marker):
+            self.assertTrue((await self.p.webui_draw('123'))['accepted'])
+            await self.wait_for_operation()
+        self.p.ctx.send.image.assert_awaited_once_with(base64.b64encode(marker).decode('ascii'), 'stream')
 
 
 if __name__ == '__main__':

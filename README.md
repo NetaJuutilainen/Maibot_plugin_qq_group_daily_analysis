@@ -12,9 +12,9 @@
   <p>
     <img src="https://img.shields.io/badge/Version-1.6.7-3d7bfb?style=flat-square&labelColor=1e293b" alt="Version 1.6.7">
     <img src="https://img.shields.io/badge/MaiBot-%3E%3D1.3.19-2f6bf0?style=flat-square&labelColor=1e293b" alt="MaiBot >= 1.3.19">
-    <img src="https://img.shields.io/github/license/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis?label=License&color=22c55e&style=flat-square&labelColor=1e293b" alt="License">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square&labelColor=1e293b" alt="License: MIT"></a>
     <img src="https://img.shields.io/github/stars/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis?label=Stars&color=eab308&style=flat-square&labelColor=1e293b" alt="Stars">
-    <a href="#交流与反馈"><img src="https://img.shields.io/badge/QQ交流测试群-5556461602-ff7043?style=flat-square&labelColor=1e293b&logo=tencentqq&logoColor=white" alt="QQ交流测试群 5556461602"></a>
+    <a href="#交流与反馈"><img src="https://img.shields.io/badge/QQ交流测试群-556461602-ff7043?style=flat-square&labelColor=1e293b&logo=tencentqq&logoColor=white" alt="QQ交流测试群 556461602"></a>
   </p>
 
   <p>
@@ -310,7 +310,8 @@ flowchart TD
     <td align="center" width="50%">
       <br/>
       <b>🐧 QQ 交流与插件测试群</b><br/><br/>
-      群号：<code>5556461602</code><br/><br/>
+      <img src="https://cdn.jsdmirror.com/gh/NetaJuutilainen/Maibot_plugin_qq_group_daily_analysis@main/assets/readme/qq-group-qr.webp" width="210" alt="QQ 交流与插件测试群 556461602"><br/><br/>
+      群号：<code>556461602</code><br/>
       <sub>插件使用交流 · 配置答疑 · 新版合成测试体验</sub>
       <br/><br/>
     </td>
@@ -323,8 +324,6 @@ flowchart TD
     </td>
   </tr>
 </table>
-
-<!-- 如后续上传群二维码图片（如 assets/readme/qq-group-qr.webp），可在此表格中嵌入对应的 jsDelivr 绝对路径图片 -->
 
 </div>
 

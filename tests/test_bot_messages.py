@@ -77,6 +77,23 @@ class BotMessagesTest(unittest.IsolatedAsyncioTestCase):
             await p._rebuild_day_from_db('group-session', DAY)
             self.assertNotIn('bot-1', p._stats['chats']['group-session']['days'][DAY]['users'])
 
+    async def test_rebuild_drops_notify_messages(self):
+        """戳一戳/撤回/禁言/贴表情等通知：不进总数、不进用户、不进采样与金句。"""
+        poke = message('u1', '小明 发起了戳一戳 -> 小红', '小明')
+        poke['is_notify'] = True
+        recall = message('u2', '小红 撤回了一条消息，这段文字足够长，以前可能被当成金句候选。', '小红')
+        recall['message_info']['is_notify'] = True
+        human = message('human-1', '一段正常的群聊消息，应该保留在日报统计里。', '群友')
+        p = self.plugin()
+        p.ctx.call_capability.return_value = [human, poke, recall]
+        await p._rebuild_day_from_db('group-session', DAY)
+        data = p._stats['chats']['group-session']['days'][DAY]
+        self.assertEqual(data['total'], 1)
+        self.assertEqual(sum(data['hours']), 1)
+        self.assertEqual(set(data['users']), {'human-1'})
+        self.assertEqual({s['u'] for s in data['sample']}, {'human-1'})
+        self.assertFalse(any('戳一戳' in q['t'] or '撤回' in q['t'] for q in data['quotes']))
+
     async def test_list_envelope_and_failed_fetch_preserve_data(self):
         p = self.plugin(True)
         p.ctx.call_capability.return_value = [message('bot-1', 'Bot reply.', 'Test bot')]

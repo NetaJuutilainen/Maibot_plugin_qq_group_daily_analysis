@@ -410,6 +410,27 @@ QUOTE_CANDIDATES_PER_DAY = 3
 # 1) raw_message 存在 type=forward 段（napcat-adapter 把合并/单条转发统一转成该段）
 # 2) processed_plain_text 以全角「【合并转发消息」开头（节点行 -【发送者】: 内容，结尾 】）
 # 3) 详情拉取失败时降级为文本段 "[forward]"
+def _is_notify_message(message: Any) -> bool:
+    """通知类消息（戳一戳/撤回/禁言/贴表情等）：实时 Hook 与 DB 拉取两路径统一丢弃。
+
+    实时载荷把标记放在顶层；DB 行/能力返回可能放在 message_info 内，或只留下
+    napcat 通知原始载荷，所以这里把几种形态都认一遍。
+    """
+    if not isinstance(message, dict):
+        return False
+    if message.get("is_notify"):
+        return True
+    info = message.get("message_info")
+    if isinstance(info, dict):
+        if info.get("is_notify"):
+            return True
+        ac = info.get("additional_config")
+        if isinstance(ac, dict) and ac.get("napcat_notice_payload"):
+            return True
+    ac = message.get("additional_config")
+    return bool(isinstance(ac, dict) and ac.get("napcat_notice_payload"))
+
+
 def _is_forward_message(segments: Any, text: str) -> bool:
     """判断消息是否为转发消息（合并转发/单条转发），实时 Hook 与 DB 拉取两路径通用。"""
     if isinstance(segments, list):
@@ -427,6 +448,10 @@ def _is_forward_message(segments: Any, text: str) -> bool:
     return p.startswith("【合并转发消息") or p.strip() == "[forward]"
 STATS_RETENTION_DAYS = 14
 MIN_MESSAGES_FOR_REPORT = 10
+# 统计落盘梯级：常规 5 分钟一次；消息攒到 2000 条则提前落盘（限制崩溃丢失量）。
+# stats.json 单次是全量重写，写放大与体积成正比，降频比优化单次写入更有效。
+STATS_FLUSH_INTERVAL = 300
+STATS_FLUSH_MAX_PENDING = 2000
 
 # ---------------------------------------------------------------------------
 # 群友身份与头像取值（兼容 QQ 官方 OpenID 场景）
@@ -781,6 +806,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         self._live_persona_ts = 0.0
         self._stats = self._load_stats()
         self._stats_loaded = True
+        self._pending_messages = 0
+        self._last_flush_at = time.monotonic()
         try:
             await asyncio.to_thread(self._report_store.cleanup, self._eff_retention_days())
         except (OSError, ValueError) as exc:
@@ -881,7 +908,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     )
     async def collect(self, **kwargs: Any) -> None:
         message = kwargs.get("message", {})
-        if not isinstance(message, dict) or message.get("is_notify"):
+        if not isinstance(message, dict) or _is_notify_message(message):
             return
 
         message_info = message.get("message_info", {})
@@ -984,6 +1011,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 del quotes_pool[QUOTE_CANDIDATES_PER_DAY:]
 
         self._dirty = True
+        self._pending_messages = getattr(self, "_pending_messages", 0) + 1
         if cast(DailyAnalysisConfig, self.config).report.debug_mode:
             self.ctx.logger.debug("[weekly] 已统计 %s:%s 的消息", group_name or group_id, nickname)
 
@@ -1056,14 +1084,19 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             tmp.write_text(json.dumps(self._stats, ensure_ascii=False), encoding="utf-8")
             os.replace(tmp, path)
             self._dirty = False
+            self._pending_messages = 0
+            self._last_flush_at = time.monotonic()
         except Exception as exc:
             self.ctx.logger.warning("[weekly] 统计文件写入失败: %s", exc)
 
     async def _flush_loop(self) -> None:
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(30)
             try:
-                if self._dirty:
+                if not self._dirty:
+                    continue
+                due = time.monotonic() - getattr(self, "_last_flush_at", 0.0) >= STATS_FLUSH_INTERVAL
+                if due or getattr(self, "_pending_messages", 0) >= STATS_FLUSH_MAX_PENDING:
                     self._save_stats()
             except asyncio.CancelledError:
                 raise
@@ -1828,6 +1861,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
+            if _is_notify_message(msg):
+                continue  # 戳一戳/撤回/禁言/贴表情等通知不进日报统计（与实时路径一致）
             info = msg.get("message_info", {})
             user_info = info.get("user_info", {})
             user_id = str(user_info.get("user_id") or "")
@@ -3909,9 +3944,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         return resolved
 
     async def _comic_storyboard(self, analysis: dict, group_name: str, day: str, style: str, extra: str = "",
-                                panel_count: int = 0) -> dict:
+                                panel_count: int = 0, has_refs: bool = False) -> dict:
         ccfg = self._comic_cfg()
-        prompt = storyboard_prompt(analysis, group_name, day, style, panel_count)
+        prompt = storyboard_prompt(analysis, group_name, day, style, panel_count, has_refs=has_refs)
         if extra:
             prompt += "\n\n角色与场景设定（只影响画风与角色，不改变素材事实）：\n" + extra
         try:
@@ -3948,8 +3983,6 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     # 跟随麦麦实时人设：每次生成都拉取，宿主不可用回落方案自带人设词
                     persona_part = await self._live_persona_text() or persona_part
                 extra = "\n".join(part for part in (persona_part, character.get("scene_prompt")) if part)
-            storyboard = await self._comic_storyboard(analysis, group_name, day, style, extra,
-                                                      panel_count=self._eff_storyboard_panels(style))
             ref_ids: list[str] = []
             source_images: list[str] = []
             if character and character.get("ref_ids"):
@@ -3958,6 +3991,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             elif ccfg.use_reference_images:
                 job["stage"] = "读取参考图"
                 ref_ids, source_images = await asyncio.to_thread(self._load_ref_images)
+            job["stage"] = "生成分镜脚本"
+            # 参考图先于分镜确定：分镜阶段要知道本次请求是否真的带图（有图时禁止瞎猜外貌）
+            storyboard = await self._comic_storyboard(analysis, group_name, day, style, extra,
+                                                      panel_count=self._eff_storyboard_panels(style),
+                                                      has_refs=bool(source_images))
             prompt = build_draw_prompt(storyboard, style, group_name, day, with_refs=bool(source_images),
                                        panel_count=self._eff_storyboard_panels(style))
             task_type = "edit_image" if source_images else "draw"

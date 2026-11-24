@@ -334,6 +334,23 @@ class StoryboardTest(unittest.TestCase):
             self.assertIn(fragment, prompt)
         self.assertIn('单幅海报', comic.storyboard_prompt(ANALYSIS, '测试群', '2026-11-11', 'poster'))
 
+    def test_storyboard_prompt_ref_priority_only_with_refs(self):
+        """#302：只有本次真的带参考图时，分镜才禁止瞎猜外貌；无图时保持原样。"""
+        no_refs = comic.storyboard_prompt(ANALYSIS, '测试群', '2026-11-11', 'four_panel')
+        self.assertNotIn('参考图为最终依据', no_refs)
+        with_refs = comic.storyboard_prompt(ANALYSIS, '测试群', '2026-11-11', 'four_panel', has_refs=True)
+        for fragment in ('参考图为最终依据', '不得从语气或模板示例推测外貌', '不要提及'):
+            self.assertIn(fragment, with_refs)
+        self.assertIn('纯 JSON', with_refs)
+
+    def test_build_draw_prompt_ref_conflict_rule(self):
+        """#302：带图请求明确「文字与参考图冲突以图为准」，无图请求不带该指令。"""
+        board = comic.fallback_storyboard(ANALYSIS, '测试群', 4)
+        with_refs = comic.build_draw_prompt(board, 'four_panel', '测试群', '2026-11-11', with_refs=True)
+        self.assertIn('一律以参考图为准', with_refs)
+        no_refs = comic.build_draw_prompt(board, 'four_panel', '测试群', '2026-11-11')
+        self.assertNotIn('一律以参考图为准', no_refs)
+
     def test_build_draw_prompt_styles_refs_and_cap(self):
         board = comic.fallback_storyboard(ANALYSIS, '测试群', 4)
         four = comic.build_draw_prompt(board, 'four_panel', '测试群', '2026-11-11')

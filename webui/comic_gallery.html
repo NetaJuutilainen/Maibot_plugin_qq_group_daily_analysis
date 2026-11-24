@@ -116,11 +116,13 @@
       <div class="section-heading"><h2 id="draw-title">画漫画</h2><span id="feature-state" class="badge">等待状态</span></div>
       <div class="fields">
         <label>发送到群<select id="draw-group" disabled><option value="">请选择群聊</option></select></label>
-        <label>日报日期<input id="draw-day" type="date" disabled></label>
+        <label>统计天数<input id="draw-days" type="number" min="1" max="90" value="1" disabled></label>
+        <label id="draw-day-wrap">日报日期<input id="draw-day" type="date" disabled></label>
         <label>漫画风格<select id="draw-style" disabled><option value="four_panel">四格漫画</option><option value="poster">单幅海报</option></select></label>
         <button id="draw" class="primary" type="button" data-mutation data-action="draw" disabled>开始画漫画</button>
       </div>
-      <p class="hint">需要该日已有日报存档（先在报告库或 /日报 生成）；日期留空为今天。绘图消耗麦麦绘图的额度，成图自动发往所选群；同群同时只跑一个任务。</p>
+      <p id="comic-window-preview" class="hint" hidden></p>
+      <p class="hint">1天模式需要该日已有日报存档（日期留空为今天）；天数 &gt; 1 时将自动提取全窗口最热话题，格数跟随漫画参数中的分镜数。绘图消耗麦麦绘图的额度，成图自动发往所选群；同群同时只跑一个任务。</p>
       <p class="hint"><span id="rotation-info">轮换：关闭</span> <button id="rotation-reset" type="button" disabled>重置轮换进度</button></p>
       <div class="fields">
         <label>风格轮换<select id="rotation-mode" disabled><option value="off">关闭</option><option value="sequential">顺序</option><option value="random">随机</option><option value="shuffle">洗牌</option></select></label>
@@ -297,7 +299,7 @@
       const object = value => value && typeof value === 'object' && !Array.isArray(value);
       const validGroup = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
       const validRevision = value => typeof value === 'string' && value.length > 0 && value.length <= 128;
-      const validDay = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+      const validDay = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}(?:~(?:weekly|(?:[2-9]|[1-8]\d|90)d))?$/.test(value);
       const currentModal = token => !state.disposed && token === state.modalToken && !$('overlay').hidden;
       const comicArgs = row => ({ group_id: row.group_id, day: row.day, revision: row.revision });
       const styleLabel = key => {
@@ -334,7 +336,10 @@
 
       function syncControls() {
         const locked = !state.ready || state.actionBusy;
-        for (const id of ['draw-group', 'draw-day', 'draw-style', 'filter-group', 'filter-search', 'filter-sort', 'date-from', 'date-to', 'apply-filter', 'refresh', 'library-link', 'stats-link']) $(id).disabled = locked;
+        for (const id of ['draw-group', 'draw-days', 'draw-day', 'draw-style', 'filter-group', 'filter-search', 'filter-sort', 'date-from', 'date-to', 'apply-filter', 'refresh', 'library-link', 'stats-link']) $(id).disabled = locked;
+        const drawDays = Math.max(1, Math.min(90, Number($('draw-days').value) || 1));
+        $('draw-day-wrap').hidden = drawDays > 1;
+        $('comic-window-preview').hidden = drawDays <= 1;
         for (const button of document.querySelectorAll('[data-mutation]')) {
           const busy = button.dataset.action !== 'cancel' && state.busyGroups.has(button.dataset.group);
           button.disabled = locked || button.dataset.invalid === 'true' || busy;
@@ -346,6 +351,28 @@
         $('next').disabled = locked || state.page >= state.pages;
         $('page-label').textContent = `第 ${state.page} / ${state.pages} 页`;
         syncPolicyControls();
+      }
+
+      async function loadComicWindowPreview() {
+        const gid = $('draw-group').value;
+        const days = Math.max(1, Math.min(90, Number($('draw-days').value) || 1));
+        if (!state.ready || state.disposed || days <= 1 || !validGroup(gid)) {
+          if (days > 1) $('comic-window-preview').textContent = '选择群聊后将预览当前分镜格数与候选热门话题。';
+          return;
+        }
+        $('comic-window-preview').textContent = '正在预览窗口热门话题与格数…';
+        try {
+          const r = await call('query', 'comic_window_preview', { group_id: gid, days, style: $('draw-style').value });
+          if (state.disposed) return;
+          if (!object(r) || r.ok !== true) {
+            $('comic-window-preview').textContent = `预览不可用：${text(object(r) && r.message)}`;
+            return;
+          }
+          const topics = Array.isArray(r.topics) && r.topics.length ? r.topics.join('、') : '尚无已存档热门话题（生成时会自动按多天策略提炼并补足格数）';
+          $('comic-window-preview').textContent = `当前分镜格数：${r.panel_count} 格 · 候选话题：${topics}。${text(r.note)}`;
+        } catch (error) {
+          if (!(error instanceof StaleRequest) && !state.disposed) $('comic-window-preview').textContent = `预览失败：${text(error.message)}`;
+        }
       }
 
       function styleLabelOf(key) {
@@ -932,8 +959,11 @@
             preview.addEventListener('click', () => { void openDetail(row, true); });
             thumbnails.push({ row, preview });
             const body = element('div', undefined, 'report-body');
-            body.append(element('h3', text(row.group_name || row.group_id, 160)));
-            body.append(element('p', `${row.day} · ${text(styleLabel(row.style), 40)}\n消息 ${text(row.message_count)} · ${row.sent === true ? '已发送' : '未发送'}\n生成于 ${text(row.created_at)}`, 'report-meta'));
+            const winDays = Number(row.window_days) || 1;
+            const winTag = winDays > 1 ? ` · ${winDays}天窗口` : '';
+            const panelTag = Number(row.panel_count) > 0 ? ` · ${row.panel_count}格` : '';
+            body.append(element('h3', `${text(row.group_name || row.group_id, 140)}${winTag}`));
+            body.append(element('p', `${row.day} · ${text(styleLabel(row.style), 40)}${panelTag}\n消息 ${text(row.message_count)} · ${row.sent === true ? '已发送' : '未发送'}\n生成于 ${text(row.created_at)}`, 'report-meta'));
             const actions = comicActions(row);
             const detail = element('button', '详情');
             detail.type = 'button';
@@ -1078,7 +1108,10 @@
           if (!object(detail) || detail.revision !== row.revision || detail.group_id !== row.group_id || detail.day !== row.day) throw new Error('存档已变化，请关闭后刷新列表，避免混用新旧漫画');
           state.modalRow = detail;
           addStat('群聊', `${text(detail.group_name)} (${detail.group_id})`);
-          addStat('日期', detail.day);
+          addStat('日期/槽位', detail.day);
+          if (Number(detail.window_days) > 1) addStat('统计窗口', `近 ${detail.window_days} 天`);
+          if (Number(detail.panel_count) > 0) addStat('分镜格数', `${detail.panel_count} 格`);
+          if (Array.isArray(detail.selected_topics) && detail.selected_topics.length) addStat('选中话题', detail.selected_topics.join('、'));
           addStat('风格', styleLabel(detail.style));
           addStat('消息数', detail.message_count);
           addStat('发送状态', detail.sent === true ? '已发送到群' : '未发送（可重发）');
@@ -1234,9 +1267,13 @@
         state.autoComic = { listed: [...ids] };
         await performAction('config_save', { section: 'comic', key: 'groups', value: serializeIdList([...ids]) }, `添加群 ${gid} 并开启漫画联动`);
       });
-      $('draw-group').addEventListener('change', syncControls);
+      $('draw-group').addEventListener('change', () => { syncControls(); void loadComicWindowPreview(); });
+      $('draw-days').addEventListener('change', () => { syncControls(); void loadComicWindowPreview(); });
+      $('draw-style').addEventListener('change', () => { void loadComicWindowPreview(); });
       $('draw').addEventListener('click', () => {
-        void performAction('draw', { group_id: $('draw-group').value, day: $('draw-day').value, style: $('draw-style').value }, '画漫画');
+        const days = Math.max(1, Math.min(90, Number($('draw-days').value) || 1));
+        const dayVal = days > 1 ? '' : $('draw-day').value;
+        void performAction('draw', { group_id: $('draw-group').value, day: dayVal, style: $('draw-style').value, days }, days > 1 ? `画 ${days} 天漫画` : '画漫画');
       });
       $('upload-ref').addEventListener('click', () => {
         if (!state.ready || state.actionBusy || state.uploadBusy || !state.enabled || state.refCount >= 4) return;

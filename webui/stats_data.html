@@ -128,6 +128,7 @@
         <div class="stat"><dt>今日消息数</dt><dd id="stat-messages">—</dd></div>
         <div class="stat"><dt>区间消息数</dt><dd id="stat-range-messages">—</dd></div>
         <div class="stat"><dt>区间报告数</dt><dd id="stat-reports">—</dd></div>
+        <div class="stat"><dt>多天 / 周报数</dt><dd id="stat-multiday-kind">—</dd></div>
         <div class="stat"><dt>日均消息</dt><dd id="stat-avg">—</dd></div>
       </dl>
       <div id="chart" class="chart" role="img" aria-label="消息量柱状图，等待数据"></div>
@@ -160,6 +161,8 @@
         <div><h3>模型占比</h3><div id="model-share" class="pie-wrap"></div></div>
         <div><h3>任务 / 模块占比</h3><div id="module-share" class="pie-wrap"></div></div>
         <div><h3>花费占比</h3><div id="cost-share" class="pie-wrap"></div></div>
+        <div><h3>报告类型 Token 占比</h3><div id="scope-share" class="pie-wrap"></div></div>
+        <div><h3>报告类型花费占比</h3><div id="scope-cost-share" class="pie-wrap"></div></div>
       </div>
       <p class="hint">趋势 / Token 占比 / 区间卡片来自本插件的 LLM 调用账本（llm_usage.json，保留近 30 天），不含宿主其他模块的消耗；花费与花费占比来自宿主对本插件调用的逐次计费记录，按宿主模型配置的单价（含分时 / 缓存价）估算，非实际账单金额；成功率 / 活跃群来自本插件账本与统计。</p>
     </section>
@@ -246,6 +249,8 @@
           if (state.disposed) return;
           $('stat-range-messages').textContent = text(r.total_messages);
           $('stat-reports').textContent = text(r.total_reports);
+          const bk = r.by_kind && typeof r.by_kind === 'object' ? r.by_kind : {};
+          $('stat-multiday-kind').textContent = `多天 ${Number(bk.multiday) || 0} / 周报 ${Number(bk.weekly) || 0}`;
           $('stat-avg').textContent = text(Math.round((Number(r.total_messages) || 0) / Math.max(1, (r.days || []).length)));
           const days = Array.isArray(r.days) ? r.days : [];
           const max = Math.max(1, ...days.map(d => Number(d.messages) || 0));
@@ -453,6 +458,7 @@
             $('token-state').textContent = 'Token 统计不可用';
             $('tok-total').textContent = '—'; $('tok-io').textContent = '—'; $('tok-calls').textContent = '—'; $('tok-cost').textContent = '—';
             renderPie($('model-share'), []); renderPie($('module-share'), []); renderPie($('cost-share'), []);
+            renderPie($('scope-share'), []); renderPie($('scope-cost-share'), []);
             renderTrend();
             return;
           }
@@ -465,10 +471,13 @@
           $('tok-cost').textContent = r.cost_available ? fmtMoney(r.cost_total) : '—';
           renderPie($('model-share'), r.model_pie);
           renderPie($('module-share'), r.module_pie);
+          renderPie($('scope-share'), r.scope_pie);
           if (r.cost_available && !(Number(r.cost_total) > 0)) {
             $('cost-share').replaceChildren(element('p', '区间内调用均免费（模型单价为 0 或未配置）', 'muted'));
+            $('scope-cost-share').replaceChildren(element('p', '区间内调用均免费', 'muted'));
           } else {
             renderPie($('cost-share'), r.cost_pie, fmtMoney);
+            renderPie($('scope-cost-share'), r.cost_by_scope, fmtMoney);
           }
           renderTrend();
         } catch (e) { $('token-state').textContent = 'Token 统计刷新失败'; }

@@ -22,7 +22,7 @@
             "date_to": {"type": "string", "max_length": 10},
             "page": {"type": "integer", "minimum": 1, "maximum": 1000000},
             "search": {"type": "string", "max_length": 100},
-            "report_type": {"type": "string", "choices": ["", "image", "html"], "max_length": 5},
+            "report_type": {"type": "string", "choices": ["", "image", "html", "daily", "multiday", "weekly"], "max_length": 16},
             "sort_order": {"type": "string", "choices": ["desc", "asc"], "max_length": 4}
           }
         },
@@ -31,7 +31,7 @@
           "version": "1",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
-            "day": {"type": "string", "required": true, "max_length": 10}
+            "day": {"type": "string", "required": true, "max_length": 24}
           }
         },
         "thumb": {
@@ -39,7 +39,7 @@
           "version": "1",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
-            "day": {"type": "string", "required": true, "max_length": 10},
+            "day": {"type": "string", "required": true, "max_length": 24},
             "revision": {"type": "string", "required": true, "max_length": 128}
           }
         },
@@ -48,24 +48,36 @@
           "version": "1",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
-            "day": {"type": "string", "required": true, "max_length": 10},
+            "day": {"type": "string", "required": true, "max_length": 24},
             "kind": {"type": "string", "required": true, "choices": ["image"], "max_length": 5},
             "offset": {"type": "integer", "required": true, "minimum": 0, "maximum": 33554432},
             "revision": {"type": "string", "required": true, "max_length": 128}
           }
         },
         "overview": {"api": "overview", "version": "1"},
-        "persona_capture": {"api": "persona_capture", "version": "1"}
+        "persona_capture": {"api": "persona_capture", "version": "1"},
+        "multiday_preview": {
+          "api": "multiday_preview",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "days": {"type": "integer", "minimum": 1, "maximum": 90},
+            "strategy": {"type": "string", "max_length": 32}
+          }
+        }
       },
       "actions": {
         "trigger": {
           "api": "trigger",
           "version": "1",
-          "confirmation": "生成会消耗模型额度并发往所选群。当日使用滚动24小时；历史日仅用已有统计。确认生成或重新生成？",
+          "confirmation": "生成会消耗模型额度并发往所选群。1天模式当日使用滚动24小时、历史日用已有统计；多天/周报将汇总最近N天。确认生成？",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
             "day": {"type": "string", "max_length": 10},
-            "theme": {"type": "string", "max_length": 64}
+            "theme": {"type": "string", "max_length": 64},
+            "days": {"type": "integer", "minimum": 1, "maximum": 90},
+            "strategy": {"type": "string", "max_length": 32},
+            "report_kind": {"type": "string", "choices": ["", "daily", "multiday", "weekly"], "max_length": 16}
           }
         },
         "rerun": {
@@ -74,7 +86,7 @@
           "confirmation": "将这份报告成品重新发送到原群，不重新分析或绘图。确认重发？",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
-            "day": {"type": "string", "required": true, "max_length": 10},
+            "day": {"type": "string", "required": true, "max_length": 24},
             "revision": {"type": "string", "required": true, "max_length": 128}
           }
         },
@@ -84,7 +96,7 @@
           "confirmation": "将用已存分析结果以所选主题重新渲染并替换这份存档，不消耗模型额度、不发送群消息。确认重绘？",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
-            "day": {"type": "string", "required": true, "max_length": 10},
+            "day": {"type": "string", "required": true, "max_length": 24},
             "theme": {"type": "string", "required": true, "max_length": 64},
             "revision": {"type": "string", "required": true, "max_length": 128}
           }
@@ -95,7 +107,7 @@
           "confirmation": "仅删除当前所选的一份报告存档，不删除任何群消息；若当日有漫画存档会一并删除。此操作不可撤销，确认删除？",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
-            "day": {"type": "string", "required": true, "max_length": 10},
+            "day": {"type": "string", "required": true, "max_length": 24},
             "revision": {"type": "string", "required": true, "max_length": 128}
           }
         },
@@ -161,7 +173,7 @@
           "version": "1",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
-            "day": {"type": "string", "required": true, "max_length": 10}
+            "day": {"type": "string", "required": true, "max_length": 24}
           }
         },
         "comic_thumb": {
@@ -169,7 +181,7 @@
           "version": "1",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
-            "day": {"type": "string", "required": true, "max_length": 10},
+            "day": {"type": "string", "required": true, "max_length": 24},
             "revision": {"type": "string", "required": true, "max_length": 128}
           }
         },
@@ -178,7 +190,7 @@
           "version": "1",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
-            "day": {"type": "string", "required": true, "max_length": 10},
+            "day": {"type": "string", "required": true, "max_length": 24},
             "offset": {"type": "integer", "required": true, "minimum": 0, "maximum": 33554432},
             "revision": {"type": "string", "required": true, "max_length": 128}
           }
@@ -196,17 +208,27 @@
           "parameters": {
             "ref_id": {"type": "string", "required": true, "max_length": 32}
           }
+        },
+        "comic_window_preview": {
+          "api": "comic_window_preview",
+          "version": "1",
+          "parameters": {
+            "group_id": {"type": "string", "required": true, "max_length": 128},
+            "days": {"type": "integer", "minimum": 1, "maximum": 90},
+            "style": {"type": "string", "max_length": 32}
+          }
         }
       },
       "actions": {
         "draw": {
           "api": "draw",
           "version": "1",
-          "confirmation": "绘图会消耗麦麦绘图的额度，并把成图发往所选群（需该日已有日报存档）。确认开始画漫画？",
+          "confirmation": "绘图会消耗麦麦绘图的额度，并把成图发往所选群（1天需已有日报存档；多天将提取全窗口最热话题）。确认开始画漫画？",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
             "day": {"type": "string", "max_length": 10},
-            "style": {"type": "string", "max_length": 16}
+            "style": {"type": "string", "max_length": 32},
+            "days": {"type": "integer", "minimum": 1, "maximum": 90}
           }
         },
         "comic_resume": {
@@ -215,7 +237,7 @@
           "confirmation": "恢复只查证原任务进度并读取成图，不会重新提交绘图；若已存档则只重发。确认恢复进度？",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
-            "day": {"type": "string", "required": true, "max_length": 10}
+            "day": {"type": "string", "required": true, "max_length": 24}
           }
         },
         "comic_resend": {
@@ -224,7 +246,7 @@
           "confirmation": "将这份漫画存档重新发送到原群，不重新绘图。确认重发？",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
-            "day": {"type": "string", "required": true, "max_length": 10},
+            "day": {"type": "string", "required": true, "max_length": 24},
             "revision": {"type": "string", "required": true, "max_length": 128}
           }
         },
@@ -234,7 +256,7 @@
           "confirmation": "仅删除这一份漫画存档，当日日报存档保留。此操作不可撤销，确认删除？",
           "parameters": {
             "group_id": {"type": "string", "required": true, "max_length": 128},
-            "day": {"type": "string", "required": true, "max_length": 10},
+            "day": {"type": "string", "required": true, "max_length": 24},
             "revision": {"type": "string", "required": true, "max_length": 128}
           }
         },

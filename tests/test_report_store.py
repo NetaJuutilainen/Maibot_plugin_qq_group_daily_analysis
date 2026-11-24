@@ -428,6 +428,50 @@ class ComicStoreTest(unittest.TestCase):
         self.assertFalse((directory / 'comic_thumb.jpg').exists())
         self.assertFalse((directory / 'comic.json').exists())
 
+    def test_weekly_and_multiday_slots_are_isolated_from_daily(self):
+        daily = self.save_report()
+        weekly_slot = f'{DAY}~weekly'
+        multi_slot = f'{DAY}~7d'
+        weekly = self.store.save('123', weekly_slot, encoded_image(), '<html>weekly</html>', {
+            'group_name': '测试群', 'theme': 'atri', 'message_count': 200, 'participant_count': 8,
+            'report_kind': 'weekly', 'window_days': 7, 'strategy_used': 'archive_first',
+            'strategy_label': '存档优先', 'coverage_note': '覆盖 11-17 ~ 11-24（共 7 天）',
+        })
+        multiday = self.store.save('123', multi_slot, encoded_image(), '<html>7d</html>', {
+            'group_name': '测试群', 'theme': 'simple', 'message_count': 180, 'participant_count': 7,
+            'report_kind': 'multiday', 'window_days': 7, 'strategy_used': 'per_day_summary',
+            'strategy_label': '按天提炼', 'coverage_note': '覆盖 11-17 ~ 11-24（缺 11-19）',
+        })
+        self.assertTrue((self.store.root / '123' / '_weekly' / DAY / 'meta.json').is_file())
+        self.assertTrue((self.store.root / '123' / '_weekly' / multi_slot / 'meta.json').is_file())
+        self.assertEqual(self.store.detail('123', DAY)['revision'], daily['revision'])
+        self.assertEqual(self.store.detail('123', weekly_slot)['revision'], weekly['revision'])
+        self.assertEqual(self.store.detail('123', multi_slot)['revision'], multiday['revision'])
+        self.assertEqual(self.store.list_reports()['total'], 3)
+        self.assertEqual(self.store.list_reports(report_type='daily')['total'], 1)
+        self.assertEqual(self.store.list_reports(report_type='weekly')['total'], 1)
+        self.assertEqual(self.store.list_reports(report_type='multiday')['total'], 1)
+        self.assertEqual(self.store.list_reports(report_type='weekly')['items'][0]['report_kind'], 'weekly')
+
+        # 多天漫画独立槽位不覆盖当日 1 天漫画
+        daily_comic = self.save_comic()
+        multi_comic = self.store.save_comic('123', multi_slot, encoded_image(), {
+            'group_name': '测试群', 'style': 'four_panel', 'request_id': 'comic-abcdef123457',
+            'task_id': 'task-2', 'prompt': '多天漫画', 'storyboard': {'title': 'w', 'panels': []},
+            'message_count': 180, 'version': '1.6.7', 'window_days': 7, 'panel_count': 5,
+            'selected_topics': ['话题A'],
+        })
+        self.assertEqual(self.store.comic_detail('123', DAY)['revision'], daily_comic['revision'])
+        self.assertEqual(self.store.comic_detail('123', multi_slot)['window_days'], 7)
+        self.assertEqual(self.store.comic_detail('123', multi_slot)['revision'], multi_comic['revision'])
+        self.assertEqual(self.store.list_comics()['total'], 2)
+
+        with self.assertRaises(ValueError):
+            self.store.save('123', f'{DAY}~1d', encoded_image(), '<html>bad</html>', {'group_name': '测试群'})
+        self.assertTrue(self.store.delete('123', multi_slot, multiday['revision'])['deleted'])
+        self.assertTrue(self.store.delete('123', weekly_slot, weekly['revision'])['deleted'])
+        self.assertFalse((self.store.root / '123' / '_weekly').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

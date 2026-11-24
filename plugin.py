@@ -21,13 +21,37 @@ import math
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from maibot_sdk import API, Command, Field, HookHandler, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import HookMode
+from pydantic import field_validator
 
 from .comic import (
     COMIC_STYLES, RECOVERABLE_STATUSES, ComicRequestBook, DrawpicClient,
     DrawpicError, build_draw_prompt, detect_drawpic_variant, new_request_id, normalize_storyboard,
-    storyboard_prompt, _effective_panels,
+    select_window_topics, storyboard_prompt, _effective_panels,
 )
 from .job_manager import JobManager
+from .multiday import (
+    STRATEGY_ARCHIVE_FIRST,
+    STRATEGY_LABELS,
+    STRATEGY_PER_DAY_SUMMARY,
+    STRATEGY_STRATIFIED_SAMPLE,
+    allocate_multiday_samples,
+    build_day_digest_prompt,
+    build_multiday_merge_prompt,
+    build_rolling_slices,
+    build_window_topic_pool,
+    format_coverage_note,
+    format_samples_text,
+    format_users_summary_text,
+    normalize_hhmm,
+    normalize_multiday_analysis,
+    normalize_strategy,
+    normalize_weekday_name,
+    parse_day_messages,
+    parse_hhmm,
+    parse_weekday,
+    strategy_chain,
+    strategy_label,
+)
 from .report_store import ReportStore
 
 
@@ -74,6 +98,18 @@ def _coerce_config_value(annotation: Any, raw: str) -> tuple[bool, Any]:
             return False, "数字必须有限"
         return True, value
     choices = get_args(annotation) if get_origin(annotation) is Literal else ()
+    if choices:
+        if "存档优先" in choices:
+            try:
+                code = normalize_strategy(text, allow_follow=("跟随多天默认" in choices))
+                text = "跟随多天默认" if not code else strategy_label(code)
+            except ValueError:
+                pass
+        elif "周一" in choices:
+            try:
+                text = normalize_weekday_name(text)
+            except ValueError:
+                pass
     if choices and text not in choices:
         return False, f"取值只能是 {'/'.join(str(item) for item in choices)}，收到 {text!r}"
     return True, text
@@ -523,7 +559,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件")
-    config_version: str = Field(default="1.3.0", description="配置文件版本号（1.3.0：加入 analysis.include_bot_messages）")
+    config_version: str = Field(default="1.4.0", description="配置文件版本号（1.4.0：加入 multi_day、multi_day_advanced 与 llm_tools_enabled）")
 
 
 class ReportSectionConfig(PluginConfigBase):
@@ -721,13 +757,138 @@ class ComicSectionConfig(PluginConfigBase):
     llm_model_task: str = Field(default="", description="分镜脚本用模型任务（留空跟随分析设置的默认任务）")
 
 
+def _ui_field(label: str, hint: str = "", **kwargs):
+    extra = dict(kwargs.pop("json_schema_extra", None) or {})
+    extra.setdefault("label", label)
+    if hint:
+        extra.setdefault("hint", hint)
+    return Field(description=hint or label, json_schema_extra=extra, **kwargs)
+
+
+class MultiDaySectionConfig(PluginConfigBase):
+    """多天分析与定时周报设置（所有界面文案均已按清晰结果与成本提示规范化）。"""
+
+    __ui_label__ = "多天与周报"
+    __ui_icon__ = "date_range"
+    __ui_order__ = 2
+
+    multi_day_enabled: bool = _ui_field(
+        "开启多天分析功能",
+        "开启后可在 /日报 后面加天数（例如 /日报 7 生成最近 7 天汇总），也可在报告库页面选择多天生成。默认开启；关闭后仅停用多天汇总与周报，日常 1 天日报完全不受影响。",
+        default=True,
+    )
+    multi_day_max_days: int = _ui_field(
+        "单次最大统计天数",
+        "一次多天报告最多允许往前统计几天（范围 1~90 天，实际不会超过报告库保留天数）。默认 7 天；调大到 30 天以上会拉长查询范围，选用「按天提炼」时模型调用次数与费用也会成倍增加。",
+        default=7, ge=1, le=90,
+    )
+    multi_day_strategy: Literal["存档优先", "按天提炼", "分层抽样"] = _ui_field(
+        "默认多天生成策略",
+        "决定多天报告如何汇总内容。默认「存档优先」；当所选方式缺存档或出错时，会自动按「存档优先 → 按天提炼 → 分层抽样 → 退回 1 天日报」顺序切换并在报告末尾写明实际用法。"
+        "① 存档优先：最省钱，直接汇总过去几天的日报存档，缺存档的天改查聊天记录（通常仅调用 1 次模型）；"
+        "② 按天提炼：最完整，每天单独分析后再合并，模型调用次数约等于「天数 + 1」，费用最高、耗时最长；"
+        "③ 分层抽样：折中，每天按时段均匀抽一部分聊天记录合并后一次分析（调用 1 次模型），速度最快但细节较少。",
+        default="存档优先",
+    )
+    weekly_enabled: bool = _ui_field(
+        "开启定时周报",
+        "开启后每周在下方设定的星期与时间自动生成最近 7 天的群聊周报。默认关闭；开启后，周报所在的那一天该群不再自动发日常日报（由周报替代，手动 /日报 不受影响）；若周报生成失败，会自动补发当天日常日报。",
+        default=False,
+    )
+    weekly_day: Literal["周一", "周二", "周三", "周四", "周五", "周六", "周日"] = _ui_field(
+        "定时周报发送星期",
+        "每周在哪一天自动生成并发送周报。默认「周一」；修改保存后立即生效（无需重启），设在哪一天，当天该群的定时日报即由周报替代。",
+        default="周一",
+    )
+    weekly_time: str = _ui_field(
+        "定时周报发送时间",
+        "定时周报在当天几点几分触发（24 小时制 HH:MM，范围 00:00~23:59）。默认「08:00」；修改保存后立即生效（无需重启），若当天定时点已过且本周尚未生成会自动补发。",
+        default="08:00",
+    )
+    weekly_strategy: Literal["跟随多天默认", "存档优先", "按天提炼", "分层抽样"] = _ui_field(
+        "定时周报生成策略",
+        "定时周报采用的汇总方式。默认「跟随多天默认」（与上方默认多天生成策略一致）；若单独选「按天提炼」，每次周报约调用 8 次模型、费用更高；失败时同样自动逐级切换直至补发 1 天日报。",
+        default="跟随多天默认",
+    )
+    multi_day_comic_enabled: bool = _ui_field(
+        "允许多天漫画",
+        "开启「群聊漫画」总开关的前提下，是否允许用 /漫画 7 或漫画廊把多天窗口最热的话题画成漫画（格数仍跟随漫画参数里的分镜数）。默认开启；关闭后仅保留 1 天漫画，多天漫画会消耗一次分镜模型调用与一次绘图。",
+        default=True,
+    )
+    llm_tools_enabled: bool = _ui_field(
+        "允许麦麦自然语言查报告与触发分析",
+        "控制麦麦能否通过自然语言帮你查历史日报/周报，或由管理员口头让麦麦触发分析。默认开启；关闭后会立即停用这两个对话工具，麦麦不能再通过自然语言查报告，但 /日报、/周报、/漫画 命令和网页功能不受影响。",
+        default=True,
+    )
+
+    @field_validator("multi_day_strategy", mode="before")
+    @classmethod
+    def _val_strategy(cls, v: Any) -> str:
+        return strategy_label(normalize_strategy(v))
+
+    @field_validator("weekly_strategy", mode="before")
+    @classmethod
+    def _val_weekly_strategy(cls, v: Any) -> str:
+        code = normalize_strategy(v, allow_follow=True)
+        return "跟随多天默认" if not code else strategy_label(code)
+
+    @field_validator("weekly_day", mode="before")
+    @classmethod
+    def _val_weekly_day(cls, v: Any) -> str:
+        return normalize_weekday_name(v)
+
+    @field_validator("weekly_time", mode="before")
+    @classmethod
+    def _val_weekly_time(cls, v: Any) -> str:
+        return normalize_hhmm(v)
+
+
+class MultiDayAdvancedConfig(PluginConfigBase):
+    """多天分析高级预算与分段参数（默认折叠）。"""
+
+    __ui_label__ = "多天高级参数"
+    __ui_icon__ = "tune"
+    __ui_order__ = 7
+
+    multi_day_total_messages: int = _ui_field(
+        "多天聊天记录总条数上限",
+        "一次多天报告最多挑选多少条聊天文字送给模型分析（范围 100~5000）。默认 1000 条（日常和「存档优先」足够，常用「按天提炼」可设 1500）；超出会自动少取低信息量内容并在报告里注明，不会中断；调高会增加模型耗时与费用。",
+        default=1000, ge=100, le=5000,
+    )
+    multi_day_per_day_cap: int = _ui_field(
+        "单日抽取条数上限（0 为自动分配）",
+        "多天分析时每天最多抽取多少条聊天文字，避免某天刷屏占满全部额度。默认 0（自动按「总条数上限 ÷ 天数」分配并把空闲天余量调剂给活跃天）；手动指定可填 50~1000，不确定就保持默认 0。",
+        default=0, ge=0, le=1000,
+    )
+    chunk_max_chars: int = _ui_field(
+        "单段分析文字长度上限",
+        "聊天记录较长需要拆段分析时，每一段的最大字数（范围 4000~32000）。默认 16000 字，不确定请保持默认；模型上下文较小、容易超长报错时可调小到 8000；调大会增加单次请求体积。",
+        default=16000, ge=4000, le=32000,
+    )
+    chunk_max_count: int = _ui_field(
+        "单次分析最大分段数",
+        "长聊天记录最多拆成几段并行送给模型（范围 1~8）。默认 4 段，不确定请保持默认；调小可控制模型调用次数、超出部分会自动少取并在报告注明；调大会增加模型调用次数与费用。",
+        default=4, ge=1, le=8,
+    )
+
+    @field_validator("multi_day_per_day_cap", mode="before")
+    @classmethod
+    def _val_per_day_cap(cls, v: Any) -> int:
+        val = int(v)
+        if val != 0 and not (50 <= val <= 1000):
+            raise ValueError("单日抽取条数上限必须为 0（自动）或 50~1000 之间的整数")
+        return val
+
+
 class DailyAnalysisConfig(PluginConfigBase):
     plugin: PluginSectionConfig = Field(default_factory=PluginSectionConfig)
     report: ReportSectionConfig = Field(default_factory=ReportSectionConfig)
+    multi_day: MultiDaySectionConfig = Field(default_factory=MultiDaySectionConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
     album: AlbumSectionConfig = Field(default_factory=AlbumSectionConfig)
     comic: ComicSectionConfig = Field(default_factory=ComicSectionConfig)
+    multi_day_advanced: MultiDayAdvancedConfig = Field(default_factory=MultiDayAdvancedConfig)
 
 
 class GroupDailyAnalysisPlugin(MaiBotPlugin):
@@ -804,6 +965,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         self._config_toml_path = ""
         self._live_persona_cache = None
         self._live_persona_ts = 0.0
+        self._schedule_wakeup = asyncio.Event()
         self._stats = self._load_stats()
         self._stats_loaded = True
         self._pending_messages = 0
@@ -876,8 +1038,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             self.ctx.logger.warning("[weekly] 获取模型任务列表失败，使用默认列表: %s", _exc)
         self._tasks = [
             asyncio.create_task(self._daily_loop()),
+            asyncio.create_task(self._weekly_loop()),
             asyncio.create_task(self._flush_loop()),
         ]
+        await self._sync_llm_tools_state()
         self.ctx.logger.info("群聊每日分析插件已加载（每日日报，/日报 可手动生成）")
 
     async def on_unload(self) -> None:
@@ -890,8 +1054,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         self.ctx.logger.info("群聊每日分析插件已卸载")
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
-        # 配置变更后重新探测绘图插件可用性（探测结果带 TTL 缓存）
+        # 配置变更后重新探测绘图插件可用性、立即唤醒周报/日报定时器并热切换 LLM 工具状态
         self._drawpic_probe = None
+        self._wake_schedules()
+        await self._sync_llm_tools_state()
 
     # ------------------------------------------------------------------ 统计收集
 
@@ -1117,12 +1283,59 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     def _report_cfg(self) -> ReportSectionConfig:
         return cast(DailyAnalysisConfig, self.config).report
 
+    def _multiday_cfg(self) -> MultiDaySectionConfig:
+        return cast(DailyAnalysisConfig, self.config).multi_day
+
+    def _multiday_adv_cfg(self) -> MultiDayAdvancedConfig:
+        return cast(DailyAnalysisConfig, self.config).multi_day_advanced
+
     def _album_cfg(self) -> AlbumSectionConfig:
         """群相册设置（独立配置节，见 AlbumSectionConfig）。"""
         return cast(DailyAnalysisConfig, self.config).album
 
     def _comic_cfg(self) -> ComicSectionConfig:
         return cast(DailyAnalysisConfig, self.config).comic
+
+    def _wake_schedules(self) -> None:
+        ev = getattr(self, "_schedule_wakeup", None)
+        if ev is not None:
+            ev.set()
+
+    async def _sleep_or_wakeup(self, delay: float) -> bool:
+        """休眠指定秒数或被配置变更立即唤醒；返回 True 表示被唤醒。"""
+        ev = getattr(self, "_schedule_wakeup", None)
+        if ev is None:
+            ev = asyncio.Event()
+            self._schedule_wakeup = ev
+        slept = 0.0
+        while slept < delay:
+            if ev.is_set():
+                ev.clear()
+                return True
+            step = min(300.0, max(0.1, delay - slept))
+            try:
+                await asyncio.wait_for(ev.wait(), timeout=step)
+                ev.clear()
+                return True
+            except asyncio.TimeoutError:
+                slept += step
+        return False
+
+    async def _sync_llm_tools_state(self) -> None:
+        """按配置热启停两个 LLM 对话工具；老宿主缺 component.enable/disable 能力时不报错阻断加载。"""
+        enabled = bool(self._multiday_cfg().llm_tools_enabled)
+        cap = "component.enable" if enabled else "component.disable"
+        for tool_name in ("group_daily_report_lookup", "group_daily_analysis_trigger"):
+            try:
+                await self.ctx.call_capability(
+                    cap,
+                    name=tool_name,
+                    component_type="tool",
+                    scope="global",
+                    timeout_ms=5000,
+                )
+            except Exception as exc:
+                self.ctx.logger.debug("[weekly] 组件开关同步跳过（%s %s）: %s", cap, tool_name, exc)
 
     def _persist_comic_config(self) -> None:
         """把 [comic] 段标量写回 config.toml。
@@ -1216,6 +1429,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                             "album_upload_enabled", "album_name_by_group", "groups"}),
         "report": frozenset({"daily_theme", "theme_by_group", "daily_report_groups", "chat_whitelist"}),
         "prompts": frozenset({"analysis_persona", "analysis_persona_mode"}),
+        "multi_day": frozenset({"multi_day_enabled", "multi_day_max_days", "multi_day_strategy",
+                                "weekly_enabled", "weekly_day", "weekly_time", "weekly_strategy",
+                                "multi_day_comic_enabled", "llm_tools_enabled"}),
+        "multi_day_advanced": frozenset({"multi_day_total_messages", "multi_day_per_day_cap",
+                                         "chunk_max_chars", "chunk_max_count"}),
     }
 
     def _persist_config_toml(self, section: str, new_cfg) -> None:
@@ -1297,6 +1515,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         """强制拉取一次麦麦实时人设文本（绕过缓存），供「存为模板」使用。"""
         self._live_persona_cache = None
         self._live_persona_ts = 0.0
+        self._schedule_wakeup = asyncio.Event()
         text = await self._live_persona_text(max_age=0.0)
         if not text:
             return {"captured": False, "text": "", "message": "未读取到人设文本（宿主未返回 personality 字段、未声明授权或调用失败）"}
@@ -1520,10 +1739,70 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "manual_marks_daily_sent": {"label": "手动日报计入当天已发", "ui_type": "switch", "hint": "关闭后：手动 /日报 不影响定时日报，当天可能收到两份"},
             },
         },
+        "multi_day": {
+            "title": "多天与周报",
+            "icon": "date_range",
+            "order": 2,
+            "fields": {
+                "multi_day_enabled": {
+                    "label": "开启多天分析功能",
+                    "ui_type": "switch",
+                    "hint": "开启后可在 /日报 后面加天数（例如 /日报 7 生成最近 7 天汇总），也可在报告库页面选择多天生成。默认开启；关闭后仅停用多天汇总与周报，日常 1 天日报完全不受影响。",
+                },
+                "multi_day_max_days": {
+                    "label": "单次最大统计天数",
+                    "ui_type": "number",
+                    "min": 1,
+                    "max": 90,
+                    "hint": "一次多天报告最多允许往前统计几天（范围 1~90 天，实际不会超过报告库保留天数）。默认 7 天；调大到 30 天以上会拉长查询范围，选用「按天提炼」时模型调用次数与费用也会成倍增加。",
+                },
+                "multi_day_strategy": {
+                    "label": "默认多天生成策略",
+                    "ui_type": "select",
+                    "choices": ["存档优先", "按天提炼", "分层抽样"],
+                    "hint": "决定多天报告如何汇总内容。默认「存档优先」；当所选方式缺存档或出错时，会自动按「存档优先 → 按天提炼 → 分层抽样 → 退回 1 天日报」顺序切换并在报告末尾写明实际用法。"
+                            "① 存档优先：最省钱，直接汇总过去几天的日报存档，缺存档的天改查聊天记录（通常仅调用 1 次模型）；"
+                            "② 按天提炼：最完整，每天单独分析后再合并，模型调用次数约等于「天数 + 1」，费用最高、耗时最长；"
+                            "③ 分层抽样：折中，每天按时段均匀抽一部分聊天记录合并后一次分析（调用 1 次模型），速度最快但细节较少。",
+                },
+                "weekly_enabled": {
+                    "label": "开启定时周报",
+                    "ui_type": "switch",
+                    "hint": "开启后每周在下方设定的星期与时间自动生成最近 7 天的群聊周报。默认关闭；开启后，周报所在的那一天该群不再自动发日常日报（由周报替代，手动 /日报 不受影响）；若周报生成失败，会自动补发当天日常日报。",
+                },
+                "weekly_day": {
+                    "label": "定时周报发送星期",
+                    "ui_type": "select",
+                    "choices": ["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
+                    "hint": "每周在哪一天自动生成并发送周报。默认「周一」；修改保存后立即生效（无需重启），设在哪一天，当天该群的定时日报即由周报替代。",
+                },
+                "weekly_time": {
+                    "label": "定时周报发送时间",
+                    "ui_type": "text",
+                    "hint": "定时周报在当天几点几分触发（24 小时制 HH:MM，范围 00:00~23:59）。默认「08:00」；修改保存后立即生效（无需重启），若当天定时点已过且本周尚未生成会自动补发。",
+                },
+                "weekly_strategy": {
+                    "label": "定时周报生成策略",
+                    "ui_type": "select",
+                    "choices": ["跟随多天默认", "存档优先", "按天提炼", "分层抽样"],
+                    "hint": "定时周报采用的汇总方式。默认「跟随多天默认」（与上方默认多天生成策略一致）；若单独选「按天提炼」，每次周报约调用 8 次模型、费用更高；失败时同样自动逐级切换直至补发 1 天日报。",
+                },
+                "multi_day_comic_enabled": {
+                    "label": "允许多天漫画",
+                    "ui_type": "switch",
+                    "hint": "开启「群聊漫画」总开关的前提下，是否允许用 /漫画 7 或漫画廊把多天窗口最热的话题画成漫画（格数仍跟随漫画参数里的分镜数）。默认开启；关闭后仅保留 1 天漫画，多天漫画会消耗一次分镜模型调用与一次绘图。",
+                },
+                "llm_tools_enabled": {
+                    "label": "允许麦麦自然语言查报告与触发分析",
+                    "ui_type": "switch",
+                    "hint": "控制麦麦能否通过自然语言帮你查历史日报/周报，或由管理员口头让麦麦触发分析。默认开启；关闭后会立即停用这两个对话工具，麦麦不能再通过自然语言查报告，但 /日报、/周报、/漫画 命令和网页功能不受影响。",
+                },
+            },
+        },
         "analysis": {
             "title": "分析设置",
             "icon": "psychology",
-            "order": 2,
+            "order": 3,
             "fields": {
             "topic_analysis_enabled": {"label": "话题分析", "ui_type": "switch"},
             "user_title_analysis_enabled": {"label": "用户称号分析", "ui_type": "switch"},
@@ -1567,7 +1846,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         "prompts": {
             "title": "分析提示词",
             "icon": "edit_note",
-            "order": 3,
+            "order": 4,
             "fields": {
             "topic_prompt": {"label": "话题分析提示词", "ui_type": "textarea", "rows": 14, "hint": "变量：${max_topics} ${messages_text}"},
             "user_title_prompt": {"label": "称号分析提示词", "ui_type": "textarea", "rows": 12, "hint": "变量：${users_text}"},
@@ -1580,7 +1859,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         "album": {
             "title": "群相册上传",
             "icon": "photo_library",
-            "order": 4,
+            "order": 5,
             "fields": {
             "album_upload_enabled": {"label": "日报生成后上传群相册", "ui_type": "switch", "hint": "NapCat 与 SnowLuma 两个适配器均支持；上传失败不影响正常发图"},
             "album_name": {"label": "默认相册名称", "ui_type": "text", "hint": "留空=默认（第一个）相册；未在下方单独指定的群使用它"},
@@ -1593,7 +1872,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         "comic": {
             "title": "群聊漫画",
             "icon": "brush",
-            "order": 5,
+            "order": 6,
             "fields": {
             "enabled": {"label": "启用群聊漫画", "ui_type": "switch", "hint": "需安装并启用麦麦绘图插件（drawpic 2.x），并在其通用配置中允许插件联动"},
             "auto_after_daily": {"label": "日报后自动画漫画", "ui_type": "switch", "hint": "仅对下方联动群列表内的群生效；列表留空则不自动"},
@@ -1612,6 +1891,42 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             "album_name_by_group": {"label": "漫画按群指定相册", "ui_type": "textarea", "rows": 4, "hint": "每行「群号=相册名」，优先于漫画相册名；两者留空跟随日报相册设置"},
             "groups": {"label": "自动联动群列表", "ui_type": "textarea", "rows": 4, "hint": "每行一个群号；留空=不自动联动"},
             "llm_model_task": {"label": "分镜模型任务", "ui_type": "select", "choices": [], "hint": "留空跟随分析设置的默认任务"},
+            },
+        },
+        "multi_day_advanced": {
+            "title": "多天高级参数",
+            "icon": "tune",
+            "order": 7,
+            "collapsed": True,
+            "fields": {
+                "multi_day_total_messages": {
+                    "label": "多天聊天记录总条数上限",
+                    "ui_type": "number",
+                    "min": 100,
+                    "max": 5000,
+                    "hint": "一次多天报告最多挑选多少条聊天文字送给模型分析（范围 100~5000）。默认 1000 条（日常和「存档优先」足够，常用「按天提炼」可设 1500）；超出会自动少取低信息量内容并在报告里注明，不会中断；调高会增加模型耗时与费用。",
+                },
+                "multi_day_per_day_cap": {
+                    "label": "单日抽取条数上限（0 为自动分配）",
+                    "ui_type": "number",
+                    "min": 0,
+                    "max": 1000,
+                    "hint": "多天分析时每天最多抽取多少条聊天文字，避免某天刷屏占满全部额度。默认 0（自动按「总条数上限 ÷ 天数」分配并把空闲天余量调剂给活跃天）；手动指定可填 50~1000，不确定就保持默认 0。",
+                },
+                "chunk_max_chars": {
+                    "label": "单段分析文字长度上限",
+                    "ui_type": "number",
+                    "min": 4000,
+                    "max": 32000,
+                    "hint": "聊天记录较长需要拆段分析时，每一段的最大字数（范围 4000~32000）。默认 16000 字，不确定请保持默认；模型上下文较小、容易超长报错时可调小到 8000；调大会增加单次请求体积。",
+                },
+                "chunk_max_count": {
+                    "label": "单次分析最大分段数",
+                    "ui_type": "number",
+                    "min": 1,
+                    "max": 8,
+                    "hint": "长聊天记录最多拆成几段并行送给模型（范围 1~8）。默认 4 段，不确定请保持默认；调小可控制模型调用次数、超出部分会自动少取并在报告注明；调大会增加模型调用次数与费用。",
+                },
             },
         },
     }
@@ -1675,7 +1990,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 "title": smeta["title"],
                 "description": None,
                 "icon": smeta.get("icon"),
-                "collapsed": False,
+                "collapsed": bool(smeta.get("collapsed", False)),
                 "order": smeta["order"],
                 "fields": fields,
             }
@@ -1983,7 +2298,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             return ""
         return str(pcfg.analysis_persona or "").strip()
 
-    async def _call_llm_json(self, prompt: str, acfg: "AnalysisConfig", task: str = "") -> Any | None:
+    async def _call_llm_json(self, prompt: str, acfg: "AnalysisConfig", task: str = "",
+                             scope: str = "daily") -> Any | None:
         """带重试/退避 + 温度递减修复重试的 LLM 调用，返回解析后的 JSON（对象或数组）。"""
         # 安全护栏（对齐同类移植工程的做法）：群聊记录是不可信输入，其中任何指令都不得执行
         prompt = (
@@ -2044,7 +2360,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     resp = await self.ctx.call_capability(
                         "llm.generate", timeout_ms=acfg.llm_timeout_ms, **kwargs
                     )
-                self._record_llm_usage(resp, model_task or "auto", time.monotonic() - a0)
+                self._record_llm_usage(resp, model_task or "auto", time.monotonic() - a0, scope=scope)
                 if isinstance(resp, dict) and resp.get("success"):
                     last_output = str(resp.get("response") or "")
                     reasoning = str(resp.get("reasoning") or "")
@@ -2705,8 +3021,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     "color": QUALITY_COLORS[i % len(QUALITY_COLORS)],
                     "comment": str(d.get("comment", "")),
                 })
+            display_date = str(context.get("display_date") or context["day"])
             llm_title = str(quality.get("title") or "").strip()[:40]
-            llm_subtitle = str(quality.get("subtitle") or "").strip() or (context["chat_name"] + " · " + context["day"])
+            llm_subtitle = str(quality.get("subtitle") or "").strip() or (context["chat_name"] + " · " + display_date)
             chat_quality_html = j.get_template("chat_quality_item.html").render(
                 title=llm_title or "今日群聊观测报告",
                 subtitle=llm_subtitle,
@@ -2719,10 +3036,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             chart_data=context["chart_data"], **info["vars"]
         )
         prompt_tokens = sum(len(u["t"]) for u in context["sample"]) // 2 + 200
+        display_date = str(context.get("display_date") or context["day"])
 
         html_text = j.get_template("html_template.html").render(
             **info["vars"],
-            current_date=context["day"],
+            current_date=display_date,
             current_datetime=now.strftime("%H:%M"),
             message_count=context["message_count"],
             participant_count=context["participant_count"],
@@ -2739,7 +3057,46 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             chat_quality_html=chat_quality_html,
             group_name=context.get("chat_name", ""),
         )
-        return self._inject_render_settle(self._inject_emoji_font(html_text, theme))
+        rendered = self._inject_render_settle(self._inject_emoji_font(html_text, theme))
+        if context.get("report_kind") in ("multiday", "weekly"):
+            rendered = self._inject_multiday_banner(rendered, context)
+        return rendered
+
+    @staticmethod
+    def _inject_multiday_banner(html: str, context: dict) -> str:
+        """多天报告与周报在页脚前追加说明横幅（覆盖范围/缺天/策略/裁剪注明）；1 天日报绝不调用。"""
+        kind = str(context.get("report_kind") or "multiday")
+        days = int(context.get("window_days") or 7)
+        title = "群聊周报" if kind == "weekly" else f"{days} 天群聊汇总"
+        coverage = html_esc.escape(str(context.get("coverage_note") or ""))
+        used_label = str(context.get("strategy_label") or "")
+        req_label = str(context.get("strategy_requested_label") or "")
+        if used_label and req_label and used_label != req_label:
+            strat_line = f"本次生成策略：{used_label}（由「{req_label}」自动切换）"
+        elif used_label:
+            strat_line = f"本次生成策略：{used_label}"
+        else:
+            strat_line = ""
+        notes = [html_esc.escape(str(n)) for n in (context.get("budget_notes") or []) if str(n or "").strip()]
+        parts = [f"<strong>{html_esc.escape(title)}</strong>"]
+        if coverage:
+            parts.append(f"<span>{coverage}</span>")
+        if strat_line:
+            parts.append(f"<span>{html_esc.escape(strat_line)}</span>")
+        notes_html = "".join(f'<div class="md-note">注：{n}</div>' for n in notes)
+        banner = (
+            '<section class="multiday-meta-banner" style="margin:16px auto 12px;max-width:960px;'
+            'padding:12px 16px;border-radius:10px;background:rgba(127,127,127,0.12);'
+            'border:1px solid rgba(127,127,127,0.28);font-size:13px;line-height:1.6;'
+            'color:inherit;text-align:left;word-break:break-word;">'
+            f'<div style="display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;">{" · ".join(parts)}</div>'
+            f'{notes_html}</section>'
+        )
+        if "</footer>" in html:
+            return html.replace("</footer>", banner + "</footer>", 1)
+        if "</body>" in html:
+            return html.replace("</body>", banner + "</body>", 1)
+        return html + banner
 
     def _inline_theme_assets(self, html: str) -> str:
         """把模板里 `assets/<主题>/xxx.png` 形式的包内素材引用替换成 data URI。
@@ -3280,7 +3637,15 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         if not str(getattr(self._album_cfg(), "napcat_api_url", "") or "").strip():
             self.ctx.logger.warning("[weekly] HTML 直发需要配置协议端 HTTP API 地址（NapCat / SnowLuma）")
             return False
-        name = f"{(context.get('chat_name') or '群聊')}-日报-{day}.html"
+        rk = str(context.get("report_kind") or "daily")
+        if rk == "weekly":
+            file_kind = "周报"
+        elif rk == "multiday":
+            file_kind = f"{int(context.get('window_days') or 1)}天汇总"
+        else:
+            file_kind = "日报"
+        clean_day = ReportStore.base_day(day) if "~" in str(day) else day
+        name = f"{(context.get('chat_name') or '群聊')}-{file_kind}-{clean_day}.html"
         payload = {
             "group_id": int(group_id),
             "file": "base64://" + base64.b64encode(html_text.encode("utf-8")).decode(),
@@ -3290,8 +3655,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             resp = await asyncio.to_thread(self._napcat_api, "upload_group_file", payload)
             rc = resp.get("retcode") if isinstance(resp, dict) else None
             if rc in (0, None):
-                await self.ctx.send.text(f"今日日报已生成为 HTML 文件（{name}），请在群文件中查看～", stream_id)
-                self.ctx.logger.info("[weekly] 日报已直发 HTML 到群文件（群 %s）", group_id)
+                await self.ctx.send.text(f"今日{file_kind}已生成为 HTML 文件（{name}），请在群文件中查看～", stream_id)
+                self.ctx.logger.info("[weekly] %s已直发 HTML 到群文件（群 %s）", file_kind, group_id)
                 return True
             self.ctx.logger.warning("[weekly] HTML 群文件上传失败: %s", str(resp)[:120])
         except Exception as exc:
@@ -3382,7 +3747,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         base["dimensions"] = dims
         return base
 
-    async def _archive_report(self, stream_id, day, theme, context, analysis, image, html_text, started):
+    async def _archive_report(self, stream_id, day, theme, context, analysis, image, html_text, started,
+                              extra_meta: dict | None = None):
         if not self._eff_archive_enabled():
             return
         chat = self._stats.get("chats", {}).get(stream_id) or {}
@@ -3396,6 +3762,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                             for key in ("topics", "titles", "quotes", "quality")},
             "analysis": analysis,
         }
+        if extra_meta:
+            metadata.update(extra_meta)
         try:
             await asyncio.to_thread(self._report_store.save, str(chat.get("group_id") or ""),
                                     day, image, html_text, metadata, context)
@@ -3458,7 +3826,15 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                             "chat_whitelist": str(self.config.report.chat_whitelist or ""),
                             "analysis_persona_mode": str(self.config.prompts.analysis_persona_mode or "text"),
                             "analysis_persona": str(self.config.prompts.analysis_persona or ""),
-                            "analysis_persona_live": str(self._live_persona_cache or "")},
+                            "analysis_persona_live": str(self._live_persona_cache or ""),
+                            "multi_day_enabled": bool(self._multiday_cfg().multi_day_enabled),
+                            "multi_day_max_days": self._effective_max_days(),
+                            "multi_day_strategy": str(self._multiday_cfg().multi_day_strategy),
+                            "weekly_enabled": bool(self._multiday_cfg().weekly_enabled),
+                            "weekly_day": str(self._multiday_cfg().weekly_day),
+                            "weekly_time": str(self._multiday_cfg().weekly_time),
+                            "multi_day_comic_enabled": bool(self._multiday_cfg().multi_day_comic_enabled),
+                            "multi_day_total_messages": int(self._multiday_adv_cfg().multi_day_total_messages)},
             "persona_templates": self._persona_templates(),
         }
 
@@ -3481,31 +3857,126 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                                  revision: str = "") -> dict:
         return await asyncio.to_thread(self._report_store.read_chunk, group_id, day, kind, offset, revision)
 
-    @API("trigger", version="1")
-    async def webui_trigger(self, group_id: str, day: str = "", theme: str = "") -> dict:
+    @API("multiday_preview", version="1")
+    async def webui_multiday_preview(self, group_id: str, days: int = 7, strategy: str = "") -> dict:
         try:
-            stream_id, chat = self._webui_group(group_id)
-            day = day or date.today().isoformat()
-            if date.fromisoformat(day).isoformat() != day or day > date.today().isoformat():
-                raise ValueError("日期需为 YYYY-MM-DD，且不能晚于今天")
+            self._webui_group(group_id)
+        except ValueError as exc:
+            return {"ok": False, "message": str(exc)}
+        mcfg = self._multiday_cfg()
+        adv = self._multiday_adv_cfg()
+        max_days = self._effective_max_days()
+        try:
+            days = max(1, min(int(days or 7), max_days))
+        except (TypeError, ValueError):
+            days = min(7, max_days)
+        try:
+            eff_code = normalize_strategy(strategy or mcfg.multi_day_strategy)
+        except ValueError:
+            eff_code = normalize_strategy(mcfg.multi_day_strategy)
+        slices = build_rolling_slices(time.time(), days)
+        archived: list[str] = []
+        missing: list[str] = []
+        for sl in slices:
+            d = sl["day"]
+            try:
+                await asyncio.to_thread(self._report_store.detail, group_id, d)
+                archived.append(d)
+            except (OSError, ValueError):
+                missing.append(d)
+        if eff_code == STRATEGY_ARCHIVE_FIRST:
+            if archived:
+                est_calls = 1
+                note = "将直接汇总已有存档，仅调用 1 次模型" + ("（缺存档日改查聊天记录）" if missing else "")
+            else:
+                est_calls = days + 1
+                note = f"近 {days} 天暂无日报存档，将自动切换「按天提炼」（预计约 {est_calls} 次模型调用）"
+        elif eff_code == STRATEGY_PER_DAY_SUMMARY:
+            est_calls = days + 1
+            note = f"每天单独提炼后再合并，预计约 {est_calls} 次模型调用（费用较高）"
+        else:
+            est_calls = 1
+            note = "跨天按时段分层抽样后一次分析，预计 1 次模型调用"
+        budget = int(getattr(adv, "multi_day_total_messages", 1000) or 1000)
+        high_cost = (days >= 30) or (eff_code == STRATEGY_PER_DAY_SUMMARY and days >= 7) or (budget >= 3000)
+        return {
+            "ok": True,
+            "days": days,
+            "max_days": max_days,
+            "strategy": strategy_label(eff_code),
+            "archived_days": [d[5:] for d in archived],
+            "missing_days": [d[5:] for d in missing],
+            "archived_count": len(archived),
+            "total_days": len(slices),
+            "estimated_calls": est_calls,
+            "estimated_samples": budget,
+            "high_cost": high_cost,
+            "note": note,
+        }
+
+    @API("trigger", version="1")
+    async def webui_trigger(self, group_id: str, day: str = "", theme: str = "",
+                            days: int = 1, strategy: str = "", report_kind: str = "") -> dict:
+        try:
+            days_val = int(days or 1)
+        except (TypeError, ValueError):
+            days_val = 1
+        rk = str(report_kind or "").strip()
+        if rk == "weekly":
+            days_val = 7
+        if days_val <= 1 and rk in ("", "daily"):
+            try:
+                stream_id, chat = self._webui_group(group_id)
+                day = day or date.today().isoformat()
+                if date.fromisoformat(day).isoformat() != day or day > date.today().isoformat():
+                    raise ValueError("日期需为 YYYY-MM-DD，且不能晚于今天")
+                theme = theme or self._theme_for_group(group_id)
+                if theme not in THEME_REGISTRY:
+                    raise ValueError("未知日报主题")
+                if day != date.today().isoformat() and day not in chat.get("days", {}):
+                    raise ValueError("该日期已无统计数据，仅可重发已存档报告")
+            except (TypeError, ValueError):
+                return {"accepted": False, "status": "rejected", "message": "群不在白名单、会话不可用，或日期/主题无效；历史日期需有统计数据"}
+
+            async def generate(state):
+                if day == date.today().isoformat():
+                    state["stage"] = "重建过去 24 小时统计"
+                    await self._rebuild_day_from_db(stream_id, day)
+                state["stage"] = "分析、渲染并发送"
+                return await self._generate_daily_and_send(
+                    stream_id, day, theme,
+                    mark_sent=day == date.today().isoformat() and self._report_cfg().manual_marks_daily_sent)
+
+            return self._jobs.submit("report", group_id, day, generate)
+
+        mcfg = self._multiday_cfg()
+        if not mcfg.multi_day_enabled:
+            return {"accepted": False, "status": "rejected", "message": "多天分析功能未开启"}
+        try:
+            stream_id, _ = self._webui_group(group_id)
+            max_days = self._effective_max_days()
+            if not (2 <= days_val <= max_days):
+                raise ValueError(f"天数需在 2~{max_days} 之间")
             theme = theme or self._theme_for_group(group_id)
             if theme not in THEME_REGISTRY:
                 raise ValueError("未知日报主题")
-            if day != date.today().isoformat() and day not in chat.get("days", {}):
-                raise ValueError("该日期已无统计数据，仅可重发已存档报告")
-        except (TypeError, ValueError):
-            return {"accepted": False, "status": "rejected", "message": "群不在白名单、会话不可用，或日期/主题无效；历史日期需有统计数据"}
+            if strategy:
+                normalize_strategy(strategy)
+        except (TypeError, ValueError) as exc:
+            return {"accepted": False, "status": "rejected", "message": str(exc)}
 
-        async def generate(state):
-            if day == date.today().isoformat():
-                state["stage"] = "重建过去 24 小时统计"
-                await self._rebuild_day_from_db(stream_id, day)
-            state["stage"] = "分析、渲染并发送"
-            return await self._generate_daily_and_send(
-                stream_id, day, theme,
-                mark_sent=day == date.today().isoformat() and self._report_cfg().manual_marks_daily_sent)
+        target_kind = "weekly" if rk == "weekly" else "multiday"
+        today = date.today().isoformat()
+        slot_day = f"{today}~weekly" if target_kind == "weekly" else f"{today}~{days_val}d"
+        mark_sent = (target_kind == "multiday") and bool(self._report_cfg().manual_marks_daily_sent)
 
-        return self._jobs.submit("report", group_id, day, generate)
+        async def generate_multi(job):
+            return await self._generate_multiday_and_send(
+                job, stream_id, group_id, days_val, theme,
+                strategy_raw=strategy, report_kind=target_kind, mark_sent=mark_sent,
+            )
+
+        return self._jobs.submit(target_kind, group_id, slot_day, generate_multi)
 
     @API("rerun", version="1")
     async def webui_rerun(self, group_id: str, day: str, revision: str = "") -> dict:
@@ -3560,7 +4031,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             html_lite = self._inline_static_assets(await self._inline_avatars(lite_raw, context))
             image, html_text = await self._render_report_image(html_text, html_lite, acfg)
             metadata = {key: meta[key] for key in ("group_name", "stream_id", "message_count",
-                                                   "participant_count", "model_tasks") if key in meta}
+                                                   "participant_count", "model_tasks",
+                                                   "report_kind", "window_days", "window_start", "window_end",
+                                                   "strategy_requested", "strategy_used", "strategy_label",
+                                                   "covered_days", "missing_days", "coverage_note", "budget_notes")
+                        if key in meta}
             metadata.update(theme=theme, version=meta.get("version", ""), analysis=analysis,
                             elapsed_seconds=round(time.monotonic() - started, 2))
             await asyncio.to_thread(self._report_store.save, group_id, day, image, html_text, metadata, context)
@@ -3780,8 +4255,61 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
     async def webui_comic_ref_preview(self, ref_id: str) -> dict:
         return await asyncio.to_thread(self._comic_ref_preview, ref_id)
 
+    @API("comic_window_preview", version="1")
+    async def webui_comic_window_preview(self, group_id: str, days: int = 1, style: str = "") -> dict:
+        try:
+            self._webui_group(group_id)
+        except ValueError as exc:
+            return {"ok": False, "message": str(exc)}
+        try:
+            days = max(1, min(int(days or 1), self._effective_max_days()))
+        except (TypeError, ValueError):
+            days = 1
+        eff_style = style if style in COMIC_STYLES else (self._fixed_style_for(group_id) or self._comic_cfg().style)
+        if eff_style not in COMIC_STYLES:
+            eff_style = "four_panel"
+        panels = self._eff_storyboard_panels(eff_style)
+        today = date.today().isoformat()
+        topics: list[dict] = []
+        has_archive = False
+        if days <= 1:
+            try:
+                meta = await asyncio.to_thread(self._report_store.detail, group_id, today)
+                has_archive = True
+                topics = select_window_topics(meta.get("analysis") or {}, panels)
+            except (OSError, ValueError):
+                pass
+        else:
+            for cand in (f"{today}~{days}d", f"{today}~weekly") if days == 7 else (f"{today}~{days}d",):
+                try:
+                    meta = await asyncio.to_thread(self._report_store.detail, group_id, cand)
+                    has_archive = True
+                    topics = select_window_topics(meta.get("analysis") or {}, panels)
+                    break
+                except (OSError, ValueError):
+                    continue
+            if not topics:
+                collected: list[dict] = []
+                for sl in build_rolling_slices(time.time(), days):
+                    try:
+                        m = await asyncio.to_thread(self._report_store.detail, group_id, sl["day"])
+                        collected.extend([t for t in ((m.get("analysis") or {}).get("topics") or []) if isinstance(t, dict)])
+                    except (OSError, ValueError):
+                        continue
+                if collected:
+                    topics = select_window_topics({"topic_pool": build_window_topic_pool(collected)}, panels)
+        return {
+            "ok": True,
+            "days": days,
+            "panel_count": panels,
+            "has_archive": has_archive,
+            "topics": [str(t.get("topic") or "") for t in topics if isinstance(t, dict) and t.get("topic")],
+            "note": f"将从近 {days} 天全窗口最热话题中选 {panels} 个主题绘满 {panels} 格（话题不足时用金句补位）"
+                    if days > 1 else f"1 天模式将按当前分镜数（{panels} 格）绘制今日日报漫画",
+        }
+
     @API("draw", version="1")
-    async def webui_draw(self, group_id: str, day: str = "", style: str = "") -> dict:
+    async def webui_draw(self, group_id: str, day: str = "", style: str = "", days: int = 1) -> dict:
         ccfg = self._comic_cfg()
         if not ccfg.enabled:
             return {"accepted": False, "status": "rejected", "message": "漫画功能未启用，请先在插件设置的「群聊漫画」中打开"}
@@ -3789,15 +4317,36 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             stream_id, _ = self._webui_group(group_id)
         except ValueError as exc:
             return {"accepted": False, "status": "rejected", "message": str(exc)}
+        try:
+            days = int(days or 1)
+        except (TypeError, ValueError):
+            days = 1
+        style = style or self._pick_comic_style(group_id)
+        if style not in COMIC_STYLES:
+            return {"accepted": False, "status": "rejected", "message": "未知漫画风格"}
+        if days > 1:
+            mcfg = self._multiday_cfg()
+            if not mcfg.multi_day_enabled or not mcfg.multi_day_comic_enabled:
+                return {"accepted": False, "status": "rejected", "message": "多天漫画未启用（插件设置 → 多天与周报）"}
+            max_days = self._effective_max_days()
+            if days > max_days:
+                return {"accepted": False, "status": "rejected", "message": f"多天漫画天数超出上限（最多 {max_days} 天）"}
+            if not await self._drawpic_ready():
+                return {"accepted": False, "status": "rejected",
+                        "message": "未检测到麦麦绘图插件（drawpic v2）接口，请确认其已安装、启用并允许插件联动"}
+            slot_day = f"{date.today().isoformat()}~{days}d"
+
+            async def work(job):
+                return await self._multiday_comic_pipeline(job, stream_id, group_id, days, style, slot_day=slot_day)
+
+            return self._jobs.submit("comic", group_id, slot_day, work)
+
         day = day or date.today().isoformat()
         try:
             if date.fromisoformat(day).isoformat() != day or day > date.today().isoformat():
                 raise ValueError
         except ValueError:
             return {"accepted": False, "status": "rejected", "message": "日期需为 YYYY-MM-DD，且不能晚于今天"}
-        style = style or self._pick_comic_style(group_id)
-        if style not in COMIC_STYLES:
-            return {"accepted": False, "status": "rejected", "message": "未知漫画风格"}
         try:
             await asyncio.to_thread(self._report_store.detail, group_id, day)
         except (OSError, ValueError):
@@ -3817,8 +4366,7 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             return {"accepted": False, "status": "rejected", "message": "漫画功能未启用"}
         try:
             stream_id, _ = self._webui_group(group_id)
-            if date.fromisoformat(day).isoformat() != day:
-                raise ValueError("日期需为 YYYY-MM-DD")
+            ReportStore._day(day)
         except ValueError as exc:
             return {"accepted": False, "status": "rejected", "message": str(exc)}
         entry = self._comic_book.latest(group_id, day)
@@ -3934,6 +4482,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 item = dict(topic)
                 item["detail"] = sub(item.get("detail") or "")
                 resolved["topics"].append(item)
+        if isinstance(analysis.get("topic_pool"), list):
+            resolved["topic_pool"] = [
+                {**t, "detail": sub(t.get("detail") or "")}
+                for t in analysis["topic_pool"] if isinstance(t, dict)
+            ]
         for quote in analysis.get("quotes") or []:
             if isinstance(quote, dict):
                 item = dict(quote)
@@ -3944,20 +4497,21 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         return resolved
 
     async def _comic_storyboard(self, analysis: dict, group_name: str, day: str, style: str, extra: str = "",
-                                panel_count: int = 0, has_refs: bool = False) -> dict:
+                                panel_count: int = 0, has_refs: bool = False, pad_to_count: bool = False) -> dict:
         ccfg = self._comic_cfg()
         prompt = storyboard_prompt(analysis, group_name, day, style, panel_count, has_refs=has_refs)
         if extra:
             prompt += "\n\n角色与场景设定（只影响画风与角色，不改变素材事实）：\n" + extra
         try:
             data = await self._call_llm_json(prompt,
-                                             self._cfg().analysis, task=(ccfg.llm_model_task or "").strip())
+                                             self._cfg().analysis, task=(ccfg.llm_model_task or "").strip(),
+                                             scope="comic")
         except Exception as exc:
             self.ctx.logger.warning("[comic] 分镜 LLM 调用异常，使用保底分镜: %s", type(exc).__name__)
             data = None
         if data is None:
             self.ctx.logger.info("[comic] 分镜使用话题+金句保底拼接")
-        return normalize_storyboard(data, style, analysis, group_name, panel_count)
+        return normalize_storyboard(data, style, analysis, group_name, panel_count, pad_to_count=pad_to_count)
 
     async def _comic_pipeline(self, job, stream_id: str, group_id: str, day: str, style: str) -> str:
         ccfg = self._comic_cfg()
@@ -4141,7 +4695,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     {"group_name": report_meta.get("group_name") or group_id, "style": style,
                      "request_id": request_id, "task_id": task_id,
                      "prompt": entry.get("prompt") or "", "storyboard": entry.get("storyboard") or {},
-                     "message_count": report_meta.get("message_count", 0), "version": "1.6.0"})
+                     "message_count": report_meta.get("message_count", 0), "version": "1.6.7",
+                     "window_days": report_meta.get("window_days", 1),
+                     "panel_count": report_meta.get("panel_count", 0),
+                     "selected_topics": report_meta.get("selected_topics", [])})
             except (OSError, ValueError):
                 await asyncio.to_thread(self._comic_book.update, request_id, status="completed", error="本地存档失败")
                 job["error"] = "漫画已生成但本地存档失败，请检查磁盘空间后到漫画廊「恢复进度」"
@@ -4493,6 +5050,661 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 pass
             return "failed"
 
+    def _effective_max_days(self) -> int:
+        mcfg = self._multiday_cfg()
+        try:
+            cfg_max = int(getattr(mcfg, "multi_day_max_days", 7) or 7)
+        except (TypeError, ValueError):
+            cfg_max = 7
+        retention = self._eff_retention_days()
+        return max(1, min(cfg_max, 90, retention if retention > 0 else 90))
+
+    async def _fetch_slice_from_db(self, stream_id: str, start_ts: float, end_ts: float) -> dict[str, Any]:
+        """按单天窗口独立查询一次宿主数据库，单日失败只记缺失而不拖垮整个多天任务。"""
+        empty = {"failed": True, "total": 0, "users": {}, "hours": [0] * 24,
+                 "quotes": [], "candidates": [], "chat_meta": {}}
+        try:
+            resp = await self.ctx.call_capability(
+                "message.get_by_time_in_chat",
+                chat_id=stream_id, start_time=start_ts, end_time=end_ts,
+                limit=0, filter_mai=not self._cfg().analysis.include_bot_messages, filter_command=True,
+                timeout_ms=20000,
+            )
+        except Exception as exc:
+            self.ctx.logger.warning("[weekly] 分片消息拉取失败 %s: %s", stream_id, exc)
+            return empty
+        if isinstance(resp, list):
+            messages = resp
+        elif isinstance(resp, dict):
+            if not resp.get("success"):
+                self.ctx.logger.warning("[weekly] 分片拉取返回失败 %s: %s", stream_id, str(resp)[:200])
+                return empty
+            messages = resp.get("messages", [])
+        else:
+            return empty
+        parsed = parse_day_messages(
+            messages,
+            is_notify_fn=_is_notify_message,
+            is_forward_fn=_is_forward_message,
+            display_name_fn=_display_name,
+            night_start=NIGHT_START_HOUR,
+            night_end=NIGHT_END_HOUR,
+            sample_text_max=DAILY_SAMPLE_TEXT_MAX,
+            quote_min_len=QUOTE_MIN_LEN,
+            quote_max_len=QUOTE_MAX_LEN,
+        )
+        return {"failed": False, **parsed}
+
+    async def _execute_multiday_analysis(
+        self,
+        job: dict | None,
+        stream_id: str,
+        group_id: str,
+        days: int,
+        strategy_raw: str = "",
+        report_kind: str = "multiday",
+        end_ts: float | None = None,
+    ) -> dict[str, Any]:
+        """执行多天/周报分析（C -> A -> B 硬降级链）。
+
+        返回 {"status": "ok" | "insufficient" | "fallback_daily", "context": dict, "analysis": dict, "meta": dict}。
+        """
+        mcfg = self._multiday_cfg()
+        adv = self._multiday_adv_cfg()
+        acfg = self._cfg().analysis
+        chat = self._stats.get("chats", {}).get(stream_id) or {}
+        chat_name = str(chat.get("name") or group_id or "群聊")
+
+        raw_strat = strategy_raw or mcfg.multi_day_strategy
+        req_code = normalize_strategy(raw_strat)
+        req_label = strategy_label(req_code)
+        chain = strategy_chain(req_code)
+
+        now_ts = end_ts if end_ts is not None else time.time()
+        slices = build_rolling_slices(now_ts, days)
+        win_start = datetime.fromtimestamp(slices[0]["start_ts"]).strftime("%Y-%m-%d %H:%M")
+        win_end = datetime.fromtimestamp(slices[-1]["end_ts"]).strftime("%Y-%m-%d %H:%M")
+        display_date = f"{slices[0]['day'][5:]} ~ {slices[-1]['day'][5:]}"
+        report_title = "群聊周报" if report_kind == "weekly" else f"{days} 天群聊汇总"
+
+        total_budget = int(getattr(adv, "multi_day_total_messages", 1000) or 1000)
+        per_day_cap = int(getattr(adv, "multi_day_per_day_cap", 0) or 0)
+        chunk_chars = int(getattr(adv, "chunk_max_chars", 16000) or 16000)
+        max_chunks = int(getattr(adv, "chunk_max_count", 4) or 4)
+
+        slice_cache: dict[str, dict[str, Any]] = {}
+        archive_cache: dict[str, tuple[dict, dict | None]] = {}
+        archive_probed = False
+
+        async def _probe_archives() -> None:
+            nonlocal archive_probed
+            if archive_probed:
+                return
+            archive_probed = True
+            for sl in slices:
+                d = sl["day"]
+                try:
+                    meta = await asyncio.to_thread(self._report_store.detail, group_id, d)
+                except (OSError, ValueError):
+                    continue
+                ctx = None
+                if meta.get("has_context"):
+                    try:
+                        ctx = await asyncio.to_thread(self._report_store.read_context, group_id, d)
+                    except (OSError, ValueError):
+                        ctx = None
+                archive_cache[d] = (meta, ctx)
+
+        async def _ensure_slice(sl: dict[str, Any]) -> dict[str, Any]:
+            d = sl["day"]
+            if d not in slice_cache:
+                slice_cache[d] = await self._fetch_slice_from_db(stream_id, sl["start_ts"], sl["end_ts"])
+            return slice_cache[d]
+
+        def _merge_context(
+            *,
+            use_archives: bool,
+            samples_by_day: dict[str, list[dict[str, Any]]],
+            flat_samples: list[dict[str, Any]],
+            budget_notes: list[str],
+            used_code: str,
+        ) -> tuple[dict[str, Any], list[str], list[str], int]:
+            hours = [0] * 24
+            users: dict[str, dict[str, Any]] = {}
+            total_msgs = 0
+            extra_emoji = 0
+            extra_chars = 0
+            covered_days: list[str] = []
+            missing_days: list[str] = []
+            chat_meta: dict[str, str] = {}
+
+            for sl in slices:
+                d = sl["day"]
+                if use_archives and d in archive_cache:
+                    meta, ctx = archive_cache[d]
+                    covered_days.append(d)
+                    m_cnt = int(meta.get("message_count") or 0)
+                    total_msgs += m_cnt
+                    if isinstance(ctx, dict):
+                        for h_row in (ctx.get("chart_data") or []):
+                            if isinstance(h_row, dict):
+                                h = int(h_row.get("hour", 0))
+                                if 0 <= h < 24:
+                                    hours[h] += int(h_row.get("count") or 0)
+                        for uid, u in (ctx.get("user_stats") or {}).items():
+                            if not isinstance(u, dict):
+                                continue
+                            tgt = users.setdefault(uid, {"n": str(u.get("n") or uid), "msg": 0, "char": 0,
+                                                         "sticker": 0, "night": 0, "reply": 0})
+                            tgt["n"] = str(u.get("n") or tgt["n"])
+                            for fk in ("msg", "char", "sticker", "night", "reply"):
+                                tgt[fk] += int(u.get(fk) or 0)
+                    else:
+                        extra_emoji += 0
+                        for t in ((meta.get("analysis") or {}).get("titles") or []):
+                            if isinstance(t, dict) and t.get("user_id"):
+                                uid = str(t["user_id"])
+                                users.setdefault(uid, {"n": str(t.get("name") or uid), "msg": 1, "char": 0,
+                                                     "sticker": 0, "night": 0, "reply": 0})
+                    continue
+
+                sdata = slice_cache.get(d)
+                if sdata and not sdata.get("failed") and int(sdata.get("total") or 0) > 0:
+                    covered_days.append(d)
+                    total_msgs += int(sdata["total"])
+                    for k in ("platform", "account_id", "scope"):
+                        if not chat_meta.get(k) and (sdata.get("chat_meta") or {}).get(k):
+                            chat_meta[k] = sdata["chat_meta"][k]
+                    shours = sdata.get("hours") or [0] * 24
+                    for idx_h in range(min(24, len(shours))):
+                        hours[idx_h] += int(shours[idx_h] or 0)
+                    for uid, u in (sdata.get("users") or {}).items():
+                        tgt = users.setdefault(uid, {"n": str(u.get("n") or uid), "msg": 0, "char": 0,
+                                                     "sticker": 0, "night": 0, "reply": 0})
+                        tgt["n"] = str(u.get("n") or tgt["n"])
+                        for fk in ("msg", "char", "sticker", "night", "reply"):
+                            tgt[fk] += int(u.get(fk) or 0)
+                else:
+                    missing_days.append(d)
+
+            # 更新平台上下文供后续头像拉取
+            if isinstance(chat, dict):
+                for k, v in chat_meta.items():
+                    if v and not chat.get(k):
+                        chat[k] = v
+
+            peak_hour = max(range(24), key=lambda h: hours[h]) if any(hours) else 12
+            lo, hi = max(0, peak_hour - 1), min(23, peak_hour + 1)
+            peak_max = max(1, hours[peak_hour])
+            coverage_note = format_coverage_note(slices, covered_days, missing_days)
+
+            ctx_out = {
+                "day": slices[-1]["day"],
+                "display_date": display_date,
+                "chat_name": chat_name,
+                "message_count": total_msgs,
+                "participant_count": len(users),
+                "emoji_count": sum(u.get("sticker", 0) for u in users.values()) + extra_emoji,
+                "total_characters": sum(u.get("char", 0) for u in users.values()) + extra_chars,
+                "most_active_period": f"{lo}点 ~ {hi + 1}点",
+                "chart_data": [
+                    {"hour": h, "count": c, "percentage": round(c / peak_max * 100)}
+                    for h, c in enumerate(hours)
+                ],
+                "sample": flat_samples,
+                "avatars": {
+                    uid: (QQ_AVATAR_URL_TEMPLATE.format(uid=uid) if not _is_openid(uid) else "")
+                    for uid in users
+                },
+                "user_names": {uid: _display_name(uid, u.get("n", "")) for uid, u in users.items()},
+                "user_stats": {uid: dict(u) for uid, u in users.items()},
+                "report_kind": report_kind,
+                "window_days": days,
+                "window_start": win_start,
+                "window_end": win_end,
+                "strategy_requested": req_code,
+                "strategy_requested_label": req_label,
+                "strategy_used": used_code,
+                "strategy_label": strategy_label(used_code),
+                "covered_days": covered_days,
+                "missing_days": missing_days,
+                "coverage_note": coverage_note,
+                "budget_notes": list(budget_notes),
+            }
+            return ctx_out, covered_days, missing_days, total_msgs
+
+        persona_hint = "若各天素材带有不同旧口吻，请忽略旧风格，统一用你当前设定的语气重写。"
+
+        for idx_s, strat in enumerate(chain):
+            s_label = strategy_label(strat)
+            if job is not None:
+                job["strategy_used"] = strat
+                job["strategy_label"] = s_label
+                if idx_s == 0:
+                    job["stage"] = f"策略「{s_label}」准备素材"
+                else:
+                    prev_label = strategy_label(chain[idx_s - 1])
+                    job["stage"] = f"「{prev_label}」不可用，自动切换为「{s_label}」"
+            self.ctx.logger.info("[weekly] 多天(%d天/%s) 尝试策略：%s", days, group_id, s_label)
+
+            if strat == STRATEGY_ARCHIVE_FIRST:
+                await _probe_archives()
+                if not archive_cache:
+                    self.ctx.logger.info("[weekly] 群 %s 近 %d 天无可用日报存档，降级下一策略", group_id, days)
+                    continue
+                missing_slices = [sl for sl in slices if sl["day"] not in archive_cache]
+                for sl in missing_slices:
+                    await _ensure_slice(sl)
+                alloc = allocate_multiday_samples(
+                    [{"day": sl["day"], "candidates": (slice_cache.get(sl["day"]) or {}).get("candidates") or [],
+                      "total": (slice_cache.get(sl["day"]) or {}).get("total", 0)} for sl in missing_slices],
+                    total_budget=total_budget, per_day_cap_cfg=per_day_cap,
+                    chunk_chars=chunk_chars, max_chunks=max_chunks,
+                )
+                ctx_out, covered_days, missing_days, total_msgs = _merge_context(
+                    use_archives=True,
+                    samples_by_day=alloc["samples_by_day"],
+                    flat_samples=alloc["flat_samples"],
+                    budget_notes=alloc["budget_notes"],
+                    used_code=strat,
+                )
+                if total_msgs < acfg.min_messages_threshold and not archive_cache:
+                    return {"status": "insufficient", "context": ctx_out, "analysis": {}, "meta": {}}
+                digests = []
+                extra_topics: list[dict[str, Any]] = []
+                for sl in slices:
+                    d = sl["day"]
+                    if d in archive_cache:
+                        m_meta, _ = archive_cache[d]
+                        m_ana = m_meta.get("analysis") or {}
+                        extra_topics.extend([t for t in (m_ana.get("topics") or []) if isinstance(t, dict)])
+                        q_obj = m_ana.get("quality") or {}
+                        digests.append({
+                            "day": d, "source": "archive", "message_count": m_meta.get("message_count", 0),
+                            "topics": m_ana.get("topics") or [], "titles": m_ana.get("titles") or [],
+                            "quotes": m_ana.get("quotes") or [],
+                            "summary": str(q_obj.get("summary") or "") if isinstance(q_obj, dict) else "",
+                        })
+                samples_txt = format_samples_text(alloc["flat_samples"], max_chars=chunk_chars * max_chunks) if alloc["flat_samples"] else ""
+                merge_prompt = build_multiday_merge_prompt(
+                    report_title=report_title,
+                    coverage_note=ctx_out["coverage_note"],
+                    users_text=format_users_summary_text(ctx_out["user_stats"], min_msg=1 if len(ctx_out["user_stats"]) <= 10 else 5),
+                    archive_digests=digests,
+                    samples_text=samples_txt,
+                    max_topics=acfg.max_topics,
+                    max_titles=acfg.max_user_titles,
+                    max_quotes=acfg.max_golden_quotes,
+                    enable_topics=acfg.topic_analysis_enabled,
+                    enable_titles=acfg.user_title_analysis_enabled,
+                    enable_quotes=acfg.golden_quote_analysis_enabled,
+                    enable_quality=acfg.chat_quality_analysis_enabled,
+                    persona_prefix=persona_hint,
+                )
+                if job is not None:
+                    job["stage"] = f"策略「{s_label}」合并分析中"
+                raw = await self._call_llm_json(merge_prompt, acfg, scope=report_kind)
+                norm = normalize_multiday_analysis(
+                    raw, ctx_out,
+                    max_topics=acfg.max_topics, max_titles=acfg.max_user_titles, max_quotes=acfg.max_golden_quotes,
+                    enable_topics=acfg.topic_analysis_enabled, enable_titles=acfg.user_title_analysis_enabled,
+                    enable_quotes=acfg.golden_quote_analysis_enabled, enable_quality=acfg.chat_quality_analysis_enabled,
+                    extra_topics=extra_topics,
+                )
+                if norm is not None:
+                    await self._attach_avatars(stream_id, ctx_out)
+                    return {"status": "ok", "context": ctx_out, "analysis": norm,
+                            "meta": self._build_multiday_meta(ctx_out)}
+                self.ctx.logger.warning("[weekly] 策略「%s」合并结果无效，自动降级", s_label)
+                continue
+
+            # A 与 B 共用按天分片查询与跨天配额分层
+            for sl in slices:
+                await _ensure_slice(sl)
+            slice_inputs = [
+                {"day": sl["day"], "candidates": (slice_cache.get(sl["day"]) or {}).get("candidates") or [],
+                 "total": (slice_cache.get(sl["day"]) or {}).get("total", 0)}
+                for sl in slices
+            ]
+            raw_total = sum(int((slice_cache.get(sl["day"]) or {}).get("total") or 0) for sl in slices)
+            if raw_total < acfg.min_messages_threshold:
+                ctx_empty, _, _, _ = _merge_context(
+                    use_archives=False, samples_by_day={}, flat_samples=[], budget_notes=[], used_code=strat,
+                )
+                return {"status": "insufficient", "context": ctx_empty, "analysis": {}, "meta": {}}
+
+            alloc = allocate_multiday_samples(
+                slice_inputs,
+                total_budget=total_budget, per_day_cap_cfg=per_day_cap,
+                chunk_chars=chunk_chars, max_chunks=max_chunks,
+            )
+            ctx_out, covered_days, missing_days, _ = _merge_context(
+                use_archives=False,
+                samples_by_day=alloc["samples_by_day"],
+                flat_samples=alloc["flat_samples"],
+                budget_notes=alloc["budget_notes"],
+                used_code=strat,
+            )
+
+            if strat == STRATEGY_PER_DAY_SUMMARY:
+                day_digests: list[dict[str, Any]] = []
+                extra_topics = []
+                active_days_list = [sl["day"] for sl in slices if alloc["samples_by_day"].get(sl["day"])]
+                if not active_days_list:
+                    continue
+
+                async def _one_day(day_key: str) -> dict[str, Any] | None:
+                    day_samples = alloc["samples_by_day"].get(day_key) or []
+                    day_users = (slice_cache.get(day_key) or {}).get("users") or {}
+                    p = build_day_digest_prompt(
+                        day_key,
+                        format_samples_text(day_samples, max_chars=chunk_chars),
+                        format_users_summary_text(day_users, min_msg=1, limit=20),
+                    )
+                    res = await self._call_llm_json(p, acfg, scope=report_kind)
+                    if not isinstance(res, dict):
+                        return None
+                    return {
+                        "day": day_key,
+                        "source": "per_day",
+                        "message_count": (slice_cache.get(day_key) or {}).get("total", len(day_samples)),
+                        "topics": res.get("topics") or [],
+                        "quotes": res.get("quotes") or [],
+                        "summary": str(res.get("summary") or ""),
+                    }
+
+                if job is not None:
+                    job["stage"] = f"策略「{s_label}」按天提炼中（共 {len(active_days_list)} 天）"
+                digest_results = await asyncio.gather(*(_one_day(d) for d in active_days_list), return_exceptions=True)
+                for item in digest_results:
+                    if isinstance(item, dict):
+                        day_digests.append(item)
+                        extra_topics.extend([t for t in (item.get("topics") or []) if isinstance(t, dict)])
+                if not day_digests:
+                    self.ctx.logger.warning("[weekly] 策略「%s」单日提炼全部失败，自动降级", s_label)
+                    continue
+                if job is not None:
+                    job["stage"] = f"策略「{s_label}」合并汇总中"
+                merge_prompt = build_multiday_merge_prompt(
+                    report_title=report_title,
+                    coverage_note=ctx_out["coverage_note"],
+                    users_text=format_users_summary_text(ctx_out["user_stats"], min_msg=1 if len(ctx_out["user_stats"]) <= 10 else 5),
+                    archive_digests=day_digests,
+                    samples_text="",
+                    max_topics=acfg.max_topics,
+                    max_titles=acfg.max_user_titles,
+                    max_quotes=acfg.max_golden_quotes,
+                    enable_topics=acfg.topic_analysis_enabled,
+                    enable_titles=acfg.user_title_analysis_enabled,
+                    enable_quotes=acfg.golden_quote_analysis_enabled,
+                    enable_quality=acfg.chat_quality_analysis_enabled,
+                    persona_prefix=persona_hint,
+                )
+                raw = await self._call_llm_json(merge_prompt, acfg, scope=report_kind)
+                norm = normalize_multiday_analysis(
+                    raw, ctx_out,
+                    max_topics=acfg.max_topics, max_titles=acfg.max_user_titles, max_quotes=acfg.max_golden_quotes,
+                    enable_topics=acfg.topic_analysis_enabled, enable_titles=acfg.user_title_analysis_enabled,
+                    enable_quotes=acfg.golden_quote_analysis_enabled, enable_quality=acfg.chat_quality_analysis_enabled,
+                    extra_topics=extra_topics,
+                )
+                if norm is not None:
+                    await self._attach_avatars(stream_id, ctx_out)
+                    return {"status": "ok", "context": ctx_out, "analysis": norm,
+                            "meta": self._build_multiday_meta(ctx_out)}
+                self.ctx.logger.warning("[weekly] 策略「%s」最终合并失败，自动降级", s_label)
+                continue
+
+            # B: 分层抽样一次主分析
+            if not alloc["flat_samples"]:
+                continue
+            if job is not None:
+                job["stage"] = f"策略「{s_label}」主分析中"
+            samples_txt = format_samples_text(alloc["flat_samples"], max_chars=chunk_chars * max_chunks)
+            merge_prompt = build_multiday_merge_prompt(
+                report_title=report_title,
+                coverage_note=ctx_out["coverage_note"],
+                users_text=format_users_summary_text(ctx_out["user_stats"], min_msg=1 if len(ctx_out["user_stats"]) <= 10 else 5),
+                archive_digests=None,
+                samples_text=samples_txt,
+                max_topics=acfg.max_topics,
+                max_titles=acfg.max_user_titles,
+                max_quotes=acfg.max_golden_quotes,
+                enable_topics=acfg.topic_analysis_enabled,
+                enable_titles=acfg.user_title_analysis_enabled,
+                enable_quotes=acfg.golden_quote_analysis_enabled,
+                enable_quality=acfg.chat_quality_analysis_enabled,
+                persona_prefix=persona_hint,
+            )
+            raw = await self._call_llm_json(merge_prompt, acfg, scope=report_kind)
+            norm = normalize_multiday_analysis(
+                raw, ctx_out,
+                max_topics=acfg.max_topics, max_titles=acfg.max_user_titles, max_quotes=acfg.max_golden_quotes,
+                enable_topics=acfg.topic_analysis_enabled, enable_titles=acfg.user_title_analysis_enabled,
+                enable_quotes=acfg.golden_quote_analysis_enabled, enable_quality=acfg.chat_quality_analysis_enabled,
+            )
+            if norm is not None:
+                await self._attach_avatars(stream_id, ctx_out)
+                return {"status": "ok", "context": ctx_out, "analysis": norm,
+                        "meta": self._build_multiday_meta(ctx_out)}
+
+        return {"status": "fallback_daily", "context": {}, "analysis": {}, "meta": {}}
+
+    @staticmethod
+    def _build_multiday_meta(ctx_out: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: ctx_out[key]
+            for key in (
+                "report_kind", "window_days", "window_start", "window_end",
+                "strategy_requested", "strategy_used", "strategy_label",
+                "covered_days", "missing_days", "coverage_note", "budget_notes",
+            )
+            if key in ctx_out
+        }
+
+    async def _generate_multiday_and_send(
+        self,
+        job: dict | None,
+        stream_id: str,
+        group_id: str,
+        days: int,
+        theme: str,
+        strategy_raw: str = "",
+        report_kind: str = "multiday",
+        mark_sent: bool = False,
+    ) -> str:
+        """生成并发送多天报告/周报；若多天策略全部失败则自动退回 1 天日报。"""
+        started = time.monotonic()
+        today = date.today().isoformat()
+        slot_day = f"{today}~weekly" if report_kind == "weekly" else f"{today}~{days}d"
+        res = await self._execute_multiday_analysis(
+            job, stream_id, group_id, days, strategy_raw=strategy_raw, report_kind=report_kind,
+        )
+        status = res["status"]
+        if status == "insufficient":
+            return "insufficient"
+        if status == "fallback_daily":
+            if job is not None:
+                job["strategy_used"] = "fallback_1d"
+                job["strategy_label"] = "退回 1 天日报"
+                job["stage"] = "多天策略均失败，自动退回 1 天日报"
+            self.ctx.logger.warning("[weekly] 群 %s 多天策略均失败，退回 1 天日报", group_id)
+            await self._rebuild_day_from_db(stream_id, today)
+            return await self._generate_daily_and_send(stream_id, today, theme, mark_sent=mark_sent)
+
+        context = res["context"]
+        analysis = res["analysis"]
+        extra_meta = res["meta"]
+        acfg = self._cfg().analysis
+
+        try:
+            await self._prefetch_profile_images(analysis.get("titles") or [])
+        except Exception as exc:
+            self.ctx.logger.warning("[weekly] 多天报告人格水印图预取失败: %s", exc)
+
+        if job is not None:
+            job["stage"] = f"策略「{context['strategy_label']}」渲染并发送"
+
+        html_raw = self._render_daily(context, analysis, theme)
+        html_text = self._inline_static_assets(await self._inline_avatars(html_raw, context))
+        if str(getattr(acfg, "output_format", "image") or "image").strip().lower() == "html":
+            await self._archive_report(stream_id, slot_day, theme, context, analysis, "", html_text, started, extra_meta)
+            if await self._send_daily_html(stream_id, context, html_text, slot_day):
+                _chat0 = self._stats.get("chats", {}).get(stream_id)
+                if mark_sent and isinstance(_chat0, dict):
+                    _chat0["last_daily"] = today
+                    self._dirty = True
+                return "ok"
+
+        lite_raw = self._render_daily(context, analysis, theme, max_items=(4, 4, 3))
+        html_lite = self._inline_static_assets(await self._inline_avatars(lite_raw, context))
+        image, html_text = await self._render_report_image(html_text, html_lite, acfg)
+        await self._archive_report(stream_id, slot_day, theme, context, analysis, image, html_text, started, extra_meta)
+
+        caption = f"📊 {context.get('chat_name', '群聊')} {'周报' if report_kind == 'weekly' else f'{days}天总结'}已生成（{context.get('coverage_note', '')}）"
+        try:
+            if acfg.show_report_caption:
+                await self.ctx.send.text(caption, stream_id)
+            await self.ctx.send.image(image, stream_id)
+            _chat = self._stats.get("chats", {}).get(stream_id)
+            if mark_sent and isinstance(_chat, dict):
+                _chat["last_daily"] = today
+                self._dirty = True
+            try:
+                _gid = str((self._stats.get("chats", {}).get(stream_id) or {}).get("group_id") or group_id)
+                stem_kind = "周报" if report_kind == "weekly" else f"{days}天报告"
+                await self._upload_report_to_album(
+                    stream_id, _gid, image, stem=self._album_file_stem(stream_id, stem_kind, today),
+                )
+            except Exception as _exc:
+                self.ctx.logger.warning("[weekly] 多天报告相册上传异常: %s", _exc)
+            return "ok"
+        except Exception as exc:
+            brief = str(exc)[:100] or type(exc).__name__
+            self.ctx.logger.warning("[weekly] 多天报告发送失败: %s", brief)
+            try:
+                await self.ctx.send.text(f"报告图片发送失败了……（{brief}）", stream_id)
+            except Exception:
+                pass
+            return "failed"
+
+    async def _multiday_comic_pipeline(
+        self, job, stream_id: str, group_id: str, days: int, style: str, slot_day: str = ""
+    ) -> str:
+        """多天漫画管线：优先复用当日对应多天/周报存档话题池；不足 K 格自动保底补位。"""
+        ccfg = self._comic_cfg()
+        client = DrawpicClient(self.ctx.api)
+        state = {"request_id": "", "task_id": ""}
+        today = date.today().isoformat()
+        target_slot = slot_day or f"{today}~{days}d"
+        panel_count = self._eff_storyboard_panels(style)
+        try:
+            job["stage"] = "获取多天话题池"
+            meta = None
+            candidate_slots = [target_slot]
+            if days == 7 and f"{today}~weekly" not in candidate_slots:
+                candidate_slots.append(f"{today}~weekly")
+            for cand_slot in candidate_slots:
+                try:
+                    meta = await asyncio.to_thread(self._report_store.detail, group_id, cand_slot)
+                    break
+                except (OSError, ValueError):
+                    meta = None
+
+            if meta is not None:
+                analysis = meta.get("analysis") or {}
+                group_name = str(meta.get("group_name") or group_id)
+                msg_count = int(meta.get("message_count") or 0)
+                if meta.get("has_context"):
+                    try:
+                        context = await asyncio.to_thread(self._report_store.read_context, group_id, meta["day"])
+                        analysis = self._resolve_analysis_names(analysis, context.get("user_names") or {})
+                    except (OSError, ValueError):
+                        pass
+            else:
+                res = await self._execute_multiday_analysis(
+                    job, stream_id, group_id, days, report_kind="multiday",
+                )
+                if res["status"] == "insufficient":
+                    job["error"] = f"近 {days} 天消息不足，暂无法生成漫画"
+                    return "insufficient"
+                if res["status"] == "fallback_daily":
+                    job["error"] = "多天话题汇总失败，无法生成多天漫画"
+                    return "failed"
+                context = res["context"]
+                analysis = self._resolve_analysis_names(res["analysis"], context.get("user_names") or {})
+                group_name = str(context.get("chat_name") or group_id)
+                msg_count = int(context.get("message_count") or 0)
+
+            top_topics = select_window_topics(analysis, panel_count)
+            comic_analysis = dict(analysis)
+            if top_topics:
+                comic_analysis["topics"] = top_topics
+            selected_names = [str(t.get("topic") or "") for t in top_topics if isinstance(t, dict) and t.get("topic")]
+
+            character = self._active_character(group_id)
+            extra = ""
+            if character:
+                persona_part = character.get("persona") or ""
+                if character.get("live"):
+                    persona_part = await self._live_persona_text() or persona_part
+                extra = "\n".join(part for part in (persona_part, character.get("scene_prompt")) if part)
+            ref_ids: list[str] = []
+            source_images: list[str] = []
+            if character and character.get("ref_ids"):
+                job["stage"] = "读取角色参考图"
+                ref_ids, source_images = await asyncio.to_thread(self._load_ref_images, character["ref_ids"])
+            elif ccfg.use_reference_images:
+                job["stage"] = "读取参考图"
+                ref_ids, source_images = await asyncio.to_thread(self._load_ref_images)
+
+            job["stage"] = f"生成 {panel_count} 格多天分镜脚本"
+            storyboard = await self._comic_storyboard(
+                comic_analysis, group_name, target_slot, style, extra,
+                panel_count=panel_count, has_refs=bool(source_images), pad_to_count=True,
+            )
+            prompt = build_draw_prompt(
+                storyboard, style, group_name, target_slot, with_refs=bool(source_images), panel_count=panel_count,
+            )
+            task_type = "edit_image" if source_images else "draw"
+            job["stage"] = "提交绘图任务"
+            request_id = new_request_id()
+            state["request_id"] = request_id
+            await asyncio.to_thread(
+                self._comic_book.record, request_id, group_id, target_slot, style, prompt,
+                group_name, ccfg.model.strip(), ccfg.drawpic_style.strip(), task_type, ref_ids, storyboard,
+            )
+            try:
+                result = await client.submit(
+                    prompt, request_id, model=ccfg.model.strip(), style=ccfg.drawpic_style.strip(),
+                    task_type=task_type, source_images=source_images or None,
+                )
+            except DrawpicError as exc:
+                if exc.code == "RPC_FAILED":
+                    await asyncio.to_thread(self._comic_book.update, request_id, status="unknown",
+                                            error=f"提交回执未知，可恢复进度（{exc.message}）"[:300])
+                    job["error"] = f"绘图接口无回执；请求键已保留，请到漫画廊「恢复进度」查证（{exc.message}）"[:300]
+                else:
+                    await asyncio.to_thread(self._comic_book.update, request_id, status="not_accepted",
+                                            error=f"{exc.code}: {exc.message}"[:300])
+                    job["error"] = f"绘图任务未受理（{exc.code}）：{exc.message}"[:300]
+                return "failed"
+            state["task_id"] = str(result.get("task_id") or "")
+            await asyncio.to_thread(self._comic_book.update, request_id, task_id=state["task_id"], status="running")
+            report_meta_for_save = {
+                "group_name": group_name,
+                "message_count": msg_count,
+                "window_days": days,
+                "panel_count": panel_count,
+                "selected_topics": selected_names,
+            }
+            return await self._comic_wait_and_save(
+                job, client, state, stream_id, group_id, target_slot, style, report_meta_for_save,
+            )
+        except asyncio.CancelledError:
+            await self._comic_cancel_cleanup(client, state)
+            raise
+
     def _prune_stale_streams(self) -> tuple[int, int]:
         """清理无用的历史 stream，返回 (清理总数, 其中属于同群重复的套数)。
 
@@ -4566,8 +5778,30 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         total = int((days.get(last_day) or {}).get("total") or 0)
         return (last_day, total)
 
+    def _is_scheduled_weekly_day(self, d: date) -> bool:
+        mcfg = self._multiday_cfg()
+        if not (mcfg.multi_day_enabled and mcfg.weekly_enabled):
+            return False
+        try:
+            return d.weekday() == parse_weekday(mcfg.weekly_day)
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _weekly_schedule(now: datetime, target_weekday: int, hour: int, minute: int) -> tuple[datetime, bool]:
+        """返回 (下次周报触发时刻, 今天是否为周报日且定时点已过应补发)。"""
+        days_ahead = (target_weekday - now.weekday()) % 7
+        candidate = (now + timedelta(days=days_ahead)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if days_ahead == 0 and now >= candidate:
+            return candidate + timedelta(days=7), True
+        return candidate, False
+
     async def _generate_daily_all(self) -> None:
-        today = date.today().strftime("%Y-%m-%d")
+        today_date = date.today()
+        if self._is_scheduled_weekly_day(today_date):
+            self.ctx.logger.info("[weekly] 今日为定时周报日，跳过定时日报（由定时周报替代）")
+            return
+        today = today_date.strftime("%Y-%m-%d")
         # 每次批量生成前顺手清理历史遗留的重复/过期 stream
         try:
             _rm, _dup = self._prune_stale_streams()
@@ -4653,23 +5887,126 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                                 today, cfg.daily_report_hour, cfg.daily_report_minute)
                         await self._generate_daily_all()
                         target, _ = self._daily_schedule(datetime.now(), cfg.daily_report_hour, cfg.daily_report_minute)
-                    delay = (target - now).total_seconds()
+                    delay = max(1.0, (target - now).total_seconds())
                     self.ctx.logger.info(
                         "[weekly] 下次自动日报: %s（%.1f 小时后）",
                         target.strftime("%m-%d %H:%M"),
                         delay / 3600,
                     )
-                    slept = 0.0
-                    while slept < delay:
-                        step = min(300.0, delay - slept)
-                        await asyncio.sleep(step)
-                        slept += step
+                    await self._sleep_or_wakeup(delay)
                 else:
-                    await asyncio.sleep(300)
+                    await self._sleep_or_wakeup(300)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self.ctx.logger.warning("[weekly] 日报定时任务异常: %s", exc)
+                await asyncio.sleep(600)
+
+    async def _generate_weekly_all(self) -> None:
+        mcfg = self._multiday_cfg()
+        if not (mcfg.multi_day_enabled and mcfg.weekly_enabled):
+            return
+        today = date.today().strftime("%Y-%m-%d")
+        try:
+            self._prune_stale_streams()
+        except Exception as exc:
+            self.ctx.logger.warning("[weekly] 周报前清理历史 stream 失败（不影响生成）: %s", exc)
+        whitelist = self._whitelist_ids()
+        daily_groups = self._daily_report_group_ids()
+        best: dict[str, tuple[str, dict]] = {}
+        for stream_id, chat in list(self._stats.get("chats", {}).items()):
+            if not isinstance(chat, dict):
+                continue
+            gid = str(chat.get("group_id") or "")
+            if not gid:
+                continue
+            if whitelist is not None and gid not in whitelist:
+                continue
+            if daily_groups is not None and gid not in daily_groups:
+                continue
+            prev = best.get(gid)
+            if prev is None or self._stream_freshness(chat) > self._stream_freshness(prev[1]):
+                best[gid] = (stream_id, chat)
+
+        eff_strat = "" if mcfg.weekly_strategy == "跟随多天默认" else mcfg.weekly_strategy
+        for gid, (stream_id, chat) in best.items():
+            if chat.get("last_weekly") == today:
+                continue
+            if self._jobs.active_for(gid) is not None:
+                self.ctx.logger.info("[weekly] 群 %s 已有任务在进行，本轮定时周报跳过", gid)
+                continue
+            theme = self._theme_for_group(gid)
+            weekly_ok = False
+            try:
+                async def generate_weekly(job, _sid=stream_id, _gid=gid, _theme=theme, _strat=eff_strat):
+                    return await self._generate_multiday_and_send(
+                        job, _sid, _gid, 7, _theme,
+                        strategy_raw=_strat, report_kind="weekly", mark_sent=False,
+                    )
+
+                result = self._jobs.submit("weekly", gid, f"{today}~weekly", generate_weekly, source="schedule")
+                if result["accepted"]:
+                    job = await self._jobs.wait(result["job_id"])
+                    if job is not None and job["status"] == "succeeded":
+                        weekly_ok = True
+                        chat["last_weekly"] = today
+                        chat["last_daily"] = today  # 周报替代当日日报
+                        self._dirty = True
+            except Exception as exc:
+                self.ctx.logger.warning("[weekly] 群 %s 定时周报异常: %s", stream_id, exc)
+
+            if not weekly_ok and chat.get("last_daily") != today:
+                self.ctx.logger.warning("[weekly] 群 %s 定时周报未完成，自动补发当日日报", gid)
+                try:
+                    async def fallback_daily(job, _sid=stream_id, _theme=theme):
+                        job["stage"] = "周报失败，补发当日日报（重建统计）"
+                        await self._rebuild_day_from_db(_sid, today)
+                        job["stage"] = "周报失败，补发当日日报（渲染发送）"
+                        return await self._generate_daily_and_send(_sid, today, _theme, mark_sent=True)
+
+                    fb_res = self._jobs.submit("report", gid, today, fallback_daily, source="schedule")
+                    if fb_res["accepted"]:
+                        fb_job = await self._jobs.wait(fb_res["job_id"])
+                        if fb_job is not None and fb_job["status"] == "succeeded":
+                            chat["last_daily"] = today
+                            self._dirty = True
+                except Exception as exc:
+                    self.ctx.logger.warning("[weekly] 群 %s 补发日报失败: %s", gid, exc)
+
+            if self._cfg().analysis.stagger_seconds:
+                await asyncio.sleep(self._cfg().analysis.stagger_seconds)
+        self._save_stats()
+
+    async def _weekly_loop(self) -> None:
+        last_run_date = ""
+        while True:
+            try:
+                mcfg = self._multiday_cfg()
+                if mcfg.multi_day_enabled and mcfg.weekly_enabled:
+                    now = datetime.now()
+                    today = now.strftime("%Y-%m-%d")
+                    wday = parse_weekday(mcfg.weekly_day)
+                    wh, wm = parse_hhmm(mcfg.weekly_time)
+                    target, due_now = self._weekly_schedule(now, wday, wh, wm)
+                    if due_now and last_run_date != today:
+                        last_run_date = today
+                        self.ctx.logger.info("[weekly] 触发定时周报（%s %02d:%02d）", mcfg.weekly_day, wh, wm)
+                        await self._generate_weekly_all()
+                        now = datetime.now()
+                        target, _ = self._weekly_schedule(now, wday, wh, wm)
+                    delay = max(1.0, (target - now).total_seconds())
+                    self.ctx.logger.info(
+                        "[weekly] 下次定时周报: %s（%.1f 小时后）",
+                        target.strftime("%m-%d %H:%M"),
+                        delay / 3600,
+                    )
+                    await self._sleep_or_wakeup(delay)
+                else:
+                    await self._sleep_or_wakeup(300)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.ctx.logger.warning("[weekly] 周报定时任务异常: %s", exc)
                 await asyncio.sleep(600)
 
     # ------------------------------------------------------------------ 手动命令
@@ -4697,12 +6034,17 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                     messages[day] += int(bucket.get("total") or 0)
         catalog = await asyncio.to_thread(self._report_store._catalog)
         reports = {day: 0 for day in days}
+        by_kind = {"daily": 0, "multiday": 0, "weekly": 0}
         for row in catalog:
-            if row["day"] in reports:
-                reports[row["day"]] += 1
+            bday = row["day"][:10]
+            if bday in reports:
+                reports[bday] += 1
+                rk = str(row.get("report_kind") or "daily")
+                by_kind[rk if rk in by_kind else "daily"] += 1
         return {"range_days": range_days,
                 "days": [{"day": day, "messages": messages[day], "reports": reports[day]} for day in days],
-                "total_messages": sum(messages.values()), "total_reports": sum(reports.values())}
+                "total_messages": sum(messages.values()), "total_reports": sum(reports.values()),
+                "by_kind": by_kind}
 
     def _load_llm_usage(self) -> list[dict]:
         try:
@@ -4711,10 +6053,11 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         except (OSError, ValueError):
             return []
 
-    def _record_llm_usage(self, resp, task: str, seconds: float) -> None:
+    def _record_llm_usage(self, resp, task: str, seconds: float, scope: str = "daily") -> None:
         if not isinstance(resp, dict):
             return
         entry = {"ts": datetime.now().isoformat(timespec="seconds"), "source": "plugin",
+                 "scope": scope or "daily",
                  "task": task or "auto", "model": str(resp.get("model_name") or ""),
                  "prompt_tokens": int(resp.get("prompt_tokens") or 0),
                  "completion_tokens": int(resp.get("completion_tokens") or 0),
@@ -4740,6 +6083,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         buckets = {day: {"prompt": 0, "completion": 0, "total": 0, "requests": 0} for day in days}
         model_tokens: dict[str, int] = {}
         task_tokens: dict[str, int] = {}
+        scope_tokens: dict[str, int] = {}
+        scope_names = {"daily": "日常日报", "multiday": "多天汇总", "weekly": "群聊周报", "comic": "群聊漫画"}
         for r in rows:
             day = str(r.get("ts") or "")[:10]
             if day not in buckets:
@@ -4754,6 +6099,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             model_tokens[model] = model_tokens.get(model, 0) + total
             task = str(r.get("task") or "auto")
             task_tokens[task] = task_tokens.get(task, 0) + total
+            sc = str(r.get("scope") or "daily")
+            sc_label = scope_names.get(sc, "日常日报")
+            scope_tokens[sc_label] = scope_tokens.get(sc_label, 0) + total
         out = {"available": True, "range_days": range_days,
                "trend": {"timestamps": days,
                          "total": [buckets[d]["total"] for d in days],
@@ -4763,7 +6111,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                          "sum_total": sum(b["total"] for b in buckets.values())},
                "model_pie": [{"name": k, "value": v} for k, v in sorted(model_tokens.items(), key=lambda kv: -kv[1])],
                "module_pie": [{"name": k, "value": v} for k, v in sorted(task_tokens.items(), key=lambda kv: -kv[1])],
-               "cost_available": False, "cost_total": None, "cost_pie": [],
+               "scope_pie": [{"name": k, "value": v} for k, v in sorted(scope_tokens.items(), key=lambda kv: -kv[1])],
+               "cost_available": False, "cost_total": None, "cost_pie": [], "cost_by_scope": [],
                "tasks": [], "cards": {}}
         # 花费读宿主逐次计费结果（宿主按模型配置单价计算，含分时/缓存价），request_type 过滤出本插件；
         # limit 2000 远大于本插件 30 天窗口内的调用量，超出时丢弃最旧记录
@@ -4785,6 +6134,12 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             out["cost_total"] = round(sum(cost_by_model.values()), 6)
             out["cost_pie"] = [{"name": k, "value": round(v, 6)}
                                for k, v in sorted(cost_by_model.items(), key=lambda kv: -kv[1]) if v > 0]
+            scope_sum = sum(scope_tokens.values())
+            if out["cost_total"] and scope_sum > 0:
+                out["cost_by_scope"] = [
+                    {"name": k, "value": round(out["cost_total"] * v / scope_sum, 6)}
+                    for k, v in sorted(scope_tokens.items(), key=lambda kv: -kv[1]) if v > 0
+                ]
         today = date.today().isoformat()
         todays = [r for r in rows if str(r.get("ts") or "").startswith(today)]
         bytask: dict[str, dict] = {}
@@ -4811,7 +6166,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
 
     @API("events", version="1")
     async def webui_events(self, limit: int = 50) -> dict:
-        kind_names = {"report": "日报", "comic": "漫画", "resend": "重发", "rerender": "重渲染", "task": "任务"}
+        kind_names = {
+            "report": "日报", "multiday": "多天报告", "weekly": "周报",
+            "comic": "漫画", "resend": "重发", "rerender": "重渲染", "task": "任务",
+        }
 
         def fmt_time(value) -> str:
             return str(value or "").replace("T", " ")[:19]
@@ -4822,9 +6180,9 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         events = []
         for job in self._jobs.snapshot():
             kind = str(job.get("kind") or "task")
-            if kind == "report" and job.get("status") == "succeeded" \
+            if kind in ("report", "multiday", "weekly") and job.get("status") == "succeeded" \
                     and (job.get("group_id"), job.get("day")) in catalog_keys:
-                continue  # 成功日报已有存档条目，不重复展示
+                continue  # 成功报告已有存档条目，不重复展示
             name = str((chats.get(str(job.get("group_id") or "")) or {}).get("name")
                        or job.get("group_id") or "未知群")
             title = f"{kind_names.get(kind, kind)} · {name} · {job.get('day') or ''}"
@@ -4832,8 +6190,10 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                            "kind": kind_names.get(kind, kind),
                            "label": title, "status": job.get("status") or ""})
         for row in catalog[:100]:
-            events.append({"time": fmt_time(row.get("created_at")), "kind": "日报",
-                           "label": f"报告 · {row.get('group_name') or row.get('group_id')} · {row.get('day')}",
+            rk = str(row.get("report_kind") or "daily")
+            rk_label = {"weekly": "周报", "multiday": "多天报告"}.get(rk, "日报")
+            events.append({"time": fmt_time(row.get("created_at")), "kind": rk_label,
+                           "label": f"{rk_label} · {row.get('group_name') or row.get('group_id')} · {row.get('day')}",
                            "status": "completed"})
         events.sort(key=lambda e: str(e["time"]), reverse=True)
         return {"events": events[:max(1, min(int(limit), 100))]}
@@ -4980,8 +6340,21 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         def clean(value) -> str:
             return re.sub(r"\[(\d+)\]", lambda m: names.get(m.group(1)) or "群友", str(value or ""))
 
-        lines = [f"# 群 {meta.get('group_name') or gid} 日报 {day}",
-                 f"消息数 {meta.get('message_count', '—')} · 主题 {meta.get('theme', '—')}"]
+        kind = str(meta.get("report_kind") or "daily")
+        if kind == "weekly":
+            kind_title = "周报"
+        elif kind == "multiday":
+            kind_title = f"{int(meta.get('window_days') or 1)}天汇总"
+        else:
+            kind_title = "日报"
+        head_day = ReportStore.base_day(day)
+        info_parts = [f"消息数 {meta.get('message_count', '—')}", f"主题 {meta.get('theme', '—')}"]
+        if meta.get("coverage_note"):
+            info_parts.append(str(meta["coverage_note"]))
+        if meta.get("strategy_label"):
+            info_parts.append(f"策略 {meta['strategy_label']}")
+        lines = [f"# 群 {meta.get('group_name') or gid} {kind_title} {head_day}",
+                 " · ".join(info_parts)]
         topics = [t for t in analysis.get("topics") or [] if isinstance(t, dict)]
         if topics:
             lines.append("## 话题")
@@ -4997,19 +6370,31 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         return "\n".join(lines)[:40000]
 
     @Tool("group_daily_report_lookup",
-          description="读取群聊日报历史存档（只读、不消耗模型额度）。支持自然语言日期与群名/群号；返回紧凑 Markdown。",
+          description="读取群聊日报、多天汇总与周报历史存档（只读、不消耗模型额度）。支持自然语言日期或「周报」「多天」关键词及群名/群号；返回紧凑 Markdown。",
           parameters={
               "group": {"type": "string", "description": "群号或群名关键词；群聊中留空表示本群"},
-              "date": {"type": "string", "description": "今天/昨天/前天/N天前/YYYY-MM-DD；留空=今天，自动回滑到最近一份存档"},
+              "date": {"type": "string", "description": "周报/多天/今天/昨天/前天/N天前/YYYY-MM-DD；留空=今天，自动回滑到最近一份存档"},
           })
     async def tool_get_report(self, group: str = "", date: str = "", **kwargs: Any) -> str:
+        if not self._multiday_cfg().llm_tools_enabled:
+            return "自然语言报告工具已在插件设置中关闭，请使用 /日报、/周报 命令或网页报告库。"
         gid = self._tool_resolve_group(group, kwargs)
         if not gid:
             return "未找到匹配的群，请提供群号或更准确的群名。"
-        target = self._tool_resolve_day(date)
-        listing = await asyncio.to_thread(self._report_store.list_reports, gid, "", target, 1, 1)
-        if not listing["items"]:
-            return f"群 {gid} 在 {target} 及之前没有日报存档。"
+        raw_date = (date or "").strip()
+        if "周报" in raw_date or "本周" in raw_date or "上周" in raw_date:
+            listing = await asyncio.to_thread(self._report_store.list_reports, gid, "", "", 1, 1, "", "weekly")
+            if not listing["items"]:
+                return f"群 {gid} 暂无周报存档。"
+        elif "多天" in raw_date or "汇总" in raw_date:
+            listing = await asyncio.to_thread(self._report_store.list_reports, gid, "", "", 1, 1, "", "multiday")
+            if not listing["items"]:
+                return f"群 {gid} 暂无多天汇总存档。"
+        else:
+            target = self._tool_resolve_day(raw_date)
+            listing = await asyncio.to_thread(self._report_store.list_reports, gid, "", target, 1, 1)
+            if not listing["items"]:
+                return f"群 {gid} 在 {target} 及之前没有日报存档。"
         day = listing["items"][0]["day"]
         meta = await asyncio.to_thread(self._report_store.detail, gid, day)
         return self._report_markdown(meta, gid, day)
@@ -5018,6 +6403,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
           description="管理员异步触发本群日报生成：受理即返回凭证，后台完成后自动发群。普通成员请改用 group_daily_report_lookup。",
           parameters={})
     async def tool_trigger(self, **kwargs: Any) -> str:
+        if not self._multiday_cfg().llm_tools_enabled:
+            return "自然语言报告工具已在插件设置中关闭，请使用 /日报、/周报 命令或网页报告库。"
         stream_id = str(kwargs.get("stream_id") or "")
         if not stream_id:
             return "找不到当前会话，请在群聊中使用。"
@@ -5047,7 +6434,8 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
             return result["message"]
         return f"已受理：群 {gid or stream_id} {day} 日报生成中（job {result['job_id']}），完成后自动发群。"
 
-    @Command("daily_report", description="手动生成本群日报，可带主题名，如 /日报 scrapbook", pattern=r"(?<!\S)/?日报(?:\s+(?P<theme>\S+))?\s*$")
+    @Command("daily_report", description="手动生成本群日报或多天报告，如 /日报、/日报 7、/日报 scrapbook、/日报 7 scrapbook",
+             pattern=r"(?<!\S)/?日报(?:\s+(?P<args>.+?))?\s*$")
     async def cmd_daily_report(self, **kwargs: Any) -> tuple[bool, str, bool]:
         stream_id = str(kwargs.get("stream_id") or "")
         if not stream_id:
@@ -5060,51 +6448,164 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
                 await self.ctx.send.text("本命令仅管理员可用（管理员名单在插件设置的命令管理员里配置）", stream_id)
                 return True, "非管理员", True
 
-        whitelist = self._whitelist_ids()
-        if whitelist is not None:
-            message = kwargs.get("message", {})
-            gid = ""
-            if isinstance(message, dict):
-                group_info = message.get("message_info", {}).get("group_info") or {}
-                gid = str(group_info.get("group_id") or "")
-            if gid not in whitelist:
-                await self.ctx.send.text("本群不在白名单中（可在插件设置的群白名单里添加，每行一个群号）", stream_id)
-                return True, "不在白名单", True
-
-        day = date.today().strftime("%Y-%m-%d")
-        # 手动触发也按「生成时刻往前 24h」重建统计桶（跨天口径，对齐 AstrBot）
-        await self._rebuild_day_from_db(stream_id, day)
-        total = self._day_total(stream_id, day)
-        _min_msgs = self._cfg().analysis.min_messages_threshold
-        if total < _min_msgs:
-            await self.ctx.send.text(
-                f"本群过去 24 小时只有 {total} 条消息（不足 {_min_msgs} 条），先多聊聊再来～", stream_id)
-            return True, "数据不足", True
-
-        theme_arg = str((kwargs.get("matched_groups") or {}).get("theme") or "").strip().lower()
-        if theme_arg and theme_arg not in THEME_REGISTRY:
-            await self.ctx.send.text(
-                f"没有主题「{theme_arg}」，可用：{'、'.join(THEME_REGISTRY)}", stream_id)
-            return True, "未知主题", True
-        # 主题优先级：命令显式指定 > 该群「按群指定主题」> 全局默认主题
         _gid = ""
         _msg = kwargs.get("message", {})
         if isinstance(_msg, dict):
             _gid = str((_msg.get("message_info", {}).get("group_info") or {}).get("group_id") or "")
+        whitelist = self._whitelist_ids()
+        if whitelist is not None and _gid not in whitelist:
+            await self.ctx.send.text("本群不在白名单中（可在插件设置的群白名单里添加，每行一个群号）", stream_id)
+            return True, "不在白名单", True
+
+        matched = kwargs.get("matched_groups") or {}
+        raw_args = str(matched.get("args") or matched.get("theme") or "").strip()
+        tokens = raw_args.split() if raw_args else []
+        if len(tokens) > 2:
+            await self.ctx.send.text(
+                "参数过多，请使用 /日报 [天数] [主题]；不支持命令单次覆盖策略或发送选项，请在插件设置中调整。",
+                stream_id,
+            )
+            return True, "参数过多", True
+
+        days = 1
+        theme_arg = ""
+        seen_days = False
+        for tok in tokens:
+            if tok.isdigit():
+                if seen_days:
+                    await self.ctx.send.text("不能指定多个天数参数，请使用 /日报 [天数] [主题]", stream_id)
+                    return True, "参数无效", True
+                days = int(tok)
+                seen_days = True
+            else:
+                low = tok.lower()
+                if low in THEME_REGISTRY:
+                    if theme_arg:
+                        await self.ctx.send.text("不能指定多个主题名，请使用 /日报 [天数] [主题]", stream_id)
+                        return True, "参数无效", True
+                    theme_arg = low
+                elif seen_days or low in ("不替代", "替代", "强制", "a", "b", "c", "存档优先", "按天提炼", "分层抽样"):
+                    await self.ctx.send.text(
+                        f"不支持单次覆盖参数「{tok}」（请使用 /日报 [天数] [主题]，如需修改策略或是否计入当天已发请到插件设置调整）。",
+                        stream_id,
+                    )
+                    return True, "不支持单次覆盖参数", True
+                else:
+                    await self.ctx.send.text(
+                        f"没有主题「{low}」，可用：{'、'.join(THEME_REGISTRY)}", stream_id)
+                    return True, "未知主题", True
+
+        if seen_days and days < 1:
+            await self.ctx.send.text("天数必须为大于等于 1 的整数", stream_id)
+            return True, "天数无效", True
+
+        # 主题优先级：命令显式指定 > 该群「按群指定主题」> 全局默认主题
         theme = self._theme_for_group(_gid, theme_arg)
         mark_sent = bool(getattr(self._report_cfg(), "manual_marks_daily_sent", True))
+        day = date.today().isoformat()
 
-        async def generate(job):
-            return await self._generate_daily_and_send(stream_id, day, theme, mark_sent=mark_sent)
+        if days == 1:
+            # 1 天路径完全保持原逻辑不变
+            await self._rebuild_day_from_db(stream_id, day)
+            total = self._day_total(stream_id, day)
+            _min_msgs = self._cfg().analysis.min_messages_threshold
+            if total < _min_msgs:
+                await self.ctx.send.text(
+                    f"本群过去 24 小时只有 {total} 条消息（不足 {_min_msgs} 条），先多聊聊再来～", stream_id)
+                return True, "数据不足", True
 
-        result = self._jobs.submit("report", _gid or stream_id, day, generate, source="command")
+            async def generate(job):
+                return await self._generate_daily_and_send(stream_id, day, theme, mark_sent=mark_sent)
+
+            result = self._jobs.submit("report", _gid or stream_id, day, generate, source="command")
+            if not result["accepted"]:
+                await self.ctx.send.text(result["message"], stream_id)
+                return True, "任务忙碌", True
+            await self.ctx.send.text(f"收到！正在生成今日日报（主题：{THEME_REGISTRY[theme]['label']}，预计 2~6 分钟，完成后自动发送）……", stream_id)
+            return True, "日报生成中", True
+
+        # 多天分析路径
+        mcfg = self._multiday_cfg()
+        if not mcfg.multi_day_enabled:
+            await self.ctx.send.text("多天分析功能未开启（插件设置 → 多天与周报）", stream_id)
+            return True, "多天未启用", True
+        max_days = self._effective_max_days()
+        if days > max_days:
+            await self.ctx.send.text(f"最多允许统计 {max_days} 天（可在插件设置「单次最大统计天数」里调整）", stream_id)
+            return True, "天数超限", True
+
+        target_gid = _gid or stream_id
+        slot_day = f"{day}~{days}d"
+
+        async def generate_multi(job):
+            return await self._generate_multiday_and_send(
+                job, stream_id, target_gid, days, theme, report_kind="multiday", mark_sent=mark_sent,
+            )
+
+        result = self._jobs.submit("multiday", target_gid, slot_day, generate_multi, source="command")
         if not result["accepted"]:
             await self.ctx.send.text(result["message"], stream_id)
             return True, "任务忙碌", True
-        await self.ctx.send.text(f"收到！正在生成今日日报（主题：{THEME_REGISTRY[theme]['label']}，预计 2~6 分钟，完成后自动发送）……", stream_id)
-        return True, "日报生成中", True
+        await self.ctx.send.text(
+            f"收到！正在生成最近 {days} 天群聊汇总（主题：{THEME_REGISTRY[theme]['label']}，策略：{mcfg.multi_day_strategy}，完成后自动发送）……",
+            stream_id,
+        )
+        return True, "多天报告生成中", True
 
-    @Command("comic", description="把本群今日日报画成漫画（需先有当天日报存档，且已启用群聊漫画）", pattern=r"(?<!\S)/?漫画\s*$")
+    @Command("weekly_report", description="手动生成本群最近 7 天周报（独立存档，不替代当日日报），可带主题名如 /周报 atri",
+             pattern=r"(?<!\S)/?周报(?:\s+(?P<theme>\S+))?\s*$")
+    async def cmd_weekly_report(self, **kwargs: Any) -> tuple[bool, str, bool]:
+        stream_id = str(kwargs.get("stream_id") or "")
+        if not stream_id:
+            return False, "找不到当前会话，请在群聊中使用", True
+
+        admins = self._admin_ids()
+        if admins is not None:
+            uid = str(kwargs.get("user_id") or "")
+            if uid not in admins:
+                await self.ctx.send.text("本命令仅管理员可用（管理员名单在插件设置的命令管理员里配置）", stream_id)
+                return True, "非管理员", True
+
+        gid = ""
+        message = kwargs.get("message", {})
+        if isinstance(message, dict):
+            gid = str((message.get("message_info", {}).get("group_info") or {}).get("group_id") or "")
+        whitelist = self._whitelist_ids()
+        if whitelist is not None and gid not in whitelist:
+            await self.ctx.send.text("本群不在白名单中（可在插件设置的群白名单里添加，每行一个群号）", stream_id)
+            return True, "不在白名单", True
+
+        mcfg = self._multiday_cfg()
+        if not mcfg.multi_day_enabled:
+            await self.ctx.send.text("多天分析功能未开启（插件设置 → 多天与周报）", stream_id)
+            return True, "多天未启用", True
+
+        theme_arg = str((kwargs.get("matched_groups") or {}).get("theme") or "").strip().lower()
+        if theme_arg and theme_arg not in THEME_REGISTRY:
+            await self.ctx.send.text(f"没有主题「{theme_arg}」，可用：{'、'.join(THEME_REGISTRY)}", stream_id)
+            return True, "未知主题", True
+        theme = self._theme_for_group(gid, theme_arg)
+        today = date.today().isoformat()
+        target_gid = gid or stream_id
+        slot_day = f"{today}~weekly"
+
+        async def generate_weekly(job):
+            return await self._generate_multiday_and_send(
+                job, stream_id, target_gid, 7, theme, report_kind="weekly", mark_sent=False,
+            )
+
+        result = self._jobs.submit("weekly", target_gid, slot_day, generate_weekly, source="command")
+        if not result["accepted"]:
+            await self.ctx.send.text(result["message"], stream_id)
+            return True, "任务忙碌", True
+        await self.ctx.send.text(
+            f"收到！正在生成本周群聊周报（最近 7 天，主题：{THEME_REGISTRY[theme]['label']}，独立存档不影响今日日报，完成后自动发送）……",
+            stream_id,
+        )
+        return True, "周报生成中", True
+
+    @Command("comic", description="把本群日报画成漫画（支持 /漫画 或 /漫画 天数，如 /漫画 7）",
+             pattern=r"(?<!\S)/?漫画(?:\s+(?P<days>\d+))?\s*$")
     async def cmd_comic(self, **kwargs: Any) -> tuple[bool, str, bool]:
         stream_id = str(kwargs.get("stream_id") or "")
         if not stream_id:
@@ -5130,26 +6631,56 @@ class GroupDailyAnalysisPlugin(MaiBotPlugin):
         if not ccfg.enabled:
             await self.ctx.send.text("漫画功能还没启用哦（插件设置 → 群聊漫画）", stream_id)
             return True, "漫画未启用", True
-        day = date.today().isoformat()
-        try:
-            await asyncio.to_thread(self._report_store.detail, gid, day)
-        except (OSError, ValueError):
-            await self.ctx.send.text("今天还没有日报存档，请先发送 /日报 生成日报，再来画漫画～", stream_id)
-            return True, "缺少日报存档", True
+
+        raw_days = str((kwargs.get("matched_groups") or {}).get("days") or "").strip()
+        days = int(raw_days) if raw_days.isdigit() else 1
+        if days <= 1:
+            day = date.today().isoformat()
+            try:
+                await asyncio.to_thread(self._report_store.detail, gid, day)
+            except (OSError, ValueError):
+                await self.ctx.send.text("今天还没有日报存档，请先发送 /日报 生成日报，再来画漫画～", stream_id)
+                return True, "缺少日报存档", True
+            if not await self._drawpic_ready():
+                await self.ctx.send.text("没检测到麦麦绘图插件的接口，请确认它已安装、启用并允许插件联动", stream_id)
+                return True, "绘图插件不可用", True
+            style = self._pick_comic_style(gid)
+
+            async def work(job):
+                return await self._comic_pipeline(job, stream_id, gid, day, style)
+
+            result = self._jobs.submit("comic", gid or stream_id, day, work, source="command")
+            if not result["accepted"]:
+                await self.ctx.send.text(result["message"], stream_id)
+                return True, "任务忙碌", True
+            await self.ctx.send.text("收到！正在把今日日报画成漫画（预计 1~5 分钟，完成后自动发送）……", stream_id)
+            return True, "漫画生成中", True
+
+        mcfg = self._multiday_cfg()
+        if not mcfg.multi_day_enabled or not mcfg.multi_day_comic_enabled:
+            await self.ctx.send.text("多天漫画功能未启用（插件设置 → 多天与周报）", stream_id)
+            return True, "多天漫画未启用", True
+        max_days = self._effective_max_days()
+        if days > max_days:
+            await self.ctx.send.text(f"多天漫画天数超出上限（最多 {max_days} 天）", stream_id)
+            return True, "天数超限", True
         if not await self._drawpic_ready():
             await self.ctx.send.text("没检测到麦麦绘图插件的接口，请确认它已安装、启用并允许插件联动", stream_id)
             return True, "绘图插件不可用", True
         style = self._pick_comic_style(gid)
+        today = date.today().isoformat()
+        target_gid = gid or stream_id
+        slot_day = f"{today}~{days}d"
 
-        async def work(job):
-            return await self._comic_pipeline(job, stream_id, gid, day, style)
+        async def work_multi(job):
+            return await self._multiday_comic_pipeline(job, stream_id, target_gid, days, style, slot_day=slot_day)
 
-        result = self._jobs.submit("comic", gid or stream_id, day, work, source="command")
+        result = self._jobs.submit("comic", target_gid, slot_day, work_multi, source="command")
         if not result["accepted"]:
             await self.ctx.send.text(result["message"], stream_id)
             return True, "任务忙碌", True
-        await self.ctx.send.text("收到！正在把今日日报画成漫画（预计 1~5 分钟，完成后自动发送）……", stream_id)
-        return True, "漫画生成中", True
+        await self.ctx.send.text(f"收到！正在把最近 {days} 天最热话题画成漫画（预计 1~5 分钟，完成后自动发送）……", stream_id)
+        return True, "多天漫画生成中", True
 
 def create_plugin() -> GroupDailyAnalysisPlugin:
     return GroupDailyAnalysisPlugin()

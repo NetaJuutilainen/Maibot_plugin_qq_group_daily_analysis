@@ -112,11 +112,15 @@
       <h2 id="generation-title">生成报告</h2>
       <div class="fields">
         <label>发送到群<select id="generate-group" disabled><option value="">请选择群聊</option></select></label>
-        <label>报告日期<input id="generate-day" type="date" disabled></label>
+        <label>报告模式<select id="generate-mode" disabled><option value="daily">1 天日报</option><option value="multiday">多天汇总</option><option value="weekly">7 天周报</option></select></label>
+        <label id="generate-day-wrap">报告日期<input id="generate-day" type="date" disabled></label>
+        <label id="generate-days-wrap" hidden>统计天数<input id="generate-days" type="number" min="2" max="90" value="7" disabled></label>
+        <label id="generate-strategy-wrap" hidden>汇总策略<select id="generate-strategy" disabled><option value="">跟随设置默认</option><option value="存档优先">存档优先（最省）</option><option value="按天提炼">按天提炼（最全·费用高）</option><option value="分层抽样">分层抽样（折中）</option></select></label>
         <label>报告主题<select id="generate-theme" disabled><option value="">默认主题</option></select></label>
         <button id="generate" class="primary" type="button" data-mutation disabled>立即生成</button>
       </div>
-      <p class="hint">日期留空为今天（以服务器日期为准）；当日重建使用滚动24小时，历史日期仅用既有统计，不补造历史。生成会消耗模型额度并发送到所选群。</p>
+      <p id="multiday-preview" class="hint" hidden>选择群聊与天数后将预览可用存档天数与预计模型调用量。</p>
+      <p class="hint">1天模式日期留空为今天（当日重建使用滚动24小时，历史日期仅用既有统计）；多天/周报从触发时刻向前统计 N×24h 并独立存档，不覆盖当日日报。生成会消耗模型额度并发送到所选群。</p>
       <div class="section-heading"><h3>按群日报管理</h3><span id="cfg-state" class="muted">—</span></div>
       <div class="fields">
         <label>默认日报主题<select id="cfg-theme" disabled></select></label>
@@ -160,7 +164,7 @@
         <label>筛选群聊<select id="filter-group" disabled><option value="">全部群聊</option></select></label>
         <label>起始日期<input id="date-from" type="date" disabled></label>
         <label>结束日期<input id="date-to" type="date" disabled></label>
-        <label>类型<select id="filter-type" disabled><option value="">全部类型</option><option value="image">图片报告</option><option value="html">仅 HTML</option></select></label>
+        <label>类型<select id="filter-type" disabled><option value="">全部类型</option><option value="daily">日常日报</option><option value="multiday">多天汇总</option><option value="weekly">群聊周报</option><option value="image">图片报告</option><option value="html">仅 HTML</option></select></label>
         <label>排序<select id="filter-sort" disabled><option value="desc">从新到旧</option><option value="asc">从旧到新</option></select></label>
         <button id="apply-filter" type="button" disabled>应用筛选</button>
       </div>
@@ -203,9 +207,9 @@
       const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
       const TERMINAL = new Set(['completed', 'succeeded', 'success', 'done', 'failed', 'error', 'cancelled', 'canceled', 'rejected']);
       const STATUS_NAMES = { queued: '排队中', pending: '等待中', accepted: '已接受', running: '运行中', cancelling: '正在取消', cancelled: '已取消', canceled: '已取消', completed: '已完成', succeeded: '已完成', success: '已完成', done: '已完成', failed: '失败', error: '失败', rejected: '已拒绝', idle: '空闲' };
-      const KIND_NAMES = { report: '生成', trigger: '生成', generate: '生成', rerun: '重发成品', resend: '重发成品', rerender: '换主题重绘', comic: '漫画', draw: '漫画' };
+      const KIND_NAMES = { report: '生成日报', multiday: '多天汇总', weekly: '群聊周报', trigger: '生成', generate: '生成', rerun: '重发成品', resend: '重发成品', rerender: '换主题重绘', comic: '漫画', draw: '漫画' };
       const SOURCE_NAMES = { webui: 'WebUI', command: '命令', schedule: '定时', auto: '日报联动' };
-      const state = { ready: false, disposed: false, actionBusy: false, overviewBusy: false, listLoading: false, pending: 0, page: 1, pages: 1, listToken: 0, modalToken: 0, imageToken: 0, modalRow: null, imageBusy: false, overviewStamp: null, reportsDirty: false, timer: null, busyGroups: new Set() };
+      const state = { ready: false, disposed: false, actionBusy: false, overviewBusy: false, listLoading: false, pending: 0, page: 1, pages: 1, listToken: 0, modalToken: 0, imageToken: 0, modalRow: null, imageBusy: false, overviewStamp: null, reportsDirty: false, timer: null, busyGroups: new Set(), previewData: null, maxDays: 7, defaultStrategy: '存档优先' };
       let bridge;
       let queue = Promise.resolve();
       let filters = { group_id: '', date_from: '', date_to: '', search: '', report_type: '', sort_order: 'desc' };
@@ -248,7 +252,7 @@
       const object = value => value && typeof value === 'object' && !Array.isArray(value);
       const validGroup = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
       const validRevision = value => typeof value === 'string' && value.length > 0 && value.length <= 128;
-      const validDay = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+      const validDay = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}(?:~(?:weekly|(?:[2-9]|[1-8]\d|90)d))?$/.test(value);
       const currentModal = token => !state.disposed && token === state.modalToken && !$('overlay').hidden;
       const reportArgs = row => ({ group_id: row.group_id, day: row.day, revision: row.revision });
 
@@ -269,7 +273,13 @@
 
       function syncControls() {
         const locked = !state.ready || state.actionBusy;
-        for (const id of ['generate-group', 'generate-day', 'generate-theme', 'filter-group', 'filter-search', 'filter-type', 'filter-sort', 'date-from', 'date-to', 'apply-filter', 'refresh', 'gallery-link', 'stats-link']) $(id).disabled = locked;
+        for (const id of ['generate-group', 'generate-mode', 'generate-day', 'generate-days', 'generate-strategy', 'generate-theme', 'filter-group', 'filter-search', 'filter-type', 'filter-sort', 'date-from', 'date-to', 'apply-filter', 'refresh', 'gallery-link', 'stats-link']) $(id).disabled = locked;
+        const mode = $('generate-mode').value;
+        $('generate-day-wrap').hidden = mode !== 'daily';
+        $('generate-days-wrap').hidden = mode !== 'multiday';
+        $('generate-strategy-wrap').hidden = mode === 'daily';
+        $('multiday-preview').hidden = mode === 'daily';
+        $('generate-days').max = String(state.maxDays || 90);
         $('rerender-theme').disabled = locked || $('rerender').dataset.invalid === 'true';
         syncReportParamsControls();
         syncPersonaControls();
@@ -282,6 +292,35 @@
         $('previous').disabled = locked || state.page <= 1;
         $('next').disabled = locked || state.page >= state.pages;
         $('page-label').textContent = `第 ${state.page} / ${state.pages} 页`;
+      }
+
+      async function loadMultidayPreview() {
+        const mode = $('generate-mode').value;
+        const gid = $('generate-group').value;
+        if (!state.ready || state.disposed || mode === 'daily' || !validGroup(gid)) {
+          state.previewData = null;
+          if (mode !== 'daily') $('multiday-preview').textContent = '选择群聊后将预览可用存档天数与预计模型调用量。';
+          return;
+        }
+        const days = mode === 'weekly' ? 7 : Math.max(2, Math.min(state.maxDays || 90, Number($('generate-days').value) || 7));
+        const strategy = $('generate-strategy').value;
+        $('multiday-preview').textContent = '正在评估可用存档与预计调用次数…';
+        try {
+          const r = await call('query', 'multiday_preview', { group_id: gid, days, strategy });
+          if (state.disposed) return;
+          if (!object(r) || r.ok !== true) {
+            state.previewData = null;
+            $('multiday-preview').textContent = `预览不可用：${text(object(r) && r.message)}`;
+            return;
+          }
+          state.previewData = r;
+          const arch = Array.isArray(r.archived_days) && r.archived_days.length ? r.archived_days.join('、') : '无';
+          const miss = Array.isArray(r.missing_days) && r.missing_days.length ? `；缺 ${r.missing_days.join('、')}` : '';
+          $('multiday-preview').textContent =
+            `可用存档 ${r.archived_count}/${r.total_days} 天（${arch}${miss}） · 策略「${text(r.strategy)}」 · 预计模型调用 ${r.estimated_calls} 次 · 样本上限 ${r.estimated_samples} 条。${text(r.note)}`;
+        } catch (error) {
+          if (!(error instanceof StaleRequest) && !state.disposed) $('multiday-preview').textContent = `预览读取失败：${text(error.message)}`;
+        }
       }
 
       function parseGroupMapText(text) {
@@ -558,9 +597,14 @@
       function reportActions(row) {
         const actions = element('div', undefined, 'buttons');
         const invalid = !validRevision(row.revision);
+        const rk = row.report_kind || 'daily';
+        const triggerArgs = rk === 'daily'
+          ? { group_id: row.group_id, day: row.day, theme: typeof row.theme === 'string' ? row.theme : '' }
+          : { group_id: row.group_id, theme: typeof row.theme === 'string' ? row.theme : '',
+              days: Number(row.window_days) || 7, report_kind: rk };
         actions.append(
           mutationButton('重发到原群', 'rerun', reportArgs(row), invalid),
-          mutationButton('重新生成', 'trigger', { group_id: row.group_id, day: row.day, theme: typeof row.theme === 'string' ? row.theme : '' }),
+          mutationButton('重新生成', 'trigger', triggerArgs),
           mutationButton('删除存档', 'delete', reportArgs(row), invalid)
         );
         return actions;
@@ -654,8 +698,11 @@
           renderGroups();
           themeEntries = Array.isArray(result.themes) ? result.themes : [];
           replaceOptions($('generate-theme'), themeEntries, '默认主题', 'key', 'label');
-          renderReportParams(object(result.config_view) ? result.config_view : {});
-          renderPersonaBlock(object(result.config_view) ? result.config_view : {},
+          const cfgView = object(result.config_view) ? result.config_view : {};
+          if (typeof cfgView.multi_day_max_days === 'number') state.maxDays = cfgView.multi_day_max_days;
+          if (typeof cfgView.multi_day_strategy === 'string') state.defaultStrategy = cfgView.multi_day_strategy;
+          renderReportParams(cfgView);
+          renderPersonaBlock(cfgView,
             Array.isArray(result.persona_templates) ? result.persona_templates : []);
           $('active-count').textContent = `活跃任务：${text(result.active_count)}`;
           $('task-status').textContent = `${text(result.status)} · 更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
@@ -718,8 +765,11 @@
               thumbnails.push({ row, preview });
             }
             const body = element('div', undefined, 'report-body');
-            body.append(element('h3', text(row.group_name || row.group_id, 160)));
-            body.append(element('p', `${row.day} · ${text(row.theme, 80)}\n消息 ${text(row.message_count)} · 参与 ${text(row.participant_count)} 人\n生成于 ${text(row.created_at)}`, 'report-meta'));
+            const rk = row.report_kind || 'daily';
+            const rkLabel = rk === 'weekly' ? '周报' : (rk === 'multiday' ? `${row.window_days || 7}天汇总` : '日报');
+            body.append(element('h3', `${text(row.group_name || row.group_id, 140)} · ${rkLabel}`));
+            const covLine = row.coverage_note ? `\n${text(row.coverage_note, 100)}${row.strategy_label ? ' · ' + text(row.strategy_label, 30) : ''}` : '';
+            body.append(element('p', `${row.day} · ${text(row.theme, 80)}\n消息 ${text(row.message_count)} · 参与 ${text(row.participant_count)} 人${covLine}\n生成于 ${text(row.created_at)}`, 'report-meta'));
             const actions = reportActions(row);
             const detail = element('button', '详情');
             detail.type = 'button';
@@ -830,7 +880,13 @@
           if (!object(detail) || detail.revision !== row.revision || detail.group_id !== row.group_id || detail.day !== row.day) throw new Error('存档已变化，请关闭后刷新列表，避免混用新旧报告');
           state.modalRow = detail;
           addStat('群聊', `${text(detail.group_name)} (${detail.group_id})`);
-          addStat('日期', detail.day);
+          addStat('日期/槽位', detail.day);
+          if (detail.report_kind && detail.report_kind !== 'daily') {
+            addStat('报告类型', detail.report_kind === 'weekly' ? '群聊周报（7天）' : `${text(detail.window_days)} 天汇总`);
+          }
+          if (detail.coverage_note) addStat('覆盖区间', detail.coverage_note);
+          if (detail.strategy_label) addStat('实际策略', detail.strategy_label);
+          if (Array.isArray(detail.budget_notes) && detail.budget_notes.length) addStat('预算裁剪说明', detail.budget_notes.join('；'));
           addStat('主题', detail.theme);
           addStat('消息数', detail.message_count);
           addStat('参与人数', detail.participant_count);
@@ -961,14 +1017,36 @@
       $('previous').addEventListener('click', () => { void loadReports(state.page - 1); });
       $('next').addEventListener('click', () => { void loadReports(state.page + 1); });
       $('refresh').addEventListener('click', () => { void loadReports(state.page); void loadOverview(); });
-      $('generate-group').addEventListener('change', syncControls);
+      $('generate-group').addEventListener('change', () => { syncControls(); void loadMultidayPreview(); });
+      $('generate-mode').addEventListener('change', () => { syncControls(); void loadMultidayPreview(); });
+      $('generate-days').addEventListener('change', () => { void loadMultidayPreview(); });
+      $('generate-strategy').addEventListener('change', () => { void loadMultidayPreview(); });
       $('rerender').addEventListener('click', () => {
         const row = state.modalRow;
         if (!row) return;
         void performAction('rerender', { ...reportArgs(row), theme: $('rerender-theme').value }, '换主题重绘');
       });
       $('generate').addEventListener('click', () => {
-        void performAction('trigger', { group_id: $('generate-group').value, day: $('generate-day').value, theme: $('generate-theme').value }, '生成报告');
+        const mode = $('generate-mode').value;
+        const gid = $('generate-group').value;
+        const theme = $('generate-theme').value;
+        if (mode === 'daily') {
+          void performAction('trigger', { group_id: gid, day: $('generate-day').value, theme }, '生成报告');
+          return;
+        }
+        const days = mode === 'weekly' ? 7 : Math.max(2, Math.min(state.maxDays || 90, Number($('generate-days').value) || 7));
+        const strategy = $('generate-strategy').value;
+        const effStrat = strategy || state.defaultStrategy || '存档优先';
+        const pv = state.previewData;
+        const highCost = (pv && pv.high_cost === true) || days >= 30 || effStrat === '按天提炼';
+        if (highCost) {
+          const estCalls = pv ? pv.estimated_calls : (effStrat === '按天提炼' ? days + 1 : 1);
+          const ok = window.confirm(
+            `高成本操作确认：\n即将生成 ${days} 天${mode === 'weekly' ? '周报' : '汇总'}，策略「${effStrat}」，预计需要调用模型约 ${estCalls} 次。\n确认继续吗？`
+          );
+          if (!ok) return;
+        }
+        void performAction('trigger', { group_id: gid, theme, days, strategy, report_kind: mode }, mode === 'weekly' ? '生成周报' : `生成 ${days} 天汇总`);
       });
       $('gallery-link').addEventListener('click', async () => {
         try { await call('navigate', 'comic-gallery'); }

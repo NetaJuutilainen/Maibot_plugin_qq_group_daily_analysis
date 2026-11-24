@@ -501,6 +501,47 @@ class ComicRequestBook:
             return rows
 
 
+def select_window_topics(analysis: dict, panel_count: int) -> list[dict]:
+    """从全窗口话题池里按热度选 Top-K 话题（K=漫画格数），供多天漫画使用。"""
+    pool = analysis.get("topic_pool") or analysis.get("topics") or []
+    if not isinstance(pool, list):
+        return []
+    ranked = []
+    seen = set()
+    for item in pool:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("topic") or "").strip()
+        if not name:
+            continue
+        key = name.replace(" ", "").casefold()[:16]
+        if key in seen:
+            continue
+        seen.add(key)
+        contribs = item.get("contributors") or []
+        try:
+            mention_days = max(1, int(item.get("mention_days") or 1))
+        except (TypeError, ValueError):
+            mention_days = 1
+        score = mention_days * 3 + len(contribs) * 2 + min(200, len(str(item.get("detail") or ""))) / 100.0
+        ranked.append((score, dict(item)))
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    limit = max(1, int(panel_count or 1))
+    return [pair[1] for pair in ranked[:limit]]
+
+
+def _comic_day_label(day: str) -> str:
+    text = str(day or "").strip()
+    if "~" not in text:
+        return text
+    base, suffix = text.split("~", 1)
+    if suffix == "weekly":
+        return f"近 7 天（截止 {base}）"
+    if suffix.endswith("d") and suffix[:-1].isdigit():
+        return f"近 {suffix[:-1]} 天（截止 {base}）"
+    return base
+
+
 def fallback_storyboard(analysis: dict, group_name: str, panel_count: int) -> dict:
     """LLM 分镜失败时的保底：直接用话题 + 金句拼画面，保证仍能出图。"""
     panels = []
@@ -527,7 +568,8 @@ def fallback_storyboard(analysis: dict, group_name: str, panel_count: int) -> di
     return {"title": f"{group_name} 今日群聊漫画", "panels": panels[:panel_count]}
 
 
-def normalize_storyboard(data, style_key: str, analysis: dict, group_name: str, panel_count: int = 0) -> dict:
+def normalize_storyboard(data, style_key: str, analysis: dict, group_name: str, panel_count: int = 0,
+                         pad_to_count: bool = False) -> dict:
     """校验 LLM 分镜输出；不合法一律回退话题+金句拼接，不让格式问题阻断出图。"""
     panel_count = _effective_panels(style_key, panel_count)
     if not isinstance(data, dict):
@@ -545,13 +587,21 @@ def normalize_storyboard(data, style_key: str, analysis: dict, group_name: str, 
                        "dialogue": str(item.get("dialogue") or "").strip()[:200]})
     if not panels:
         return fallback_storyboard(analysis, group_name, panel_count)
+    if pad_to_count and len(panels) < panel_count:
+        pad = fallback_storyboard(analysis, group_name, panel_count)["panels"]
+        idx = 0
+        while len(panels) < panel_count and idx < len(pad):
+            panels.append(pad[idx])
+            idx += 1
+        while len(panels) < panel_count:
+            panels.append({"scene": "群友们发表情包互动的欢乐场景", "caption": "", "dialogue": ""})
     return {"title": title or f"{group_name} 今日群聊漫画", "panels": panels}
 
 
 def storyboard_prompt(analysis: dict, group_name: str, day: str, style_key: str, panel_count: int = 0,
                       has_refs: bool = False) -> str:
     count = _effective_panels(style_key, panel_count)
-    topics = "、".join(str(t.get("topic") or "") for t in (analysis.get("topics") or [])[:5] if isinstance(t, dict))
+    topics = "、".join(str(t.get("topic") or "") for t in (analysis.get("topics") or [])[:max(5, count)] if isinstance(t, dict))
     quotes = "\n".join(f"- {str(q.get('content') or '')[:120]}" for q in (analysis.get("quotes") or [])[:3] if isinstance(q, dict))
     titles = "、".join(f"{t.get('name') or ''}「{t.get('title') or ''}」" for t in (analysis.get("titles") or [])[:3] if isinstance(t, dict))
     quality = analysis.get("quality") or {}
@@ -562,8 +612,9 @@ def storyboard_prompt(analysis: dict, group_name: str, day: str, style_key: str,
     else:
         kind = f"{count}格漫画（{PANEL_LAYOUT[count]}）"
     tone = style.get("tone") or "轻松幽默"
+    day_label = _comic_day_label(day)
     return (
-        f"请把群聊「{group_name}」{day} 的日报素材改编成{kind}的分镜脚本。\n"
+        f"请把群聊「{group_name}」{day_label} 的日报素材改编成{kind}的分镜脚本。\n"
         f"今日话题：{topics or '日常闲聊'}\n今日称号：{titles or '无'}\n金句：\n{quotes or '无'}\n"
         f"整体氛围总结：{summary or '轻松热闹'}\n\n"
         "要求：\n"
@@ -583,7 +634,8 @@ def storyboard_prompt(analysis: dict, group_name: str, day: str, style_key: str,
 
 
 def build_draw_prompt(storyboard: dict, style_key: str, group_name: str, day: str, with_refs: bool = False, panel_count: int = 0) -> str:
-    lines = [f"群聊「{group_name}」{day} 的每日漫画，标题：{storyboard.get('title') or ''}。"]
+    day_label = _comic_day_label(day)
+    lines = [f"群聊「{group_name}」{day_label} 的每日漫画，标题：{storyboard.get('title') or ''}。"]
     if with_refs:
         lines.append("参考附图：人物参考图用于锁定角色外观（发型、发色、瞳色、服装与配饰），保持角色一致；"
                      "若画面文字与参考图的人物外貌不一致，一律以参考图为准，每格主角都按参考图绘制；"

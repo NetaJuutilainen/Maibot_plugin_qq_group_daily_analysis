@@ -26,8 +26,10 @@ class ReportStore:
                       'has_image', 'message_count', 'participant_count', 'elapsed_seconds', 'version')
     COMIC_FILES = ('comic.png', 'comic_thumb.jpg', 'comic.json')
     COMIC_SUMMARY_FIELDS = ('group_id', 'group_name', 'day', 'style', 'created_at', 'revision',
-                            'message_count', 'sent', 'request_id')
+                            'message_count', 'sent', 'request_id', 'window_days', 'panel_count')
     MAX_COMIC_PROMPT = 8000
+    _PURE_DAY_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+    _SLOT_DAY_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})(?:~(weekly|(?:[2-9]|[1-8]\d|90)d))?$')
 
     def __init__(self, data_dir: Path):
         self.root = Path(data_dir).absolute() / 'reports'
@@ -51,15 +53,32 @@ class ReportStore:
             raise ValueError('群标识不能是系统设备名')
         return value
 
-    @staticmethod
-    def _day(value):
-        if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+    @classmethod
+    def _pure_day(cls, value):
+        if not isinstance(value, str) or not cls._PURE_DAY_RE.fullmatch(value):
             raise ValueError('日期需为 YYYY-MM-DD')
         try:
             date.fromisoformat(value)
         except ValueError:
             raise ValueError('日期无效') from None
         return value
+
+    @classmethod
+    def _day(cls, value):
+        if not isinstance(value, str):
+            raise ValueError('日期需为 YYYY-MM-DD')
+        m = cls._SLOT_DAY_RE.fullmatch(value)
+        if not m:
+            raise ValueError('日期需为 YYYY-MM-DD')
+        try:
+            date.fromisoformat(m.group(1))
+        except ValueError:
+            raise ValueError('日期无效') from None
+        return value
+
+    @classmethod
+    def base_day(cls, value):
+        return cls._day(value)[:10]
 
     @staticmethod
     def _label(value, fallback):
@@ -68,9 +87,25 @@ class ReportStore:
         return text or fallback
 
     def _directory(self, group_id, day):
-        path = self.root / self._group(group_id) / self._day(day)
+        g = self._group(group_id)
+        d = self._day(day)
+        if '~' not in d:
+            path = self.root / g / d
+        elif d.endswith('~weekly'):
+            path = self.root / g / '_weekly' / d[:10]
+        else:
+            path = self.root / g / '_weekly' / d
         self._check_path(path)
         return path
+
+    @staticmethod
+    def _directory_coords(directory):
+        if directory.parent.name == '_weekly':
+            group_id = directory.parent.parent.name
+            slot = directory.name
+            day = slot if '~' in slot else f'{slot}~weekly'
+            return group_id, day
+        return directory.parent.name, directory.name
 
     def _file(self, directory, name):
         path = directory / name
@@ -91,7 +126,8 @@ class ReportStore:
             raise ValueError('报告元数据过大')
         try:
             meta = json.loads(path.read_text(encoding='utf-8'))
-            if not isinstance(meta, dict) or meta['group_id'] != directory.parent.name or meta['day'] != directory.name:
+            expected_group, expected_day = self._directory_coords(directory)
+            if not isinstance(meta, dict) or meta['group_id'] != expected_group or meta['day'] != expected_day:
                 raise ValueError('报告元数据不匹配')
             self._group(meta['group_id'])
             self._day(meta['day'])
@@ -108,6 +144,10 @@ class ReportStore:
                 raise ValueError('报告耗时字段无效')
             if type(meta['has_image']) is not bool:
                 raise ValueError('报告类型无效')
+            if 'report_kind' in meta and meta['report_kind'] not in ('daily', 'multiday', 'weekly'):
+                raise ValueError('报告分类无效')
+            if 'window_days' in meta and (type(meta['window_days']) is not int or not 1 <= meta['window_days'] <= 90):
+                raise ValueError('报告窗口天数无效')
             stem = self._report_stem(meta)
             required = [self._artifact(directory, stem, '.html', 'report.html')]
             if meta['has_image']:
@@ -168,6 +208,22 @@ class ReportStore:
                     theme=str(metadata.get('theme') or '')[:200], version=str(metadata.get('version') or '')[:200],
                     message_count=metadata.get('message_count', 0), participant_count=metadata.get('participant_count', 0),
                     elapsed_seconds=metadata.get('elapsed_seconds', 0))
+        if 'report_kind' in metadata and metadata['report_kind'] in ('daily', 'multiday', 'weekly'):
+            meta['report_kind'] = metadata['report_kind']
+        if 'window_days' in metadata:
+            try:
+                wd = int(metadata['window_days'])
+                if 1 <= wd <= 90:
+                    meta['window_days'] = wd
+            except (TypeError, ValueError):
+                pass
+        for key, max_len in (('window_start', 40), ('window_end', 40), ('strategy_requested', 40),
+                             ('strategy_used', 40), ('strategy_label', 120), ('coverage_note', 500)):
+            if key in metadata and metadata[key] is not None:
+                meta[key] = str(metadata[key])[:max_len]
+        for key, item_len, max_items in (('covered_days', 20, 95), ('missing_days', 20, 95), ('budget_notes', 200, 30)):
+            if key in metadata and isinstance(metadata[key], (list, tuple)):
+                meta[key] = [str(item)[:item_len] for item in metadata[key][:max_items]]
         context_bytes = b''
         if context is not None:
             try:
@@ -232,7 +288,21 @@ class ReportStore:
                     continue
                 for directory in group.iterdir():
                     try:
-                        self._day(directory.name)
+                        if directory.name == '_weekly':
+                            self._check_path(directory)
+                            if not directory.is_dir():
+                                continue
+                            for sub in directory.iterdir():
+                                try:
+                                    slot = sub.name if '~' in sub.name else f'{sub.name}~weekly'
+                                    self._day(slot)
+                                    self._check_path(sub)
+                                    if sub.is_dir():
+                                        result.append(self._read_meta(sub))
+                                except (OSError, ValueError):
+                                    continue
+                            continue
+                        self._pure_day(directory.name)
                         self._check_path(directory)
                         if directory.is_dir():
                             result.append(self._read_meta(directory))
@@ -240,7 +310,7 @@ class ReportStore:
                         continue
             except (OSError, ValueError):
                 continue
-        result.sort(key=lambda row: (row['created_at'], row['day'], row['group_id']), reverse=True)
+        result.sort(key=lambda row: (row['created_at'], row['day'][:10], row['group_id']), reverse=True)
         return result
 
     def read_context(self, group_id, day):
@@ -262,16 +332,16 @@ class ReportStore:
         if group_id:
             self._group(group_id)
         if date_from:
-            self._day(date_from)
+            self._pure_day(date_from)
         if date_to:
-            self._day(date_to)
+            self._pure_day(date_to)
         if date_from and date_to and date_from > date_to:
             raise ValueError('起始日期晚于结束日期')
         if type(page) is not int or not 1 <= page <= 1_000_000 or type(page_size) is not int or not 1 <= page_size <= 12:
             raise ValueError('分页参数无效')
         if not isinstance(search, str) or len(search) > 100:
             raise ValueError('搜索词无效')
-        if report_type not in ('', 'image', 'html'):
+        if report_type not in ('', 'image', 'html', 'daily', 'multiday', 'weekly'):
             raise ValueError('报告类型无效')
         if sort_order not in ('desc', 'asc'):
             raise ValueError('排序方向无效')
@@ -281,15 +351,31 @@ class ReportStore:
             groups = {}
             for row in all_rows:
                 groups.setdefault(row['group_id'], row['group_name'])
+
+            def _match_type(row):
+                if not report_type:
+                    return True
+                if report_type in ('image', 'html'):
+                    return row['has_image'] == (report_type == 'image')
+                return row.get('report_kind', 'daily') == report_type
+
             rows = [row for row in all_rows if (not group_id or row['group_id'] == group_id)
-                    and (not date_from or row['day'] >= date_from) and (not date_to or row['day'] <= date_to)
-                    and (not report_type or row['has_image'] == (report_type == 'image'))
-                    and (not keyword or any(keyword in str(row[key]).casefold()
-                                            for key in ('group_name', 'group_id', 'day', 'theme')))]
+                    and (not date_from or row['day'][:10] >= date_from) and (not date_to or row['day'][:10] <= date_to)
+                    and _match_type(row)
+                    and (not keyword or any(keyword in str(row.get(key) or '').casefold()
+                                            for key in ('group_name', 'group_id', 'day', 'theme', 'coverage_note')))]
             if sort_order == 'asc':
                 rows.reverse()
             start = (page - 1) * page_size
-            return {'items': [{key: row[key] for key in self.SUMMARY_FIELDS} for row in rows[start:start + page_size]],
+            items = []
+            for row in rows[start:start + page_size]:
+                item = {key: row[key] for key in self.SUMMARY_FIELDS}
+                item['report_kind'] = row.get('report_kind', 'daily')
+                item['window_days'] = int(row.get('window_days') or 1)
+                item['strategy_label'] = str(row.get('strategy_label') or '')
+                item['coverage_note'] = str(row.get('coverage_note') or '')
+                items.append(item)
+            return {'items': items,
                     'total': len(rows), 'page': page, 'pages': (len(rows) + page_size - 1) // page_size,
                     'groups': [{'group_id': gid, 'group_name': name} for gid, name in sorted(groups.items())[:100]]}
 
@@ -357,6 +443,8 @@ class ReportStore:
             for entry in directory.iterdir():
                 self._check_path(entry)
             shutil.rmtree(directory)
+            if directory.parent.name == '_weekly' and directory.parent.exists() and not any(directory.parent.iterdir()):
+                directory.parent.rmdir()
             return {'deleted': True}
 
     def cleanup(self, retention_days=90):
@@ -366,7 +454,7 @@ class ReportStore:
             return 0
         cutoff = (date.today() - timedelta(days=retention_days)).isoformat()
         with self._lock:
-            old = [row for row in self._catalog() if row['day'] < cutoff]
+            old = [row for row in self._catalog() if row['day'][:10] < cutoff]
             return sum(self.delete(row['group_id'], row['day'], row['revision'])['deleted'] for row in old)
 
     # ------------------------------------------------------------------ 漫画存档（P3）
@@ -404,7 +492,8 @@ class ReportStore:
             raise ValueError('漫画元数据过大')
         try:
             meta = json.loads(path.read_text(encoding='utf-8'))
-            if not isinstance(meta, dict) or meta['group_id'] != directory.parent.name or meta['day'] != directory.name:
+            expected_group, expected_day = self._directory_coords(directory)
+            if not isinstance(meta, dict) or meta['group_id'] != expected_group or meta['day'] != expected_day:
                 raise ValueError('漫画元数据不匹配')
             self._group(meta['group_id'])
             self._day(meta['day'])
@@ -420,6 +509,9 @@ class ReportStore:
                 raise ValueError('漫画计数字段无效')
             if type(meta['sent']) is not bool:
                 raise ValueError('漫画发送标记无效')
+            meta.setdefault('window_days', 1)
+            meta.setdefault('panel_count', 0)
+            meta.setdefault('selected_topics', [])
             stem = self._comic_stem(meta)
             if any(not self._artifact(directory, stem, suffix, legacy).is_file()
                    for suffix, legacy in (('.png', 'comic.png'), ('_thumb.jpg', 'comic_thumb.jpg'))):
@@ -436,6 +528,15 @@ class ReportStore:
         storyboard = metadata.get('storyboard')
         if not isinstance(storyboard, dict):
             storyboard = {}
+        try:
+            window_days = max(1, min(90, int(metadata.get('window_days') or 1)))
+        except (TypeError, ValueError):
+            window_days = 1
+        try:
+            panel_count = max(0, min(20, int(metadata.get('panel_count') or 0)))
+        except (TypeError, ValueError):
+            panel_count = 0
+        selected_topics = [str(item)[:100] for item in (metadata.get('selected_topics') or [])[:12]]
         meta = {
             'group_id': group_id, 'day': day, 'revision': uuid.uuid4().hex,
             'created_at': datetime.now().isoformat(timespec='microseconds'),
@@ -447,6 +548,8 @@ class ReportStore:
             'storyboard': storyboard,
             'message_count': metadata.get('message_count', 0),
             'sent': False, 'version': str(metadata.get('version') or '')[:200],
+            'window_days': window_days, 'panel_count': panel_count,
+            'selected_topics': selected_topics,
         }
         if not re.fullmatch(r'[A-Za-z0-9_-]{8,80}', meta['request_id']):
             raise ValueError('漫画请求键无效')
@@ -482,7 +585,21 @@ class ReportStore:
                     continue
                 for directory in group.iterdir():
                     try:
-                        self._day(directory.name)
+                        if directory.name == '_weekly':
+                            self._check_path(directory)
+                            if not directory.is_dir():
+                                continue
+                            for sub in directory.iterdir():
+                                try:
+                                    slot = sub.name if '~' in sub.name else f'{sub.name}~weekly'
+                                    self._day(slot)
+                                    self._check_path(sub)
+                                    if sub.is_dir() and (sub / 'comic.json').is_file():
+                                        result.append(self._read_comic_meta(sub))
+                                except (OSError, ValueError):
+                                    continue
+                            continue
+                        self._pure_day(directory.name)
                         self._check_path(directory)
                         if directory.is_dir() and (directory / 'comic.json').is_file():
                             result.append(self._read_comic_meta(directory))
@@ -490,7 +607,7 @@ class ReportStore:
                         continue
             except (OSError, ValueError):
                 continue
-        result.sort(key=lambda row: (row['created_at'], row['day'], row['group_id']), reverse=True)
+        result.sort(key=lambda row: (row['created_at'], row['day'][:10], row['group_id']), reverse=True)
         return result
 
     def list_comics(self, group_id='', date_from='', date_to='', page=1, page_size=12,
@@ -498,9 +615,9 @@ class ReportStore:
         if group_id:
             self._group(group_id)
         if date_from:
-            self._day(date_from)
+            self._pure_day(date_from)
         if date_to:
-            self._day(date_to)
+            self._pure_day(date_to)
         if date_from and date_to and date_from > date_to:
             raise ValueError('起始日期晚于结束日期')
         if type(page) is not int or not 1 <= page <= 1_000_000 or type(page_size) is not int or not 1 <= page_size <= 12:
@@ -516,7 +633,7 @@ class ReportStore:
             for row in all_rows:
                 groups.setdefault(row['group_id'], row['group_name'])
             rows = [row for row in all_rows if (not group_id or row['group_id'] == group_id)
-                    and (not date_from or row['day'] >= date_from) and (not date_to or row['day'] <= date_to)
+                    and (not date_from or row['day'][:10] >= date_from) and (not date_to or row['day'][:10] <= date_to)
                     and (not keyword or any(keyword in str(row[key]).casefold()
                                             for key in ('group_name', 'group_id', 'day', 'style')))]
             if sort_order == 'asc':
